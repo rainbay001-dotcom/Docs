@@ -1,0 +1,1766 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Linux Compressed Swap: zram &amp; zswap — Architecture Deep Dive</title>
+<style>
+  :root {
+    --bg: #0d1117; --surface: #161b22; --border: #30363d;
+    --text: #e6edf3; --text2: #8b949e; --accent: #58a6ff;
+    --green: #3fb950; --orange: #d29922; --red: #f85149;
+    --purple: #bc8cff; --pink: #f778ba; --cyan: #39d2c0;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: 'SF Mono', 'Cascadia Code', 'Fira Code', 'JetBrains Mono', monospace;
+    background: var(--bg); color: var(--text); line-height: 1.7;
+    max-width: 1200px; margin: 0 auto; padding: 2rem;
+  }
+  h1 { font-size: 2rem; color: var(--accent); border-bottom: 2px solid var(--accent); padding-bottom: 0.5rem; margin-bottom: 1.5rem; }
+  h2 { font-size: 1.5rem; color: var(--green); margin: 2.5rem 0 1rem; border-left: 4px solid var(--green); padding-left: 0.8rem; }
+  h3 { font-size: 1.15rem; color: var(--purple); margin: 1.8rem 0 0.8rem; }
+  h4 { font-size: 1rem; color: var(--orange); margin: 1.2rem 0 0.5rem; }
+  p, li { color: var(--text); margin-bottom: 0.6rem; font-size: 0.92rem; }
+  ul, ol { padding-left: 1.5rem; }
+  a { color: var(--accent); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  code {
+    background: var(--surface); border: 1px solid var(--border);
+    padding: 0.15rem 0.4rem; border-radius: 4px; font-size: 0.88rem; color: var(--cyan);
+  }
+  pre {
+    background: var(--surface); border: 1px solid var(--border);
+    padding: 1rem; border-radius: 8px; overflow-x: auto;
+    font-size: 0.85rem; line-height: 1.5; margin: 0.8rem 0 1.2rem;
+  }
+  pre code { border: none; padding: 0; background: none; }
+  .svg-container {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 12px; padding: 1.5rem; margin: 1.5rem 0;
+    overflow-x: auto;
+  }
+  .svg-container svg { display: block; margin: 0 auto; }
+  table {
+    width: 100%; border-collapse: collapse; margin: 1rem 0 1.5rem;
+    font-size: 0.88rem;
+  }
+  th { background: var(--surface); color: var(--accent); text-align: left; padding: 0.6rem 0.8rem; border: 1px solid var(--border); }
+  td { padding: 0.5rem 0.8rem; border: 1px solid var(--border); }
+  tr:nth-child(even) td { background: rgba(22,27,34,0.5); }
+  .note {
+    background: rgba(88,166,255,0.08); border-left: 3px solid var(--accent);
+    padding: 0.8rem 1rem; margin: 1rem 0; border-radius: 0 6px 6px 0;
+    font-size: 0.88rem;
+  }
+  .warn {
+    background: rgba(210,153,34,0.08); border-left: 3px solid var(--orange);
+    padding: 0.8rem 1rem; margin: 1rem 0; border-radius: 0 6px 6px 0;
+    font-size: 0.88rem;
+  }
+  .toc { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 1.2rem 1.5rem; margin: 1.5rem 0; }
+  .toc a { display: block; padding: 0.2rem 0; color: var(--text2); }
+  .toc a:hover { color: var(--accent); }
+  .toc .l2 { padding-left: 1.2rem; }
+  .tag {
+    display: inline-block; font-size: 0.75rem; padding: 0.1rem 0.5rem;
+    border-radius: 10px; margin-right: 0.3rem;
+  }
+  .tag-zram { background: rgba(63,185,80,0.15); color: var(--green); border: 1px solid rgba(63,185,80,0.3); }
+  .tag-zswap { background: rgba(88,166,255,0.15); color: var(--accent); border: 1px solid rgba(88,166,255,0.3); }
+  .tag-shared { background: rgba(188,140,255,0.15); color: var(--purple); border: 1px solid rgba(188,140,255,0.3); }
+  .columns { display: grid; grid-template-columns: 1fr 1fr; gap: 1.5rem; }
+  @media (max-width: 800px) { .columns { grid-template-columns: 1fr; } }
+  .ref { font-size: 0.82rem; color: var(--text2); }
+  .ref-num { color: var(--accent); font-weight: bold; }
+  footer { margin-top: 3rem; padding-top: 1rem; border-top: 1px solid var(--border); color: var(--text2); font-size: 0.82rem; }
+</style>
+</head>
+<body>
+
+<h1>Linux Compressed Swap: zram &amp; zswap</h1>
+<p style="color:var(--text2); margin-bottom: 0.3rem;">Architecture Deep Dive &mdash; Linux 7.1-rc1 (torvalds/linux, April 2025)</p>
+<p style="color:var(--text2); font-size:0.82rem;">
+  Source: <code>drivers/block/zram/</code> (4,683 LOC) &bull;
+  <code>mm/zswap.c</code> (1,851 LOC) &bull;
+  <code>mm/zsmalloc.c</code> (~1,500 LOC)
+</p>
+
+<!-- ═══════════════════════  TABLE OF CONTENTS  ═══════════════════════ -->
+<div class="toc">
+  <strong style="color:var(--accent);">Contents</strong>
+  <a href="#overview">1. Overview &amp; Motivation</a>
+  <a href="#arch" class="l2">1.1 Overall Architecture</a>
+  <a href="#history" class="l2">1.2 History &amp; Evolution</a>
+  <a href="#zram">2. zram — Compressed RAM Block Device</a>
+  <a href="#zram-arch" class="l2">2.1 Architecture</a>
+  <a href="#zram-data" class="l2">2.2 Data Structures</a>
+  <a href="#zram-write" class="l2">2.3 Write Path</a>
+  <a href="#zram-read" class="l2">2.4 Read Path</a>
+  <a href="#zram-wb" class="l2">2.5 Writeback to Backing Device</a>
+  <a href="#zram-recomp" class="l2">2.6 Idle Recompression</a>
+  <a href="#zram-zcomp" class="l2">2.7 Compression Framework (zcomp)</a>
+  <a href="#zram-sysfs" class="l2">2.8 Sysfs Interface</a>
+  <a href="#zswap">3. zswap — Compressed Swap Cache</a>
+  <a href="#zswap-arch" class="l2">3.1 Architecture</a>
+  <a href="#zswap-data" class="l2">3.2 Data Structures</a>
+  <a href="#zswap-store" class="l2">3.3 Store Path</a>
+  <a href="#zswap-load" class="l2">3.4 Load Path</a>
+  <a href="#zswap-evict" class="l2">3.5 Eviction &amp; Writeback</a>
+  <a href="#zswap-cgroup" class="l2">3.6 Cgroup Integration</a>
+  <a href="#zswap-config" class="l2">3.7 Configuration</a>
+  <a href="#zsmalloc">4. zsmalloc — The Shared Allocator</a>
+  <a href="#compression">5. Compression Algorithms</a>
+  <a href="#compare">6. zram vs zswap — When to Use Which</a>
+  <a href="#nvme-backing" class="l2">6.1 NVMe as Backing Store — Tiered Memory</a>
+  <a href="#deployments">7. Real-World Deployments</a>
+  <a href="#academic">8. Academic Context &amp; Literature</a>
+  <a href="#refs">9. References</a>
+</div>
+
+<!-- ═══════════════════════  1. OVERVIEW  ═══════════════════════ -->
+<h2 id="overview">1. Overview &amp; Motivation</h2>
+
+<p>When Linux runs low on free memory, the kernel's reclaim path evicts pages. Anonymous pages
+(heap, stack, mmap) that cannot be discarded must be <em>swapped out</em> to persistent storage.
+Traditional swap writes uncompressed 4 KiB pages to an HDD or SSD &mdash; incurring millisecond-scale
+I/O latency and wearing flash cells.</p>
+
+<p><strong>Compressed swap</strong> exploits a key insight: most memory pages compress to 40&ndash;60% of their
+original size. By spending a few microseconds of CPU time on compression, the kernel can
+store 2&ndash;3&times; more evicted pages in RAM (or reduce disk I/O dramatically). Linux provides
+two complementary mechanisms:</p>
+
+<table>
+<tr><th></th><th><span class="tag tag-zram">zram</span> Compressed RAM Block Device</th><th><span class="tag tag-zswap">zswap</span> Compressed Swap Cache</th></tr>
+<tr><td><strong>Layer</strong></td><td>Block device driver (<code>drivers/block/zram/</code>)</td><td>MM subsystem hook (<code>mm/zswap.c</code>)</td></tr>
+<tr><td><strong>Mechanism</strong></td><td>Creates <code>/dev/zramN</code> &mdash; a virtual block device backed entirely by compressed RAM</td><td>Transparent cache in front of a real swap device; intercepts pages before they hit disk</td></tr>
+<tr><td><strong>Requires real swap?</strong></td><td>No &mdash; IS the swap device</td><td>Yes &mdash; sits in front of a real swap partition/file</td></tr>
+<tr><td><strong>Eviction</strong></td><td>Optional writeback to backing block device</td><td>Automatic LRU writeback to underlying swap device</td></tr>
+<tr><td><strong>Introduced</strong></td><td>2.6.33 (staging), 3.14 (mainline)</td><td>3.11 (2013)</td></tr>
+<tr><td><strong>Maintainer</strong></td><td>Sergey Senozhatsky</td><td>Johannes Weiner (Meta), Nhat Pham</td></tr>
+</table>
+
+<!-- ═══════════════════════  1.1 OVERALL ARCHITECTURE SVG  ═══════════════════════ -->
+<h3 id="arch">1.1 Overall Architecture</h3>
+
+<div class="svg-container">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1100 720" width="1100" height="720">
+  <defs>
+    <marker id="arrow" markerWidth="10" markerHeight="7" refX="10" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#58a6ff"/>
+    </marker>
+    <marker id="arrow-g" markerWidth="10" markerHeight="7" refX="10" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#3fb950"/>
+    </marker>
+    <marker id="arrow-o" markerWidth="10" markerHeight="7" refX="10" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#d29922"/>
+    </marker>
+    <marker id="arrow-r" markerWidth="10" markerHeight="7" refX="10" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#f85149"/>
+    </marker>
+    <marker id="arrow-p" markerWidth="10" markerHeight="7" refX="10" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#bc8cff"/>
+    </marker>
+
+    <linearGradient id="grad-user" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#1a2332"/><stop offset="100%" stop-color="#0d1117"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Background -->
+  <rect width="1100" height="720" rx="12" fill="#0d1117"/>
+
+  <!-- Title -->
+  <text x="550" y="35" text-anchor="middle" fill="#58a6ff" font-family="monospace" font-size="16" font-weight="bold">Linux Compressed Swap — Overall Architecture</text>
+
+  <!-- ── User Space ── -->
+  <rect x="30" y="55" width="1040" height="60" rx="8" fill="none" stroke="#30363d" stroke-dasharray="6,3"/>
+  <text x="50" y="75" fill="#8b949e" font-family="monospace" font-size="11">User Space</text>
+  <rect x="200" y="65" width="160" height="38" rx="6" fill="#161b22" stroke="#8b949e"/>
+  <text x="280" y="89" text-anchor="middle" fill="#e6edf3" font-family="monospace" font-size="12">Applications</text>
+  <rect x="420" y="65" width="160" height="38" rx="6" fill="#161b22" stroke="#8b949e"/>
+  <text x="500" y="89" text-anchor="middle" fill="#e6edf3" font-family="monospace" font-size="12">malloc / mmap</text>
+  <rect x="640" y="65" width="200" height="38" rx="6" fill="#161b22" stroke="#8b949e"/>
+  <text x="740" y="89" text-anchor="middle" fill="#e6edf3" font-family="monospace" font-size="12">swapon /dev/zramN</text>
+
+  <!-- Arrow down from user space -->
+  <line x1="500" y1="103" x2="500" y2="135" stroke="#58a6ff" stroke-width="1.5" marker-end="url(#arrow)"/>
+
+  <!-- ── MM Core ── -->
+  <rect x="30" y="140" width="1040" height="100" rx="8" fill="none" stroke="#58a6ff" stroke-width="1.5"/>
+  <text x="50" y="160" fill="#58a6ff" font-family="monospace" font-size="12" font-weight="bold">mm/ — Memory Management Core</text>
+
+  <rect x="60" y="170" width="180" height="50" rx="6" fill="#161b22" stroke="#58a6ff"/>
+  <text x="150" y="192" text-anchor="middle" fill="#e6edf3" font-family="monospace" font-size="11">Page Reclaim</text>
+  <text x="150" y="208" text-anchor="middle" fill="#8b949e" font-family="monospace" font-size="9">vmscan.c (kswapd)</text>
+
+  <rect x="280" y="170" width="200" height="50" rx="6" fill="#161b22" stroke="#58a6ff"/>
+  <text x="380" y="192" text-anchor="middle" fill="#e6edf3" font-family="monospace" font-size="11">Swap Subsystem</text>
+  <text x="380" y="208" text-anchor="middle" fill="#8b949e" font-family="monospace" font-size="9">swap_state.c, page_io.c</text>
+
+  <rect x="520" y="170" width="180" height="50" rx="6" fill="#161b22" stroke="#58a6ff"/>
+  <text x="610" y="192" text-anchor="middle" fill="#e6edf3" font-family="monospace" font-size="11">Folio / Page Fault</text>
+  <text x="610" y="208" text-anchor="middle" fill="#8b949e" font-family="monospace" font-size="9">memory.c, swap.c</text>
+
+  <rect x="740" y="170" width="180" height="50" rx="6" fill="#161b22" stroke="#58a6ff"/>
+  <text x="830" y="192" text-anchor="middle" fill="#e6edf3" font-family="monospace" font-size="11">Block Layer</text>
+  <text x="830" y="208" text-anchor="middle" fill="#8b949e" font-family="monospace" font-size="9">bio, submit_bio()</text>
+
+  <!-- Arrows within MM -->
+  <line x1="240" y1="195" x2="278" y2="195" stroke="#58a6ff" stroke-width="1" marker-end="url(#arrow)"/>
+  <line x1="480" y1="195" x2="518" y2="195" stroke="#58a6ff" stroke-width="1" marker-end="url(#arrow)"/>
+
+  <!-- ── FORK: zswap path (left) and zram path (right) ── -->
+
+  <!-- zswap intercept arrow -->
+  <line x1="340" y1="220" x2="340" y2="275" stroke="#58a6ff" stroke-width="2" marker-end="url(#arrow)"/>
+  <text x="295" y="253" fill="#58a6ff" font-family="monospace" font-size="9">intercept</text>
+
+  <!-- zram bio arrow -->
+  <line x1="830" y1="220" x2="830" y2="275" stroke="#3fb950" stroke-width="2" marker-end="url(#arrow-g)"/>
+  <text x="843" y="253" fill="#3fb950" font-family="monospace" font-size="9">bio submit</text>
+
+  <!-- ═══  ZSWAP BOX  ═══ -->
+  <rect x="30" y="280" width="480" height="310" rx="10" fill="none" stroke="#58a6ff" stroke-width="2"/>
+  <rect x="30" y="280" width="480" height="28" rx="10" fill="rgba(88,166,255,0.12)"/>
+  <rect x="30" y="298" width="480" height="10" fill="rgba(88,166,255,0.12)"/>
+  <text x="270" y="300" text-anchor="middle" fill="#58a6ff" font-family="monospace" font-size="13" font-weight="bold">zswap — Compressed Swap Cache</text>
+  <text x="270" y="318" text-anchor="middle" fill="#8b949e" font-family="monospace" font-size="9">mm/zswap.c (1,851 lines)</text>
+
+  <!-- zswap internals -->
+  <rect x="55" y="335" width="190" height="42" rx="5" fill="#161b22" stroke="#58a6ff"/>
+  <text x="150" y="353" text-anchor="middle" fill="#e6edf3" font-family="monospace" font-size="10">Xarray Lookup Tree</text>
+  <text x="150" y="368" text-anchor="middle" fill="#8b949e" font-family="monospace" font-size="8">per swap-type, 64M granule</text>
+
+  <rect x="275" y="335" width="210" height="42" rx="5" fill="#161b22" stroke="#58a6ff"/>
+  <text x="380" y="353" text-anchor="middle" fill="#e6edf3" font-family="monospace" font-size="10">crypto_acomp (per-CPU)</text>
+  <text x="380" y="368" text-anchor="middle" fill="#8b949e" font-family="monospace" font-size="8">deflate / lz4 / lzo / zstd</text>
+
+  <rect x="55" y="392" width="190" height="42" rx="5" fill="#161b22" stroke="#58a6ff"/>
+  <text x="150" y="410" text-anchor="middle" fill="#e6edf3" font-family="monospace" font-size="10">zswap_pool</text>
+  <text x="150" y="425" text-anchor="middle" fill="#8b949e" font-family="monospace" font-size="8">percpu_ref, RCU-safe switch</text>
+
+  <rect x="275" y="392" width="210" height="42" rx="5" fill="#161b22" stroke="#58a6ff"/>
+  <text x="380" y="410" text-anchor="middle" fill="#e6edf3" font-family="monospace" font-size="10">LRU + Shrinker</text>
+  <text x="380" y="425" text-anchor="middle" fill="#8b949e" font-family="monospace" font-size="8">second-chance, memcg-aware</text>
+
+  <rect x="55" y="449" width="190" height="42" rx="5" fill="#161b22" stroke="#bc8cff"/>
+  <text x="150" y="467" text-anchor="middle" fill="#e6edf3" font-family="monospace" font-size="10">zswap_entry</text>
+  <text x="150" y="482" text-anchor="middle" fill="#8b949e" font-family="monospace" font-size="8">handle, length, objcg, lru</text>
+
+  <rect x="275" y="449" width="210" height="42" rx="5" fill="#161b22" stroke="#bc8cff"/>
+  <text x="380" y="467" text-anchor="middle" fill="#e6edf3" font-family="monospace" font-size="10">memcg integration</text>
+  <text x="380" y="482" text-anchor="middle" fill="#8b949e" font-family="monospace" font-size="8">zswap.max, writeback ctl</text>
+
+  <!-- zswap eviction arrow to real swap -->
+  <line x1="270" y1="555" x2="270" y2="615" stroke="#d29922" stroke-width="2" marker-end="url(#arrow-o)"/>
+  <text x="195" y="590" fill="#d29922" font-family="monospace" font-size="9">LRU eviction</text>
+
+  <!-- zswap writeback label -->
+  <rect x="55" y="505" width="430" height="38" rx="5" fill="rgba(210,153,34,0.08)" stroke="#d29922" stroke-dasharray="4,2"/>
+  <text x="270" y="522" text-anchor="middle" fill="#d29922" font-family="monospace" font-size="10">Writeback: decompress → __swap_writepage() → real swap</text>
+  <text x="270" y="536" text-anchor="middle" fill="#8b949e" font-family="monospace" font-size="8">triggered by shrinker / shrink_worker when pool full</text>
+
+  <!-- ═══  ZRAM BOX  ═══ -->
+  <rect x="590" y="280" width="480" height="310" rx="10" fill="none" stroke="#3fb950" stroke-width="2"/>
+  <rect x="590" y="280" width="480" height="28" rx="10" fill="rgba(63,185,80,0.12)"/>
+  <rect x="590" y="298" width="480" height="10" fill="rgba(63,185,80,0.12)"/>
+  <text x="830" y="300" text-anchor="middle" fill="#3fb950" font-family="monospace" font-size="13" font-weight="bold">zram — Compressed RAM Block Device</text>
+  <text x="830" y="318" text-anchor="middle" fill="#8b949e" font-family="monospace" font-size="9">drivers/block/zram/ (4,683 lines)</text>
+
+  <!-- zram internals -->
+  <rect x="615" y="335" width="200" height="42" rx="5" fill="#161b22" stroke="#3fb950"/>
+  <text x="715" y="353" text-anchor="middle" fill="#e6edf3" font-family="monospace" font-size="10">zram_table_entry[]</text>
+  <text x="715" y="368" text-anchor="middle" fill="#8b949e" font-family="monospace" font-size="8">handle + flags + size (per page)</text>
+
+  <rect x="845" y="335" width="200" height="42" rx="5" fill="#161b22" stroke="#3fb950"/>
+  <text x="945" y="353" text-anchor="middle" fill="#e6edf3" font-family="monospace" font-size="10">zcomp (per-CPU)</text>
+  <text x="945" y="368" text-anchor="middle" fill="#8b949e" font-family="monospace" font-size="8">lzo-rle / lz4 / zstd / deflate</text>
+
+  <rect x="615" y="392" width="200" height="42" rx="5" fill="#161b22" stroke="#3fb950"/>
+  <text x="715" y="410" text-anchor="middle" fill="#e6edf3" font-family="monospace" font-size="10">zs_pool (zsmalloc)</text>
+  <text x="715" y="425" text-anchor="middle" fill="#8b949e" font-family="monospace" font-size="8">255 size classes, zspage</text>
+
+  <rect x="845" y="392" width="200" height="42" rx="5" fill="#161b22" stroke="#3fb950"/>
+  <text x="945" y="410" text-anchor="middle" fill="#e6edf3" font-family="monospace" font-size="10">Multi-Comp (1+3)</text>
+  <text x="945" y="425" text-anchor="middle" fill="#8b949e" font-family="monospace" font-size="8">recompress idle/huge pages</text>
+
+  <rect x="615" y="449" width="200" height="42" rx="5" fill="#161b22" stroke="#bc8cff"/>
+  <text x="715" y="467" text-anchor="middle" fill="#e6edf3" font-family="monospace" font-size="10">Same-Filled Detect</text>
+  <text x="715" y="482" text-anchor="middle" fill="#8b949e" font-family="monospace" font-size="8">zero pages → no alloc</text>
+
+  <rect x="845" y="449" width="200" height="42" rx="5" fill="#161b22" stroke="#bc8cff"/>
+  <text x="945" y="467" text-anchor="middle" fill="#e6edf3" font-family="monospace" font-size="10">Idle Tracking</text>
+  <text x="945" y="482" text-anchor="middle" fill="#8b949e" font-family="monospace" font-size="8">access time, ZRAM_IDLE flag</text>
+
+  <!-- zram writeback -->
+  <rect x="615" y="505" width="430" height="38" rx="5" fill="rgba(210,153,34,0.08)" stroke="#d29922" stroke-dasharray="4,2"/>
+  <text x="830" y="522" text-anchor="middle" fill="#d29922" font-family="monospace" font-size="10">Optional Writeback: idle/huge pages → backing block device</text>
+  <text x="830" y="536" text-anchor="middle" fill="#8b949e" font-family="monospace" font-size="8">CONFIG_ZRAM_WRITEBACK, user-triggered via sysfs</text>
+
+  <line x1="830" y1="555" x2="830" y2="615" stroke="#d29922" stroke-width="2" marker-end="url(#arrow-o)"/>
+  <text x="843" y="590" fill="#d29922" font-family="monospace" font-size="9">writeback</text>
+
+  <!-- ═══  ZSMALLOC (shared)  ═══ -->
+  <rect x="250" y="558" width="580" height="32" rx="6" fill="rgba(188,140,255,0.08)" stroke="#bc8cff" stroke-width="1.5"/>
+  <text x="540" y="579" text-anchor="middle" fill="#bc8cff" font-family="monospace" font-size="11" font-weight="bold">zsmalloc — Shared Compressed Object Allocator (mm/zsmalloc.c)</text>
+
+  <!-- Connection lines to zsmalloc -->
+  <line x1="150" y1="491" x2="150" y2="530" stroke="#bc8cff" stroke-width="1" stroke-dasharray="3,2"/>
+  <line x1="150" y1="530" x2="380" y2="558" stroke="#bc8cff" stroke-width="1" stroke-dasharray="3,2"/>
+  <line x1="715" y1="434" x2="715" y2="558" stroke="#bc8cff" stroke-width="1" stroke-dasharray="3,2"/>
+
+  <!-- ═══  Storage Layer  ═══ -->
+  <rect x="30" y="620" width="1040" height="80" rx="8" fill="none" stroke="#f85149" stroke-width="1.5"/>
+  <text x="50" y="640" fill="#f85149" font-family="monospace" font-size="12" font-weight="bold">Persistent Storage</text>
+
+  <rect x="120" y="650" width="240" height="36" rx="6" fill="#161b22" stroke="#f85149"/>
+  <text x="240" y="673" text-anchor="middle" fill="#e6edf3" font-family="monospace" font-size="11">Real Swap Partition / File</text>
+
+  <rect x="440" y="650" width="240" height="36" rx="6" fill="#161b22" stroke="#f85149"/>
+  <text x="560" y="673" text-anchor="middle" fill="#e6edf3" font-family="monospace" font-size="11">zram Backing Device</text>
+  <text x="560" y="685" text-anchor="middle" fill="#8b949e" font-family="monospace" font-size="8">(optional, for writeback)</text>
+
+  <rect x="760" y="650" width="240" height="36" rx="6" fill="#161b22" stroke="#30363d"/>
+  <text x="880" y="673" text-anchor="middle" fill="#8b949e" font-family="monospace" font-size="11">NVMe / SSD / HDD</text>
+
+  <!-- Legend -->
+  <rect x="30" y="710" width="8" height="8" rx="2" fill="#58a6ff"/>
+  <text x="44" y="718" fill="#8b949e" font-family="monospace" font-size="9">zswap path</text>
+  <rect x="130" y="710" width="8" height="8" rx="2" fill="#3fb950"/>
+  <text x="144" y="718" fill="#8b949e" font-family="monospace" font-size="9">zram path</text>
+  <rect x="220" y="710" width="8" height="8" rx="2" fill="#bc8cff"/>
+  <text x="234" y="718" fill="#8b949e" font-family="monospace" font-size="9">shared (zsmalloc)</text>
+  <rect x="340" y="710" width="8" height="8" rx="2" fill="#d29922"/>
+  <text x="354" y="718" fill="#8b949e" font-family="monospace" font-size="9">eviction / writeback</text>
+</svg>
+</div>
+
+<h3 id="history">1.2 History &amp; Evolution</h3>
+
+<p>Compressed memory in operating systems has a long lineage:</p>
+<ul>
+  <li><strong>1999</strong> &mdash; Paul Wilson &amp; Scott Kaplan publish <em>&ldquo;Compressed Caching&rdquo;</em>, the foundational
+    academic work showing that using a fraction of RAM as a compressed cache for evicted pages
+    outperforms simply adding that RAM to the page cache. They demonstrated 2&ndash;5&times; effective
+    memory expansion on workloads with favorable compression ratios.</li>
+  <li><strong>2009</strong> &mdash; Nitin Gupta implements <strong>compcache/ramzswap</strong> (later renamed zram) as an
+    out-of-tree module, providing a compressed block device for swap.</li>
+  <li><strong>2010</strong> &mdash; zram enters <code>drivers/staging/zram/</code> in Linux 2.6.33.</li>
+  <li><strong>2012</strong> &mdash; Seth Jennings proposes <strong>zcache/zswap</strong> as a transparent compressed cache
+    layer using the <em>frontswap</em> API &mdash; no user-visible block device needed.</li>
+  <li><strong>2013</strong> &mdash; Apple ships <strong>Compressed Memory</strong> in OS X Mavericks, validating the
+    approach at scale. zswap merges into Linux 3.11. Android begins defaulting to zram.</li>
+  <li><strong>2014</strong> &mdash; zram moves out of staging into <code>drivers/block/zram/</code> (Linux 3.14). Microsoft adds
+    memory compression to Windows 10.</li>
+  <li><strong>2017&ndash;2019</strong> &mdash; ChromeOS fully adopts zram; Fedora enables zram-swap by default starting
+    with Fedora 33.</li>
+  <li><strong>2023&ndash;2024</strong> &mdash; zswap undergoes major refactoring: frontswap dependency removed (replaced
+    with direct xarray lookup), memcg-aware shrinker added, folio API adopted.
+    Multi-compression support added to zram (CONFIG_ZRAM_MULTI_COMP).</li>
+  <li><strong>2025</strong> &mdash; zram adds compressed writeback and async backing-device reads. zswap gains
+    disk-swapin tracking for shrinker calibration. Both subsystems mature significantly.</li>
+</ul>
+
+
+<!-- ═══════════════════════  2. ZRAM  ═══════════════════════ -->
+<h2 id="zram">2. zram &mdash; Compressed RAM Block Device</h2>
+
+<p>zram creates virtual block devices (<code>/dev/zram0</code>, <code>/dev/zram1</code>, &hellip;) backed entirely by
+compressed RAM. Each device behaves like any block device &mdash; you can <code>mkswap</code> + <code>swapon</code>,
+<code>mkfs</code> + <code>mount</code>, or use it as a raw block device. The most common use is swap.</p>
+
+<h3 id="zram-arch">2.1 Architecture</h3>
+
+<div class="svg-container">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1060 860" width="1060" height="860">
+  <defs>
+    <marker id="za" markerWidth="10" markerHeight="7" refX="10" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#3fb950"/>
+    </marker>
+    <marker id="za-o" markerWidth="10" markerHeight="7" refX="10" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#d29922"/>
+    </marker>
+    <marker id="za-p" markerWidth="10" markerHeight="7" refX="10" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#bc8cff"/>
+    </marker>
+    <marker id="za-c" markerWidth="10" markerHeight="7" refX="10" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#39d2c0"/>
+    </marker>
+  </defs>
+
+  <rect width="1060" height="860" rx="12" fill="#0d1117"/>
+  <text x="530" y="30" text-anchor="middle" fill="#3fb950" font-family="monospace" font-size="15" font-weight="bold">zram — Internal Architecture</text>
+
+  <!-- ── Bio Entry ── -->
+  <rect x="380" y="50" width="300" height="40" rx="6" fill="#161b22" stroke="#3fb950" stroke-width="2"/>
+  <text x="530" y="75" text-anchor="middle" fill="#e6edf3" font-family="monospace" font-size="12">zram_submit_bio(bio)</text>
+
+  <!-- fork -->
+  <line x1="430" y1="90" x2="200" y2="130" stroke="#3fb950" stroke-width="1.5" marker-end="url(#za)"/>
+  <line x1="530" y1="90" x2="530" y2="130" stroke="#3fb950" stroke-width="1.5" marker-end="url(#za)"/>
+  <line x1="630" y1="90" x2="860" y2="130" stroke="#3fb950" stroke-width="1.5" marker-end="url(#za)"/>
+
+  <!-- Three paths -->
+  <rect x="100" y="135" width="200" height="36" rx="5" fill="#161b22" stroke="#3fb950"/>
+  <text x="200" y="158" text-anchor="middle" fill="#e6edf3" font-family="monospace" font-size="11">REQ_OP_READ</text>
+
+  <rect x="430" y="135" width="200" height="36" rx="5" fill="#161b22" stroke="#3fb950"/>
+  <text x="530" y="158" text-anchor="middle" fill="#e6edf3" font-family="monospace" font-size="11">REQ_OP_WRITE</text>
+
+  <rect x="760" y="135" width="200" height="36" rx="5" fill="#161b22" stroke="#30363d"/>
+  <text x="860" y="158" text-anchor="middle" fill="#8b949e" font-family="monospace" font-size="11">REQ_OP_DISCARD</text>
+
+  <!-- ── WRITE PATH (center-right) ── -->
+  <line x1="530" y1="171" x2="530" y2="200" stroke="#3fb950" stroke-width="1.5" marker-end="url(#za)"/>
+
+  <rect x="390" y="205" width="280" height="36" rx="5" fill="#161b22" stroke="#3fb950"/>
+  <text x="530" y="228" text-anchor="middle" fill="#e6edf3" font-family="monospace" font-size="11">zram_write_page(page, index)</text>
+
+  <!-- same-filled check -->
+  <line x1="530" y1="241" x2="530" y2="268" stroke="#3fb950" stroke-width="1.5" marker-end="url(#za)"/>
+
+  <rect x="420" y="272" width="220" height="32" rx="15" fill="none" stroke="#d29922"/>
+  <text x="530" y="293" text-anchor="middle" fill="#d29922" font-family="monospace" font-size="10">page_same_filled()?</text>
+
+  <!-- yes branch -->
+  <line x1="640" y1="288" x2="720" y2="288" stroke="#d29922" stroke-width="1" marker-end="url(#za-o)"/>
+  <text x="672" y="282" fill="#8b949e" font-family="monospace" font-size="8">yes</text>
+  <rect x="725" y="272" width="180" height="32" rx="5" fill="rgba(63,185,80,0.1)" stroke="#3fb950" stroke-dasharray="3,2"/>
+  <text x="815" y="293" text-anchor="middle" fill="#3fb950" font-family="monospace" font-size="10">ZRAM_SAME (no alloc!)</text>
+
+  <!-- no branch -->
+  <line x1="530" y1="304" x2="530" y2="328" stroke="#3fb950" stroke-width="1.5" marker-end="url(#za)"/>
+  <text x="538" y="318" fill="#8b949e" font-family="monospace" font-size="8">no</text>
+
+  <!-- compress -->
+  <rect x="400" y="332" width="260" height="36" rx="5" fill="#161b22" stroke="#39d2c0"/>
+  <text x="530" y="355" text-anchor="middle" fill="#39d2c0" font-family="monospace" font-size="11">zcomp_compress(per-CPU)</text>
+
+  <line x1="530" y1="368" x2="530" y2="392" stroke="#3fb950" stroke-width="1.5" marker-end="url(#za)"/>
+
+  <!-- size check -->
+  <rect x="400" y="396" width="260" height="32" rx="15" fill="none" stroke="#d29922"/>
+  <text x="530" y="417" text-anchor="middle" fill="#d29922" font-family="monospace" font-size="10">comp_len &ge; huge_class?</text>
+
+  <!-- huge branch -->
+  <line x1="660" y1="412" x2="720" y2="412" stroke="#d29922" stroke-width="1" marker-end="url(#za-o)"/>
+  <text x="672" y="406" fill="#8b949e" font-family="monospace" font-size="8">yes</text>
+  <rect x="725" y="396" width="180" height="32" rx="5" fill="rgba(248,81,73,0.1)" stroke="#f85149" stroke-dasharray="3,2"/>
+  <text x="815" y="417" text-anchor="middle" fill="#f85149" font-family="monospace" font-size="10">ZRAM_HUGE (PAGE_SIZE)</text>
+
+  <!-- normal compress path -->
+  <line x1="530" y1="428" x2="530" y2="455" stroke="#3fb950" stroke-width="1.5" marker-end="url(#za)"/>
+
+  <rect x="400" y="460" width="260" height="36" rx="5" fill="#161b22" stroke="#bc8cff"/>
+  <text x="530" y="483" text-anchor="middle" fill="#bc8cff" font-family="monospace" font-size="11">zs_malloc(comp_len)</text>
+
+  <line x1="530" y1="496" x2="530" y2="520" stroke="#3fb950" stroke-width="1.5" marker-end="url(#za)"/>
+
+  <rect x="400" y="525" width="260" height="36" rx="5" fill="#161b22" stroke="#bc8cff"/>
+  <text x="530" y="548" text-anchor="middle" fill="#bc8cff" font-family="monospace" font-size="11">zs_obj_write(handle, data)</text>
+
+  <line x1="530" y1="561" x2="530" y2="575" stroke="#3fb950" stroke-width="1.5" marker-end="url(#za)"/>
+
+  <rect x="380" y="580" width="300" height="36" rx="5" fill="#161b22" stroke="#3fb950"/>
+  <text x="530" y="598" text-anchor="middle" fill="#e6edf3" font-family="monospace" font-size="10">table[index] = {handle, size, flags}</text>
+  <text x="530" y="612" text-anchor="middle" fill="#8b949e" font-family="monospace" font-size="8">slot_lock → update → slot_unlock</text>
+
+  <!-- ── READ PATH (left) ── -->
+  <line x1="200" y1="171" x2="200" y2="205" stroke="#3fb950" stroke-width="1.5" marker-end="url(#za)"/>
+
+  <rect x="70" y="210" width="260" height="36" rx="5" fill="#161b22" stroke="#3fb950"/>
+  <text x="200" y="233" text-anchor="middle" fill="#e6edf3" font-family="monospace" font-size="11">zram_read_page(page, index)</text>
+
+  <line x1="200" y1="246" x2="200" y2="275" stroke="#3fb950" stroke-width="1.5" marker-end="url(#za)"/>
+
+  <!-- read decision -->
+  <rect x="80" y="280" width="240" height="32" rx="15" fill="none" stroke="#d29922"/>
+  <text x="200" y="301" text-anchor="middle" fill="#d29922" font-family="monospace" font-size="10">check flags</text>
+
+  <!-- SAME -->
+  <line x1="200" y1="312" x2="70" y2="345" stroke="#d29922" stroke-width="1"/>
+  <rect x="5" y="340" width="130" height="28" rx="4" fill="rgba(63,185,80,0.08)" stroke="#3fb950" stroke-dasharray="3,2"/>
+  <text x="70" y="359" text-anchor="middle" fill="#3fb950" font-family="monospace" font-size="9">memset_l()</text>
+  <text x="50" y="335" fill="#8b949e" font-family="monospace" font-size="8">SAME</text>
+
+  <!-- WB -->
+  <line x1="200" y1="312" x2="200" y2="345" stroke="#d29922" stroke-width="1"/>
+  <rect x="150" y="340" width="130" height="28" rx="4" fill="rgba(210,153,34,0.08)" stroke="#d29922" stroke-dasharray="3,2"/>
+  <text x="215" y="359" text-anchor="middle" fill="#d29922" font-family="monospace" font-size="9">read_from_bdev()</text>
+  <text x="195" y="335" fill="#8b949e" font-family="monospace" font-size="8">WB</text>
+
+  <!-- Normal -->
+  <line x1="260" y1="312" x2="320" y2="345" stroke="#d29922" stroke-width="1"/>
+  <rect x="295" y="340" width="100" height="28" rx="4" fill="#161b22" stroke="#39d2c0"/>
+  <text x="345" y="359" text-anchor="middle" fill="#39d2c0" font-family="monospace" font-size="9">decompress()</text>
+  <text x="312" y="335" fill="#8b949e" font-family="monospace" font-size="8">normal</text>
+
+  <!-- Decompression detail -->
+  <line x1="345" y1="368" x2="345" y2="395" stroke="#39d2c0" stroke-width="1" marker-end="url(#za-c)"/>
+
+  <rect x="260" y="400" width="170" height="45" rx="4" fill="#161b22" stroke="#bc8cff"/>
+  <text x="345" y="418" text-anchor="middle" fill="#e6edf3" font-family="monospace" font-size="9">zs_obj_read_begin()</text>
+  <text x="345" y="433" text-anchor="middle" fill="#8b949e" font-family="monospace" font-size="8">→ decompress → copy</text>
+
+  <!-- ── ZSMALLOC POOL (bottom) ── -->
+  <rect x="30" y="650" width="1000" height="90" rx="8" fill="none" stroke="#bc8cff" stroke-width="1.5"/>
+  <text x="530" y="670" text-anchor="middle" fill="#bc8cff" font-family="monospace" font-size="12" font-weight="bold">zsmalloc Pool (zs_pool)</text>
+
+  <rect x="55" y="680" width="150" height="45" rx="4" fill="#161b22" stroke="#bc8cff"/>
+  <text x="130" y="700" text-anchor="middle" fill="#e6edf3" font-family="monospace" font-size="9">Size Class 0</text>
+  <text x="130" y="715" text-anchor="middle" fill="#8b949e" font-family="monospace" font-size="8">32 bytes</text>
+
+  <rect x="220" y="680" width="150" height="45" rx="4" fill="#161b22" stroke="#bc8cff"/>
+  <text x="295" y="700" text-anchor="middle" fill="#e6edf3" font-family="monospace" font-size="9">Size Class 1</text>
+  <text x="295" y="715" text-anchor="middle" fill="#8b949e" font-family="monospace" font-size="8">48 bytes</text>
+
+  <text x="415" y="707" fill="#8b949e" font-family="monospace" font-size="14">...</text>
+
+  <rect x="460" y="680" width="150" height="45" rx="4" fill="#161b22" stroke="#bc8cff"/>
+  <text x="535" y="700" text-anchor="middle" fill="#e6edf3" font-family="monospace" font-size="9">Size Class N</text>
+  <text x="535" y="715" text-anchor="middle" fill="#8b949e" font-family="monospace" font-size="8">~2 KB (typical)</text>
+
+  <text x="655" y="707" fill="#8b949e" font-family="monospace" font-size="14">...</text>
+
+  <rect x="700" y="680" width="150" height="45" rx="4" fill="#161b22" stroke="#f85149"/>
+  <text x="775" y="700" text-anchor="middle" fill="#e6edf3" font-family="monospace" font-size="9">Huge Class</text>
+  <text x="775" y="715" text-anchor="middle" fill="#8b949e" font-family="monospace" font-size="8">3264+ bytes</text>
+
+  <rect x="870" y="680" width="140" height="45" rx="4" fill="#161b22" stroke="#30363d"/>
+  <text x="940" y="700" text-anchor="middle" fill="#e6edf3" font-family="monospace" font-size="9">Compaction</text>
+  <text x="940" y="715" text-anchor="middle" fill="#8b949e" font-family="monospace" font-size="8">zs_compact()</text>
+
+  <!-- connector: table[index] → zsmalloc pool -->
+  <line x1="530" y1="616" x2="530" y2="650" stroke="#bc8cff" stroke-width="1" stroke-dasharray="4,2" marker-end="url(#za)"/>
+
+  <!-- zsmalloc detail -->
+  <text x="530" y="765" text-anchor="middle" fill="#8b949e" font-family="monospace" font-size="10">255 classes &bull; 16-byte delta &bull; zspage = N physical pages &bull; objects packed with free-list chaining</text>
+
+  <!-- ── Writeback / Recompression (bottom right) ── -->
+  <rect x="590" y="785" width="440" height="55" rx="8" fill="none" stroke="#d29922" stroke-dasharray="4,2"/>
+  <text x="810" y="805" text-anchor="middle" fill="#d29922" font-family="monospace" font-size="11">Optional Post-Processing</text>
+  <text x="810" y="825" text-anchor="middle" fill="#8b949e" font-family="monospace" font-size="9">Writeback idle/huge → backing_dev &ensp;|&ensp; Recompress with secondary algo (zstd)</text>
+
+  <!-- ── Sysfs (bottom left) ── -->
+  <rect x="30" y="785" width="440" height="55" rx="8" fill="none" stroke="#58a6ff" stroke-dasharray="4,2"/>
+  <text x="250" y="805" text-anchor="middle" fill="#58a6ff" font-family="monospace" font-size="11">/sys/block/zramN/</text>
+  <text x="250" y="825" text-anchor="middle" fill="#8b949e" font-family="monospace" font-size="9">disksize | comp_algorithm | mm_stat | writeback | recompress | idle | compact</text>
+</svg>
+</div>
+
+
+<h3 id="zram-data">2.2 Data Structures</h3>
+
+<h4>struct zram (per-device)</h4>
+<pre><code>struct zram {
+    struct zram_table_entry *table;      // per-page metadata array
+    struct zs_pool *mem_pool;             // zsmalloc pool for compressed data
+    struct zcomp *comps[ZRAM_MAX_COMPS];  // compression engines (up to 4)
+    struct gendisk *disk;                 // block device
+    unsigned long limit_pages;            // memory quota
+    u64 disksize;                         // logical size in bytes
+    s8 num_active_comps;                  // active compression engines
+
+    // CONFIG_ZRAM_WRITEBACK
+    struct file *backing_dev;             // backing block device
+    unsigned long *bitmap;                // backing device block bitmap
+    bool compressed_wb;                   // write compressed data to backing dev
+    u32 wb_batch_size;                    // max in-flight writeback ops
+};</code></pre>
+
+<h4>struct zram_table_entry (per-page, ~16 bytes)</h4>
+<pre><code>struct zram_table_entry {
+    unsigned long handle;        // zsmalloc handle OR backing device block index
+    union {
+        unsigned long __lock;    // bit-spinlock (ZRAM_ENTRY_LOCK)
+        struct {
+            u32 flags;           // packed: size (bits 0..PAGE_SHIFT) + status flags
+            u32 ac_time;         // access time (CONFIG_ZRAM_TRACK_ENTRY_ACTIME)
+        } attr;
+    };
+};
+
+// Flag bits (above PAGE_SHIFT):
+//   ZRAM_SAME          — page is same-filled (zero or repeated word)
+//   ZRAM_WB            — page written back to backing device
+//   ZRAM_HUGE          — incompressible, stored uncompressed
+//   ZRAM_IDLE          — not accessed since last idle mark
+//   ZRAM_INCOMPRESSIBLE — no algorithm could compress it
+//   ZRAM_COMP_PRIORITY — 2-bit field: which compression algo was used (0–3)</code></pre>
+
+<div class="note">
+  <strong>Design insight:</strong> The per-page metadata is only ~16 bytes. For a 16 GB zram device
+  (4M pages), the table costs just 64 MB &mdash; about 0.4% of the virtual size. The compressed
+  size is encoded in the lower bits of the flags word, avoiding a separate field.
+</div>
+
+<h3 id="zram-write">2.3 Write Path</h3>
+
+<p>When the swap subsystem writes a page to <code>/dev/zramN</code>:</p>
+
+<pre><code>bio submit → zram_submit_bio()
+  → zram_bio_write()              // iterate bio_vecs
+    → zram_bvec_write()
+      → zram_write_page(page, index)
+          1. page_same_filled()?  → ZRAM_SAME flag, store element only (no alloc!)
+          2. zcomp_stream_get()   → acquire per-CPU compression stream (mutex)
+          3. zcomp_compress()     → compress into 2×PAGE_SIZE buffer
+          4. comp_len ≥ huge?     → ZRAM_HUGE, store uncompressed (PAGE_SIZE alloc)
+          5. zs_malloc(comp_len)  → allocate from zsmalloc pool
+          6. zram_can_store_page? → check limit_pages quota
+          7. zs_obj_write()       → write compressed data to zsmalloc object
+          8. slot_lock → update table[index] → slot_unlock
+          9. update stats (pages_stored, compr_data_size)</code></pre>
+
+<p><strong>Same-filled page optimization:</strong> Before compressing, zram checks if the entire page
+is filled with a single repeated <code>unsigned long</code> value (common for zero pages). If so,
+only the fill value is stored &mdash; no compression, no allocation. This handles the very
+common case of zero-initialized memory.</p>
+
+<h3 id="zram-read">2.4 Read Path</h3>
+
+<pre><code>page fault → bio submit → zram_submit_bio()
+  → zram_bio_read()
+    → zram_bvec_read()
+      → zram_read_page(page, index)
+          slot_lock(index)
+          check flags:
+            ZRAM_SAME → zram_fill_page() (memset_l)
+            ZRAM_WB   → read_from_bdev() (async bio to backing device)
+            ZRAM_HUGE → zs_obj_read_begin() → copy_page() (no decompress)
+            normal    → read_compressed_page():
+                          zcomp_stream_get(comps[priority])
+                          zs_obj_read_begin(handle)  → get compressed data ptr
+                          zcomp_decompress()          → decompress into page
+                          zs_obj_read_end(handle)
+          mark_slot_accessed()  → clear ZRAM_IDLE flag</code></pre>
+
+<div class="note">
+  <strong>Async backing device reads:</strong> When a page has been written back (<code>ZRAM_WB</code>),
+  zram issues an async bio to the backing device. The completion callback
+  <code>zram_async_read_endio()</code> handles decompression in a high-priority workqueue
+  if <code>compressed_wb</code> was enabled &mdash; avoiding decompression in interrupt context.
+</div>
+
+<h3 id="zram-wb">2.5 Writeback to Backing Device</h3>
+
+<p>With <code>CONFIG_ZRAM_WRITEBACK</code>, zram can offload cold or incompressible pages to a
+real block device, freeing RAM. This is <strong>user-triggered</strong> via sysfs, not automatic:</p>
+
+<pre><code># Setup
+echo /dev/sda2 &gt; /sys/block/zram0/backing_dev
+
+# Trigger writeback of idle pages
+echo all &gt; /sys/block/zram0/idle            # mark all pages idle
+# ... wait for some time ...
+echo "type=idle" &gt; /sys/block/zram0/writeback
+
+# Or writeback huge (incompressible) pages
+echo "type=huge" &gt; /sys/block/zram0/writeback</code></pre>
+
+<p>The writeback pipeline uses async bio submission with configurable batch size
+(<code>wb_batch_size</code>, default 32). With <code>compressed_wb=1</code>, compressed data is written
+directly to the backing device without decompressing first, saving CPU.</p>
+
+<h3 id="zram-recomp">2.6 Idle Recompression</h3>
+
+<p>With <code>CONFIG_ZRAM_MULTI_COMP</code>, zram supports up to 4 compression algorithms
+(1 primary + 3 secondary). Cold pages initially compressed with a fast algorithm
+(e.g., lzo-rle) can be recompressed with a slower but denser algorithm (e.g., zstd):</p>
+
+<pre><code># Configure secondary algorithm
+echo "algo=zstd priority=1" &gt; /sys/block/zram0/recomp_algorithm
+
+# Mark pages idle, then recompress
+echo all &gt; /sys/block/zram0/idle
+echo "type=idle algo=zstd max_pages=10000" &gt; /sys/block/zram0/recompress</code></pre>
+
+<p>The recompression logic compares zsmalloc <em>size class indices</em> (not raw byte counts)
+to decide if recompression actually saves memory &mdash; a smaller byte count that maps to the
+same size class is not worth the effort.</p>
+
+<h3 id="zram-zcomp">2.7 Compression Framework (zcomp)</h3>
+
+<pre><code>struct zcomp {
+    struct zcomp_strm __percpu *stream;  // per-CPU compression buffers
+    const struct zcomp_ops *ops;         // backend vtable
+};
+
+struct zcomp_strm {
+    struct mutex lock;          // per-CPU serialization
+    void *buffer;               // 2 × PAGE_SIZE output buffer
+    void *local_copy;           // PAGE_SIZE (for cross-page zsmalloc objects)
+    struct zcomp_ctx ctx;       // backend-specific state
+};</code></pre>
+
+<table>
+<tr><th>Backend</th><th>File</th><th>Speed</th><th>Ratio</th><th>Notes</th></tr>
+<tr><td><code>lzorle</code></td><td>backend_lzorle.c</td><td>Very fast</td><td>2.5&ndash;3&times;</td><td>LZO with RLE pre-pass; good default</td></tr>
+<tr><td><code>lzo</code></td><td>backend_lzo.c</td><td>Very fast</td><td>2.5&ndash;3&times;</td><td>Classic LZO</td></tr>
+<tr><td><code>lz4</code></td><td>backend_lz4.c</td><td>Fast</td><td>2.2&ndash;2.8&times;</td><td>Typical default; params: level</td></tr>
+<tr><td><code>lz4hc</code></td><td>backend_lz4hc.c</td><td>Slow</td><td>3&ndash;3.5&times;</td><td>High-compression LZ4; params: level</td></tr>
+<tr><td><code>zstd</code></td><td>backend_zstd.c</td><td>Moderate</td><td>3.5&ndash;4.5&times;</td><td>Best for recompression; params: level</td></tr>
+<tr><td><code>deflate</code></td><td>backend_deflate.c</td><td>Moderate</td><td>3&ndash;4&times;</td><td>ZLIB/DEFLATE; params: level, winbits</td></tr>
+<tr><td><code>842</code></td><td>backend_842.c</td><td>HW-accel</td><td>2&ndash;3&times;</td><td>IBM POWER8 hardware compression</td></tr>
+</table>
+
+<p>Each backend implements a simple vtable (<code>struct zcomp_ops</code>):
+<code>compress</code>, <code>decompress</code>, <code>create_ctx</code>, <code>destroy_ctx</code>,
+<code>setup_params</code>, <code>release_params</code>. CPU hotplug callbacks
+ensure per-CPU streams are allocated/freed correctly.</p>
+
+<h3 id="zram-sysfs">2.8 Sysfs Interface</h3>
+
+<div class="columns">
+<div>
+<h4>Control (write)</h4>
+<pre><code>/sys/block/zramN/
+  disksize          # set virtual size (write-once)
+  comp_algorithm    # set primary algorithm
+  recomp_algorithm  # set secondary algos + priority
+  algorithm_params  # algo-specific params
+  mem_limit         # memory quota for pool
+  backing_dev       # backing block device path
+  idle              # mark pages idle ("all" or age)
+  compact           # trigger zsmalloc compaction
+  writeback         # trigger writeback
+  recompress        # trigger recompression
+  reset             # destroy and reset device</code></pre>
+</div>
+<div>
+<h4>Statistics (read)</h4>
+<pre><code>/sys/block/zramN/
+  mm_stat:
+    orig_data_size      # uncompressed data
+    compr_data_size     # compressed data
+    mem_used_total      # zsmalloc pool total
+    mem_limit           # configured limit
+    same_pages          # same-filled count
+    huge_pages          # incompressible count
+    pages_compacted     # compaction result
+
+  io_stat:
+    failed_reads/writes
+    notify_free
+
+  bd_stat:              # writeback stats
+    bd_count, bd_reads, bd_writes</code></pre>
+</div>
+</div>
+
+
+<!-- ═══════════════════════  3. ZSWAP  ═══════════════════════ -->
+<h2 id="zswap">3. zswap &mdash; Compressed Swap Cache</h2>
+
+<p>zswap is a <strong>transparent compressed cache</strong> that sits between the swap subsystem and the
+actual swap device. When the kernel decides to swap out a page, zswap intercepts it, compresses
+it, and stores the compressed version in RAM. Only when zswap's pool fills up does it evict
+(writeback) the coldest pages to the real swap device.</p>
+
+<p>Unlike zram, zswap is <em>not</em> a block device &mdash; it hooks directly into the MM layer
+(<code>mm/page_io.c</code>), making it invisible to userspace. A real swap device is still required
+as a backing store.</p>
+
+<h3 id="zswap-arch">3.1 Architecture</h3>
+
+<div class="svg-container">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1060 700" width="1060" height="700">
+  <defs>
+    <marker id="zs" markerWidth="10" markerHeight="7" refX="10" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#58a6ff"/>
+    </marker>
+    <marker id="zs-o" markerWidth="10" markerHeight="7" refX="10" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#d29922"/>
+    </marker>
+    <marker id="zs-r" markerWidth="10" markerHeight="7" refX="10" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#f85149"/>
+    </marker>
+    <marker id="zs-p" markerWidth="10" markerHeight="7" refX="10" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#bc8cff"/>
+    </marker>
+    <marker id="zs-g" markerWidth="10" markerHeight="7" refX="10" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#3fb950"/>
+    </marker>
+  </defs>
+
+  <rect width="1060" height="700" rx="12" fill="#0d1117"/>
+  <text x="530" y="30" text-anchor="middle" fill="#58a6ff" font-family="monospace" font-size="15" font-weight="bold">zswap — Internal Architecture</text>
+
+  <!-- ── Page Reclaim Entry ── -->
+  <rect x="350" y="50" width="360" height="40" rx="6" fill="#161b22" stroke="#58a6ff" stroke-width="2"/>
+  <text x="530" y="75" text-anchor="middle" fill="#e6edf3" font-family="monospace" font-size="12">Page Reclaim → swap_writepage()</text>
+
+  <line x1="530" y1="90" x2="530" y2="120" stroke="#58a6ff" stroke-width="1.5" marker-end="url(#zs)"/>
+
+  <!-- ── zswap_store ── -->
+  <rect x="380" y="125" width="300" height="40" rx="6" fill="#161b22" stroke="#58a6ff" stroke-width="2"/>
+  <text x="530" y="150" text-anchor="middle" fill="#e6edf3" font-family="monospace" font-size="12">zswap_store(folio)</text>
+
+  <line x1="530" y1="165" x2="530" y2="195" stroke="#58a6ff" stroke-width="1.5" marker-end="url(#zs)"/>
+
+  <!-- ── Precondition checks ── -->
+  <rect x="350" y="200" width="360" height="70" rx="6" fill="#161b22" stroke="#d29922"/>
+  <text x="530" y="220" text-anchor="middle" fill="#d29922" font-family="monospace" font-size="11">Precondition Checks</text>
+  <text x="530" y="238" text-anchor="middle" fill="#8b949e" font-family="monospace" font-size="9">1. zswap enabled? (static key fast path)</text>
+  <text x="530" y="252" text-anchor="middle" fill="#8b949e" font-family="monospace" font-size="9">2. memcg zswap.max not exceeded?</text>
+  <text x="530" y="266" text-anchor="middle" fill="#8b949e" font-family="monospace" font-size="9">3. global pool limit not hit?</text>
+
+  <!-- reject arrow -->
+  <line x1="710" y1="235" x2="790" y2="235" stroke="#f85149" stroke-width="1.5" marker-end="url(#zs-r)"/>
+  <rect x="795" y="218" width="200" height="34" rx="5" fill="rgba(248,81,73,0.08)" stroke="#f85149" stroke-dasharray="3,2"/>
+  <text x="895" y="240" text-anchor="middle" fill="#f85149" font-family="monospace" font-size="10">→ fall through to disk swap</text>
+
+  <line x1="530" y1="270" x2="530" y2="300" stroke="#58a6ff" stroke-width="1.5" marker-end="url(#zs)"/>
+
+  <!-- ── Compression ── -->
+  <rect x="340" y="305" width="380" height="75" rx="6" fill="#161b22" stroke="#39d2c0"/>
+  <text x="530" y="325" text-anchor="middle" fill="#39d2c0" font-family="monospace" font-size="11">zswap_compress(page, entry, pool)</text>
+  <text x="530" y="343" text-anchor="middle" fill="#8b949e" font-family="monospace" font-size="9">1. acomp_ctx_get_cpu_lock() → per-CPU context</text>
+  <text x="530" y="357" text-anchor="middle" fill="#8b949e" font-family="monospace" font-size="9">2. crypto_acomp_compress() → async compress, sync wait</text>
+  <text x="530" y="371" text-anchor="middle" fill="#8b949e" font-family="monospace" font-size="9">3. zs_malloc() → zs_obj_write() → store compressed data</text>
+
+  <line x1="530" y1="380" x2="530" y2="410" stroke="#58a6ff" stroke-width="1.5" marker-end="url(#zs)"/>
+
+  <!-- ── Xarray insert ── -->
+  <rect x="370" y="415" width="320" height="42" rx="6" fill="#161b22" stroke="#58a6ff"/>
+  <text x="530" y="435" text-anchor="middle" fill="#e6edf3" font-family="monospace" font-size="11">xa_store(zswap_tree, offset, entry)</text>
+  <text x="530" y="450" text-anchor="middle" fill="#8b949e" font-family="monospace" font-size="9">atomic insert; free old entry if exists</text>
+
+  <line x1="530" y1="457" x2="530" y2="487" stroke="#58a6ff" stroke-width="1.5" marker-end="url(#zs)"/>
+
+  <!-- ── LRU + Charge ── -->
+  <rect x="370" y="492" width="320" height="42" rx="6" fill="#161b22" stroke="#3fb950"/>
+  <text x="530" y="512" text-anchor="middle" fill="#3fb950" font-family="monospace" font-size="11">LRU add + memcg charge</text>
+  <text x="530" y="527" text-anchor="middle" fill="#8b949e" font-family="monospace" font-size="9">list_lru_add() + obj_cgroup_charge_zswap()</text>
+
+  <!-- ═══ LOAD PATH (left side) ═══ -->
+  <rect x="30" y="125" width="280" height="40" rx="6" fill="#161b22" stroke="#3fb950" stroke-width="2"/>
+  <text x="170" y="150" text-anchor="middle" fill="#e6edf3" font-family="monospace" font-size="12">zswap_load(folio)</text>
+  <text x="170" y="112" fill="#3fb950" font-family="monospace" font-size="10">Page Fault (swapin) ↓</text>
+
+  <line x1="170" y1="165" x2="170" y2="200" stroke="#3fb950" stroke-width="1.5" marker-end="url(#zs-g)"/>
+
+  <rect x="50" y="205" width="240" height="36" rx="5" fill="#161b22" stroke="#3fb950"/>
+  <text x="170" y="228" text-anchor="middle" fill="#e6edf3" font-family="monospace" font-size="10">xa_load(tree, offset)</text>
+
+  <line x1="170" y1="241" x2="170" y2="268" stroke="#3fb950" stroke-width="1.5" marker-end="url(#zs-g)"/>
+
+  <rect x="30" y="273" width="280" height="55" rx="5" fill="#161b22" stroke="#39d2c0"/>
+  <text x="170" y="295" text-anchor="middle" fill="#39d2c0" font-family="monospace" font-size="10">zswap_decompress(entry, folio)</text>
+  <text x="170" y="313" text-anchor="middle" fill="#8b949e" font-family="monospace" font-size="8">if length==PAGE_SIZE: memcpy (uncompressed)</text>
+  <text x="170" y="325" text-anchor="middle" fill="#8b949e" font-family="monospace" font-size="8">else: crypto_acomp_decompress()</text>
+
+  <line x1="170" y1="328" x2="170" y2="358" stroke="#3fb950" stroke-width="1.5" marker-end="url(#zs-g)"/>
+
+  <rect x="50" y="363" width="240" height="42" rx="5" fill="rgba(63,185,80,0.08)" stroke="#3fb950"/>
+  <text x="170" y="383" text-anchor="middle" fill="#3fb950" font-family="monospace" font-size="10">Mark folio up-to-date</text>
+  <text x="170" y="398" text-anchor="middle" fill="#8b949e" font-family="monospace" font-size="8">xa_erase + free entry (swapcache)</text>
+
+  <!-- ═══ EVICTION PATH (bottom) ═══ -->
+  <rect x="30" y="555" width="1000" height="130" rx="8" fill="none" stroke="#d29922" stroke-width="1.5"/>
+  <text x="530" y="575" text-anchor="middle" fill="#d29922" font-family="monospace" font-size="12" font-weight="bold">Eviction / Writeback Pipeline</text>
+
+  <rect x="55" y="590" width="200" height="40" rx="5" fill="#161b22" stroke="#d29922"/>
+  <text x="155" y="607" text-anchor="middle" fill="#e6edf3" font-family="monospace" font-size="10">Shrinker / shrink_worker</text>
+  <text x="155" y="622" text-anchor="middle" fill="#8b949e" font-family="monospace" font-size="8">pool full → queue_work()</text>
+
+  <line x1="255" y1="610" x2="290" y2="610" stroke="#d29922" stroke-width="1.5" marker-end="url(#zs-o)"/>
+
+  <rect x="295" y="590" width="200" height="40" rx="5" fill="#161b22" stroke="#d29922"/>
+  <text x="395" y="607" text-anchor="middle" fill="#e6edf3" font-family="monospace" font-size="10">shrink_memcg_cb()</text>
+  <text x="395" y="622" text-anchor="middle" fill="#8b949e" font-family="monospace" font-size="8">second-chance LRU walk</text>
+
+  <line x1="495" y1="610" x2="530" y2="610" stroke="#d29922" stroke-width="1.5" marker-end="url(#zs-o)"/>
+
+  <rect x="535" y="590" width="240" height="40" rx="5" fill="#161b22" stroke="#d29922"/>
+  <text x="655" y="607" text-anchor="middle" fill="#e6edf3" font-family="monospace" font-size="10">zswap_writeback_entry()</text>
+  <text x="655" y="622" text-anchor="middle" fill="#8b949e" font-family="monospace" font-size="8">decompress → swap_cache_alloc</text>
+
+  <line x1="775" y1="610" x2="810" y2="610" stroke="#d29922" stroke-width="1.5" marker-end="url(#zs-o)"/>
+
+  <rect x="815" y="590" width="195" height="40" rx="5" fill="#161b22" stroke="#f85149"/>
+  <text x="913" y="607" text-anchor="middle" fill="#f85149" font-family="monospace" font-size="10">__swap_writepage()</text>
+  <text x="913" y="622" text-anchor="middle" fill="#8b949e" font-family="monospace" font-size="8">write to real swap device</text>
+
+  <!-- Second chance detail -->
+  <rect x="55" y="645" width="970" height="28" rx="4" fill="rgba(210,153,34,0.06)" stroke="none"/>
+  <text x="530" y="664" text-anchor="middle" fill="#8b949e" font-family="monospace" font-size="9">Second-chance: if entry.referenced → clear flag, rotate to LRU tail, skip. If !referenced → evict to disk.</text>
+
+  <!-- Pool capacity indicator -->
+  <rect x="720" y="480" width="290" height="55" rx="6" fill="none" stroke="#8b949e" stroke-dasharray="4,2"/>
+  <text x="865" y="498" text-anchor="middle" fill="#8b949e" font-family="monospace" font-size="10">Pool Sizing</text>
+  <text x="865" y="514" text-anchor="middle" fill="#8b949e" font-family="monospace" font-size="9">max_pool_percent (default 20%)</text>
+  <text x="865" y="528" text-anchor="middle" fill="#8b949e" font-family="monospace" font-size="9">accept_thr = 90% (hysteresis)</text>
+
+  <!-- Arrow from pool full to eviction -->
+  <line x1="865" y1="535" x2="530" y2="555" stroke="#d29922" stroke-width="1" stroke-dasharray="4,2" marker-end="url(#zs-o)"/>
+  <text x="730" y="550" fill="#d29922" font-family="monospace" font-size="8">pool full</text>
+</svg>
+</div>
+
+<h3 id="zswap-data">3.2 Data Structures</h3>
+
+<h4>struct zswap_entry (~48 bytes)</h4>
+<pre><code>struct zswap_entry {
+    swp_entry_t swpentry;           // swap type + offset
+    unsigned int length;            // compressed size (bytes)
+    bool referenced;                // second-chance LRU bit
+    struct zswap_pool *pool;        // owning pool (for decompression)
+    unsigned long handle;           // zsmalloc allocation handle
+    struct obj_cgroup *objcg;       // memcg charging reference
+    struct list_head lru;           // LRU list node
+};</code></pre>
+
+<h4>struct zswap_pool</h4>
+<pre><code>struct zswap_pool {
+    struct zs_pool *zs_pool;                      // zsmalloc pool
+    struct crypto_acomp_ctx __percpu *acomp_ctx;  // per-CPU compression contexts
+    struct percpu_ref ref;                         // refcount with callback
+    struct list_head list;                         // active pools list (RCU)
+    char tfm_name[CRYPTO_MAX_ALG_NAME];           // algorithm name
+};</code></pre>
+
+<h4>Lookup Structure</h4>
+<pre><code>// One xarray per 64 MB swap granule, per swap device
+static struct xarray *zswap_trees[MAX_SWAPFILES];
+
+// Lookup: swap_zswap_tree(swp_entry_t) returns the correct xarray
+// Key: swp_offset within that 64M window</code></pre>
+
+<div class="note">
+  <strong>Why xarray, not a hash table?</strong> Swap offsets are dense integers in a known range.
+  Xarray provides O(log<sub>64</sub> n) lookup with excellent cache behavior, automatic memory
+  management, and RCU-safe concurrent access &mdash; perfect for this use case. The 64 MB
+  granularity keeps individual xarrays small while supporting very large swap devices.
+</div>
+
+<h3 id="zswap-store">3.3 Store Path</h3>
+
+<pre><code>Page reclaim (vmscan.c / kswapd)
+  → swap_writepage() in page_io.c
+    → zswap_store(folio)                   // intercept before disk I/O
+        1. Check static key (fast path if disabled)
+        2. Check memcg zswap.max limit
+        3. Check global pool limit (zswap_check_limits)
+        4. Get current pool ref (RCU-safe)
+        5. For each page in folio:
+           → zswap_store_page(page, objcg, pool)
+              a. Allocate zswap_entry (kmem_cache, NUMA-local)
+              b. zswap_compress(page, entry, pool)
+                 - acomp_ctx_get_cpu_lock() → per-CPU context
+                 - SG input from page, output to buffer
+                 - crypto_acomp_compress() + crypto_wait_req()
+                 - If comp_len ≥ PAGE_SIZE → store uncompressed (if WB enabled)
+                 - zs_malloc() → zs_obj_write() → store in zsmalloc
+              c. xa_store() → insert into xarray (free old entry if redirtied)
+              d. obj_cgroup_charge_zswap() → charge memcg
+              e. list_lru_add() → add to LRU
+              f. entry->referenced = true → second-chance protection
+        6. Count ZSWPOUT events
+        7. Return true → page_io.c skips disk write!</code></pre>
+
+<h3 id="zswap-load">3.4 Load Path</h3>
+
+<pre><code>Page fault (do_swap_page)
+  → swap_read_folio() in page_io.c
+    → zswap_load(folio)
+        1. xa_load(tree, offset) → find entry (RCU-safe, no lock)
+        2. If not found → return -ENOENT → fall through to disk read
+        3. zswap_decompress(entry, folio)
+           - Get per-CPU acomp context
+           - If length == PAGE_SIZE → memcpy (stored uncompressed)
+           - Else → crypto_acomp_decompress() + wait
+        4. Mark folio up-to-date
+        5. If swapcache → xa_erase + free entry (swapcache is now authoritative)
+        6. Count ZSWPIN event
+        7. Return 0 → page_io.c skips disk read!</code></pre>
+
+<h3 id="zswap-evict">3.5 Eviction &amp; Writeback</h3>
+
+<p>When the compressed pool exceeds <code>max_pool_percent</code> of RAM (default 20%), zswap must
+evict entries to the real swap device:</p>
+
+<h4>Second-Chance LRU Algorithm</h4>
+<p>The shrinker walks the LRU list. Each entry has a <code>referenced</code> bit:</p>
+<ul>
+  <li><strong>First encounter, referenced=true:</strong> Clear the bit, rotate entry to tail of LRU.
+    The page gets a "second chance" before eviction.</li>
+  <li><strong>Second encounter, referenced=false:</strong> Evict &mdash; decompress and write to real swap.</li>
+</ul>
+
+<p>This prevents thrashing of recently-stored pages and approximates true LRU behavior
+without the overhead of maintaining access timestamps.</p>
+
+<h4>Writeback Pipeline</h4>
+<pre><code>shrink_memcg_cb() [LRU walker]
+  → zswap_writeback_entry(entry, swpentry)
+      1. swap_cache_alloc_folio() → allocate new folio
+      2. Verify entry still in xarray (concurrent invalidation check)
+      3. zswap_decompress(entry, folio) → decompress into folio
+      4. xa_erase() + free entry → remove from zswap
+      5. __swap_writepage(folio) → write to real swap device
+      6. Count ZSWPWB event</code></pre>
+
+<h4>Shrinker Calibration</h4>
+<p>The shrinker count function includes two sophisticated feedback mechanisms:</p>
+<ul>
+  <li><strong>Disk swapin protection:</strong> Tracks <code>nr_disk_swapins</code> per lruvec. If zswap overshrinks,
+    pages get read from disk on swapin instead of from zswap &mdash; this counter detects that
+    and reduces future shrink aggressiveness.</li>
+  <li><strong>Compression ratio scaling:</strong> If compression is good (small backing), fewer evictions
+    are needed per byte freed. If compression is poor, more evictions needed.</li>
+</ul>
+
+<h3 id="zswap-cgroup">3.6 Cgroup Integration</h3>
+
+<p>zswap is deeply integrated with memory cgroups (memcg v2):</p>
+
+<table>
+<tr><th>Cgroup File</th><th>Purpose</th></tr>
+<tr><td><code>memory.zswap.current</code></td><td>Current zswap usage (bytes) for this cgroup</td></tr>
+<tr><td><code>memory.zswap.max</code></td><td>Per-cgroup zswap limit (default: max)</td></tr>
+<tr><td><code>memory.zswap.writeback</code></td><td>Enable/disable writeback for this cgroup</td></tr>
+</table>
+
+<p>Object cgroup (<code>objcg</code>) references are tracked per-entry, allowing fine-grained
+accounting even as pages move between cgroups. The shrinker is <code>SHRINKER_MEMCG_AWARE</code>,
+meaning it can target specific cgroups during reclaim.</p>
+
+<h3 id="zswap-config">3.7 Configuration</h3>
+
+<pre><code># Module parameters (sysfs: /sys/module/zswap/parameters/)
+enabled=Y                      # enable/disable (static key for fast path)
+compressor=lz4                 # compression algorithm
+max_pool_percent=20            # max pool as % of RAM
+accept_threshold_percent=90    # hysteresis: % of max to re-accept
+shrinker_enabled=Y             # proactive background writeback
+
+# Debugfs statistics (/sys/kernel/debug/zswap/)
+pool_total_size                # current pool size (bytes)
+stored_pages                   # compressed pages count
+reject_alloc_fail              # zsmalloc allocation failures
+reject_compress_poor           # pages too big after compression
+written_back_pages             # pages evicted to disk</code></pre>
+
+
+<!-- ═══════════════════════  4. ZSMALLOC  ═══════════════════════ -->
+<h2 id="zsmalloc">4. zsmalloc &mdash; The Shared Allocator</h2>
+
+<p>Both zram and zswap use <strong>zsmalloc</strong> (<code>mm/zsmalloc.c</code>) to store compressed page data.
+zsmalloc is a specialized slab allocator designed for variable-size compressed objects,
+optimizing for high packing density with minimal fragmentation.</p>
+
+<div class="svg-container">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1060 420" width="1060" height="420">
+  <rect width="1060" height="420" rx="12" fill="#0d1117"/>
+  <text x="530" y="30" text-anchor="middle" fill="#bc8cff" font-family="monospace" font-size="15" font-weight="bold">zsmalloc — Object Allocator Internals</text>
+
+  <!-- Size class array -->
+  <rect x="30" y="50" width="1000" height="80" rx="8" fill="none" stroke="#bc8cff"/>
+  <text x="530" y="70" text-anchor="middle" fill="#bc8cff" font-family="monospace" font-size="12" font-weight="bold">255 Size Classes (16-byte delta)</text>
+
+  <rect x="50" y="82" width="80" height="36" rx="4" fill="#161b22" stroke="#bc8cff"/>
+  <text x="90" y="105" text-anchor="middle" fill="#e6edf3" font-family="monospace" font-size="9">32 B</text>
+  <rect x="140" y="82" width="80" height="36" rx="4" fill="#161b22" stroke="#bc8cff"/>
+  <text x="180" y="105" text-anchor="middle" fill="#e6edf3" font-family="monospace" font-size="9">48 B</text>
+  <rect x="230" y="82" width="80" height="36" rx="4" fill="#161b22" stroke="#bc8cff"/>
+  <text x="270" y="105" text-anchor="middle" fill="#e6edf3" font-family="monospace" font-size="9">64 B</text>
+  <text x="340" y="105" fill="#8b949e" font-family="monospace" font-size="12">...</text>
+  <rect x="370" y="82" width="100" height="36" rx="4" fill="#161b22" stroke="#39d2c0"/>
+  <text x="420" y="99" text-anchor="middle" fill="#39d2c0" font-family="monospace" font-size="9">~1.6 KB</text>
+  <text x="420" y="112" text-anchor="middle" fill="#8b949e" font-family="monospace" font-size="7">(typical avg)</text>
+  <text x="500" y="105" fill="#8b949e" font-family="monospace" font-size="12">...</text>
+  <rect x="530" y="82" width="100" height="36" rx="4" fill="#161b22" stroke="#d29922"/>
+  <text x="580" y="99" text-anchor="middle" fill="#d29922" font-family="monospace" font-size="9">3264 B</text>
+  <text x="580" y="112" text-anchor="middle" fill="#8b949e" font-family="monospace" font-size="7">(huge cutoff)</text>
+  <text x="660" y="105" fill="#8b949e" font-family="monospace" font-size="12">...</text>
+  <rect x="690" y="82" width="100" height="36" rx="4" fill="#161b22" stroke="#f85149"/>
+  <text x="740" y="99" text-anchor="middle" fill="#f85149" font-family="monospace" font-size="9">4096 B</text>
+  <text x="740" y="112" text-anchor="middle" fill="#8b949e" font-family="monospace" font-size="7">(PAGE_SIZE)</text>
+
+  <rect x="830" y="82" width="180" height="36" rx="4" fill="rgba(188,140,255,0.08)" stroke="#bc8cff" stroke-dasharray="3,2"/>
+  <text x="920" y="99" text-anchor="middle" fill="#bc8cff" font-family="monospace" font-size="9">Each class has:</text>
+  <text x="920" y="112" text-anchor="middle" fill="#8b949e" font-family="monospace" font-size="7">fullness lists, lock, stats</text>
+
+  <!-- ZSpage structure -->
+  <rect x="30" y="150" width="1000" height="120" rx="8" fill="none" stroke="#bc8cff"/>
+  <text x="530" y="170" text-anchor="middle" fill="#bc8cff" font-family="monospace" font-size="12" font-weight="bold">ZSpage (variable physical pages, homogeneous objects)</text>
+
+  <!-- Physical pages -->
+  <rect x="50" y="185" width="180" height="65" rx="4" fill="#161b22" stroke="#58a6ff"/>
+  <text x="140" y="203" text-anchor="middle" fill="#58a6ff" font-family="monospace" font-size="9">Physical Page 0</text>
+  <rect x="60" y="210" width="40" height="25" rx="2" fill="rgba(63,185,80,0.15)" stroke="#3fb950"/>
+  <text x="80" y="227" text-anchor="middle" fill="#3fb950" font-family="monospace" font-size="7">obj0</text>
+  <rect x="105" y="210" width="40" height="25" rx="2" fill="rgba(63,185,80,0.15)" stroke="#3fb950"/>
+  <text x="125" y="227" text-anchor="middle" fill="#3fb950" font-family="monospace" font-size="7">obj1</text>
+  <rect x="150" y="210" width="40" height="25" rx="2" fill="rgba(210,153,34,0.15)" stroke="#d29922"/>
+  <text x="170" y="227" text-anchor="middle" fill="#d29922" font-family="monospace" font-size="7">obj2↗</text>
+
+  <rect x="250" y="185" width="180" height="65" rx="4" fill="#161b22" stroke="#58a6ff"/>
+  <text x="340" y="203" text-anchor="middle" fill="#58a6ff" font-family="monospace" font-size="9">Physical Page 1</text>
+  <rect x="260" y="210" width="40" height="25" rx="2" fill="rgba(210,153,34,0.15)" stroke="#d29922"/>
+  <text x="280" y="227" text-anchor="middle" fill="#d29922" font-family="monospace" font-size="7">↗obj2</text>
+  <rect x="305" y="210" width="40" height="25" rx="2" fill="rgba(63,185,80,0.15)" stroke="#3fb950"/>
+  <text x="325" y="227" text-anchor="middle" fill="#3fb950" font-family="monospace" font-size="7">obj3</text>
+  <rect x="350" y="210" width="40" height="25" rx="2" fill="rgba(63,185,80,0.15)" stroke="#3fb950"/>
+  <text x="370" y="227" text-anchor="middle" fill="#3fb950" font-family="monospace" font-size="7">obj4</text>
+
+  <text x="460" y="220" fill="#8b949e" font-family="monospace" font-size="12">...</text>
+
+  <rect x="500" y="185" width="180" height="65" rx="4" fill="#161b22" stroke="#58a6ff"/>
+  <text x="590" y="203" text-anchor="middle" fill="#58a6ff" font-family="monospace" font-size="9">Physical Page N</text>
+  <rect x="510" y="210" width="40" height="25" rx="2" fill="rgba(63,185,80,0.15)" stroke="#3fb950"/>
+  <text x="530" y="227" text-anchor="middle" fill="#3fb950" font-family="monospace" font-size="7">objK</text>
+  <rect x="555" y="210" width="40" height="25" rx="2" fill="rgba(248,81,73,0.1)" stroke="#f85149" stroke-dasharray="2,2"/>
+  <text x="575" y="227" text-anchor="middle" fill="#f85149" font-family="monospace" font-size="7">free</text>
+  <rect x="600" y="210" width="40" height="25" rx="2" fill="rgba(248,81,73,0.1)" stroke="#f85149" stroke-dasharray="2,2"/>
+  <text x="620" y="227" text-anchor="middle" fill="#f85149" font-family="monospace" font-size="7">free</text>
+
+  <!-- Note about cross-page -->
+  <rect x="720" y="185" width="290" height="65" rx="6" fill="rgba(210,153,34,0.06)" stroke="#d29922" stroke-dasharray="3,2"/>
+  <text x="865" y="205" text-anchor="middle" fill="#d29922" font-family="monospace" font-size="10">Objects can span page boundaries!</text>
+  <text x="865" y="222" text-anchor="middle" fill="#8b949e" font-family="monospace" font-size="8">obj2 starts in page 0, ends in page 1</text>
+  <text x="865" y="238" text-anchor="middle" fill="#8b949e" font-family="monospace" font-size="8">zs_obj_read_begin() handles with local_copy</text>
+
+  <!-- Handle encoding -->
+  <rect x="30" y="290" width="490" height="110" rx="8" fill="none" stroke="#bc8cff"/>
+  <text x="275" y="310" text-anchor="middle" fill="#bc8cff" font-family="monospace" font-size="12" font-weight="bold">Handle Encoding (unsigned long)</text>
+
+  <rect x="50" y="325" width="260" height="30" rx="4" fill="rgba(88,166,255,0.1)" stroke="#58a6ff"/>
+  <text x="180" y="345" text-anchor="middle" fill="#58a6ff" font-family="monospace" font-size="10">PFN (~44 bits)</text>
+  <rect x="315" y="325" width="180" height="30" rx="4" fill="rgba(63,185,80,0.1)" stroke="#3fb950"/>
+  <text x="405" y="345" text-anchor="middle" fill="#3fb950" font-family="monospace" font-size="10">OBJ_INDEX (~20 bits)</text>
+  <text x="275" y="380" text-anchor="middle" fill="#8b949e" font-family="monospace" font-size="9">PFN = first page of zspage &bull; OBJ_INDEX = object within zspage</text>
+
+  <!-- Fullness groups -->
+  <rect x="550" y="290" width="480" height="110" rx="8" fill="none" stroke="#bc8cff"/>
+  <text x="790" y="310" text-anchor="middle" fill="#bc8cff" font-family="monospace" font-size="12" font-weight="bold">Fullness Groups (per size class)</text>
+
+  <rect x="575" y="325" width="85" height="28" rx="4" fill="rgba(248,81,73,0.1)" stroke="#f85149"/>
+  <text x="618" y="344" text-anchor="middle" fill="#f85149" font-family="monospace" font-size="9">0%</text>
+  <rect x="668" y="325" width="55" height="28" rx="4" fill="rgba(210,153,34,0.1)" stroke="#d29922"/>
+  <text x="696" y="344" text-anchor="middle" fill="#d29922" font-family="monospace" font-size="9">25%</text>
+  <rect x="731" y="325" width="55" height="28" rx="4" fill="rgba(210,153,34,0.1)" stroke="#d29922"/>
+  <text x="759" y="344" text-anchor="middle" fill="#d29922" font-family="monospace" font-size="9">50%</text>
+  <rect x="794" y="325" width="55" height="28" rx="4" fill="rgba(63,185,80,0.1)" stroke="#3fb950"/>
+  <text x="822" y="344" text-anchor="middle" fill="#3fb950" font-family="monospace" font-size="9">75%</text>
+  <rect x="857" y="325" width="85" height="28" rx="4" fill="rgba(63,185,80,0.15)" stroke="#3fb950"/>
+  <text x="900" y="344" text-anchor="middle" fill="#3fb950" font-family="monospace" font-size="9">100%</text>
+  <text x="775" y="380" text-anchor="middle" fill="#8b949e" font-family="monospace" font-size="9">Allocate from most-full first &bull; zs_compact() merges partially-full zspages</text>
+</svg>
+</div>
+
+<h4>Key Properties</h4>
+<ul>
+  <li><strong>255 size classes</strong> with 16-byte granularity, covering 32 B to PAGE_SIZE</li>
+  <li><strong>ZSpages</strong> group 1&ndash;N physical pages together; all objects within a zspage are the same size class</li>
+  <li><strong>Objects can span page boundaries</strong> &mdash; <code>zs_obj_read_begin()</code> copies spanning objects to a <code>local_copy</code> buffer transparently</li>
+  <li><strong>Handle indirection</strong> &mdash; handles encode PFN + object index, allowing zspage migration for compaction without invalidating external references</li>
+  <li><strong>Best-fit allocation</strong> &mdash; allocates from the most-full zspage first, minimizing fragmentation</li>
+  <li><strong>Compaction</strong> &mdash; <code>zs_compact()</code> migrates objects from partially-full zspages to consolidate free pages, callable from memory pressure or sysfs</li>
+  <li><strong>Typical overhead</strong> &mdash; 10&ndash;20% internal fragmentation (objects rounded up to nearest size class)</li>
+</ul>
+
+
+<!-- ═══════════════════════  5. COMPRESSION  ═══════════════════════ -->
+<h2 id="compression">5. Compression Algorithms</h2>
+
+<p>The choice of compression algorithm is a fundamental CPU-vs-memory tradeoff. Both zram and
+zswap compress individual 4 KiB pages independently (no inter-page context), limiting
+compression ratios but enabling random access.</p>
+
+<table>
+<tr>
+  <th>Algorithm</th><th>Compress Speed</th><th>Decompress Speed</th><th>Ratio (typical)</th><th>Notes</th>
+</tr>
+<tr>
+  <td><code>lzo-rle</code></td><td>~600 MB/s</td><td>~800 MB/s</td><td>2.0&ndash;2.5&times;</td>
+  <td>LZO with RLE pre-pass; fast, low CPU. <strong>zram default.</strong></td>
+</tr>
+<tr>
+  <td><code>lz4</code></td><td>~700 MB/s</td><td>~1200 MB/s</td><td>2.0&ndash;2.5&times;</td>
+  <td>Fastest decompression; excellent for latency-sensitive workloads.</td>
+</tr>
+<tr>
+  <td><code>zstd</code></td><td>~150 MB/s</td><td>~500 MB/s</td><td>2.5&ndash;3.5&times;</td>
+  <td>Best ratio/speed tradeoff; ideal for recompression of cold pages.</td>
+</tr>
+<tr>
+  <td><code>lz4hc</code></td><td>~50 MB/s</td><td>~1200 MB/s</td><td>2.5&ndash;3.0&times;</td>
+  <td>Asymmetric: slow compress, fast decompress. Good for write-once data.</td>
+</tr>
+<tr>
+  <td><code>deflate</code></td><td>~100 MB/s</td><td>~400 MB/s</td><td>2.5&ndash;3.5&times;</td>
+  <td>Mature, well-understood. <strong>zswap default.</strong> Tunable via winbits.</td>
+</tr>
+<tr>
+  <td><code>842</code></td><td>HW dependent</td><td>HW dependent</td><td>2&ndash;3&times;</td>
+  <td>IBM POWER8 hardware acceleration. Negligible CPU cost on supported hardware.</td>
+</tr>
+</table>
+
+<div class="note">
+  <strong>Per-page compression context:</strong> Each page is compressed independently with no
+  dictionary or cross-page state. This is necessary for random access but means compression
+  ratios are lower than file-level compression. Memory pages have high entropy variance &mdash;
+  code pages compress well (3&ndash;4&times;), while encrypted or pre-compressed data barely compresses at all.
+</div>
+
+<h4>Multi-Compression Strategy (zram)</h4>
+<p>zram's <code>CONFIG_ZRAM_MULTI_COMP</code> enables a tiered approach:</p>
+<ol>
+  <li><strong>Hot path (writes):</strong> Fast algorithm (lzo-rle or lz4) for minimal latency impact</li>
+  <li><strong>Cold path (recompression):</strong> Dense algorithm (zstd) applied to idle pages in background,
+    recovering additional memory from pages unlikely to be accessed soon</li>
+</ol>
+<p>This achieves the best of both worlds: low-latency writes with high compression for cold data.</p>
+
+
+<!-- ═══════════════════════  6. COMPARISON  ═══════════════════════ -->
+<h2 id="compare">6. zram vs zswap &mdash; When to Use Which</h2>
+
+<div class="columns">
+<div>
+<h4><span class="tag tag-zram">zram</span> Best For</h4>
+<ul>
+  <li><strong>No swap device available</strong> (embedded, diskless, tmpfs-only)</li>
+  <li><strong>Android / ChromeOS</strong> (ships as default)</li>
+  <li><strong>Full control</strong> (sysfs knobs for writeback, recompression, idle tracking)</li>
+  <li><strong>Non-swap uses</strong> (compressed /tmp, ramfs replacement)</li>
+  <li><strong>Multiple algorithms</strong> simultaneously (hot: lz4, cold: zstd)</li>
+  <li><strong>Predictable latency</strong> (no disk I/O unless writeback enabled)</li>
+</ul>
+</div>
+<div>
+<h4><span class="tag tag-zswap">zswap</span> Best For</h4>
+<ul>
+  <li><strong>Servers with real swap</strong> (augments existing swap infrastructure)</li>
+  <li><strong>Transparent deployment</strong> (no userspace changes, just enable module)</li>
+  <li><strong>Cgroup-aware workloads</strong> (containers, systemd slices)</li>
+  <li><strong>Automatic eviction</strong> (shrinker + LRU, no manual writeback needed)</li>
+  <li><strong>Reducing SSD wear</strong> (fewer writes to real swap)</li>
+  <li><strong>Large memory servers</strong> (20% of RAM as compressed cache is huge)</li>
+</ul>
+</div>
+</div>
+
+<table>
+<tr><th>Dimension</th><th><span class="tag tag-zram">zram</span></th><th><span class="tag tag-zswap">zswap</span></th></tr>
+<tr><td>Visibility</td><td><code>/dev/zramN</code> block device</td><td>Invisible; MM-layer hook</td></tr>
+<tr><td>Requires real swap</td><td>No</td><td>Yes</td></tr>
+<tr><td>Compression API</td><td>Custom <code>zcomp</code> (direct function calls)</td><td>Kernel crypto API (<code>crypto_acomp</code>)</td></tr>
+<tr><td>Pool allocator</td><td>zsmalloc (direct)</td><td>zsmalloc (via zpool)</td></tr>
+<tr><td>Eviction</td><td>Manual (sysfs writeback) or OOM</td><td>Automatic (shrinker + LRU)</td></tr>
+<tr><td>Cgroup support</td><td>None</td><td>Full (zswap.max, writeback control)</td></tr>
+<tr><td>Multi-algo</td><td>Yes (1+3, ZRAM_MULTI_COMP)</td><td>No (single per pool)</td></tr>
+<tr><td>Same-filled opt</td><td>Yes (zero page detection)</td><td>No (relies on compression)</td></tr>
+<tr><td>Page tracking</td><td>Per-page flags + access time</td><td>Per-entry LRU + referenced bit</td></tr>
+<tr><td>Lines of code</td><td>~4,700</td><td>~1,850</td></tr>
+</table>
+
+<div class="warn">
+  <strong>Can you use both?</strong> Technically yes &mdash; zswap in front of a real swap device,
+  plus a separate zram device. But this is unusual and can cause confusing memory accounting.
+  In practice, choose one: zram for diskless/embedded, zswap for servers with swap.
+</div>
+
+<h3>The LRU Inversion Problem</h3>
+
+<p>A subtle but critical issue arises when zram is combined with a lower-priority disk swap
+device, identified by Chris Down (Meta kernel team, March 2026):</p>
+
+<div class="svg-container">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1060 300" width="1060" height="300">
+  <rect width="1060" height="300" rx="12" fill="#0d1117"/>
+  <text x="530" y="28" text-anchor="middle" fill="#f85149" font-family="monospace" font-size="14" font-weight="bold">LRU Inversion Problem (zram + disk swap)</text>
+
+  <!-- Timeline -->
+  <line x1="80" y1="70" x2="980" y2="70" stroke="#30363d" stroke-width="2"/>
+  <text x="530" y="60" text-anchor="middle" fill="#8b949e" font-family="monospace" font-size="10">Time →  (pages evicted in order)</text>
+
+  <!-- Cold pages first -->
+  <rect x="100" y="80" width="120" height="30" rx="4" fill="rgba(88,166,255,0.15)" stroke="#58a6ff"/>
+  <text x="160" y="100" text-anchor="middle" fill="#58a6ff" font-family="monospace" font-size="9">Cold Page A</text>
+  <rect x="240" y="80" width="120" height="30" rx="4" fill="rgba(88,166,255,0.15)" stroke="#58a6ff"/>
+  <text x="300" y="100" text-anchor="middle" fill="#58a6ff" font-family="monospace" font-size="9">Cold Page B</text>
+  <rect x="380" y="80" width="120" height="30" rx="4" fill="rgba(88,166,255,0.15)" stroke="#58a6ff"/>
+  <text x="440" y="100" text-anchor="middle" fill="#58a6ff" font-family="monospace" font-size="9">Cold Page C</text>
+
+  <!-- zram fills -->
+  <text x="340" y="130" text-anchor="middle" fill="#3fb950" font-family="monospace" font-size="10">↓ all go to zram (highest priority) ↓</text>
+  <rect x="100" y="140" width="400" height="30" rx="4" fill="rgba(63,185,80,0.1)" stroke="#3fb950"/>
+  <text x="300" y="160" text-anchor="middle" fill="#3fb950" font-family="monospace" font-size="10">zram: FULL of cold pages</text>
+
+  <!-- Hot pages later -->
+  <rect x="560" y="80" width="120" height="30" rx="4" fill="rgba(248,81,73,0.15)" stroke="#f85149"/>
+  <text x="620" y="100" text-anchor="middle" fill="#f85149" font-family="monospace" font-size="9">Hot Page X</text>
+  <rect x="700" y="80" width="120" height="30" rx="4" fill="rgba(248,81,73,0.15)" stroke="#f85149"/>
+  <text x="760" y="100" text-anchor="middle" fill="#f85149" font-family="monospace" font-size="9">Hot Page Y</text>
+  <rect x="840" y="80" width="120" height="30" rx="4" fill="rgba(248,81,73,0.15)" stroke="#f85149"/>
+  <text x="900" y="100" text-anchor="middle" fill="#f85149" font-family="monospace" font-size="9">Hot Page Z</text>
+
+  <!-- Disk swap -->
+  <text x="760" y="130" text-anchor="middle" fill="#f85149" font-family="monospace" font-size="10">↓ zram full, overflow to SLOW disk ↓</text>
+  <rect x="560" y="140" width="400" height="30" rx="4" fill="rgba(248,81,73,0.1)" stroke="#f85149"/>
+  <text x="760" y="160" text-anchor="middle" fill="#f85149" font-family="monospace" font-size="10">Disk swap: hot pages stuck on SLOW storage!</text>
+
+  <!-- Result -->
+  <rect x="100" y="190" width="860" height="50" rx="6" fill="rgba(248,81,73,0.06)" stroke="#f85149" stroke-dasharray="4,2"/>
+  <text x="530" y="210" text-anchor="middle" fill="#f85149" font-family="monospace" font-size="11">Result: INVERTED — cold data in fast storage, hot data in slow storage</text>
+  <text x="530" y="228" text-anchor="middle" fill="#8b949e" font-family="monospace" font-size="9">zswap avoids this: kernel manages tiering — hot pages stay in RAM pool, cold pages written back to disk</text>
+
+  <!-- zswap correct behavior -->
+  <rect x="100" y="255" width="860" height="30" rx="6" fill="rgba(63,185,80,0.06)" stroke="#3fb950"/>
+  <text x="530" y="275" text-anchor="middle" fill="#3fb950" font-family="monospace" font-size="10">zswap: kernel-managed LRU → cold pages evict to disk, hot pages stay compressed in RAM ✓</text>
+</svg>
+</div>
+
+<p>zram's memory usage is also <strong>invisible to cgroup accounting</strong> &mdash; the kernel cannot
+track or limit how much RAM a zram device consumes per cgroup, making it unsuitable for
+container workloads where memory isolation matters. zswap tracks every entry per-objcg.</p>
+
+
+<!-- ═══════════════════════  6.5 NVMe BACKING  ═══════════════════════ -->
+<h3 id="nvme-backing">6.1 NVMe as Backing Store — Tiered Memory Hierarchy</h3>
+
+<p>Both zram and zswap can use an NVMe device to store memory pages, but in fundamentally
+different ways. This creates a <strong>three-tier memory hierarchy</strong>: DRAM &rarr; Compressed RAM
+&rarr; NVMe, where compression adds a new level that bridges the latency gap between
+DRAM and flash.</p>
+
+<div class="svg-container">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1060 520" width="1060" height="520">
+  <defs>
+    <marker id="th" markerWidth="10" markerHeight="7" refX="10" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#58a6ff"/>
+    </marker>
+    <marker id="th-g" markerWidth="10" markerHeight="7" refX="10" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#3fb950"/>
+    </marker>
+    <marker id="th-o" markerWidth="10" markerHeight="7" refX="10" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#d29922"/>
+    </marker>
+  </defs>
+
+  <rect width="1060" height="520" rx="12" fill="#0d1117"/>
+  <text x="530" y="28" text-anchor="middle" fill="#58a6ff" font-family="monospace" font-size="15" font-weight="bold">Tiered Memory Hierarchy with NVMe Backing</text>
+
+  <!-- ── Tier labels (left column) ── -->
+  <text x="28" y="88" fill="#8b949e" font-family="monospace" font-size="10" transform="rotate(-90,28,88)">FAST</text>
+  <text x="28" y="400" fill="#8b949e" font-family="monospace" font-size="10" transform="rotate(-90,28,400)">SLOW</text>
+  <line x1="38" y1="55" x2="38" y2="460" stroke="#30363d" stroke-width="1" stroke-dasharray="4,3"/>
+  <polygon points="38,55 34,68 42,68" fill="#3fb950"/>
+  <polygon points="38,460 34,447 42,447" fill="#f85149"/>
+
+  <!-- ── Tier 0: CPU Cache ── -->
+  <rect x="60" y="50" width="960" height="50" rx="8" fill="rgba(63,185,80,0.06)" stroke="#3fb950"/>
+  <text x="90" y="72" fill="#3fb950" font-family="monospace" font-size="11" font-weight="bold">Tier 0</text>
+  <rect x="170" y="58" width="200" height="32" rx="5" fill="#161b22" stroke="#3fb950"/>
+  <text x="270" y="79" text-anchor="middle" fill="#e6edf3" font-family="monospace" font-size="11">L1 / L2 / LLC</text>
+  <text x="430" y="79" fill="#3fb950" font-family="monospace" font-size="11">~1&ndash;10 ns</text>
+  <text x="600" y="79" fill="#8b949e" font-family="monospace" font-size="10">Hardware-managed, SRAM</text>
+
+  <!-- ── Tier 1: DRAM ── -->
+  <rect x="60" y="115" width="960" height="50" rx="8" fill="rgba(88,166,255,0.06)" stroke="#58a6ff"/>
+  <text x="90" y="137" fill="#58a6ff" font-family="monospace" font-size="11" font-weight="bold">Tier 1</text>
+  <rect x="170" y="123" width="200" height="32" rx="5" fill="#161b22" stroke="#58a6ff"/>
+  <text x="270" y="144" text-anchor="middle" fill="#e6edf3" font-family="monospace" font-size="11">DRAM (Page Cache)</text>
+  <text x="430" y="144" fill="#58a6ff" font-family="monospace" font-size="11">~80&ndash;120 ns</text>
+  <text x="600" y="144" fill="#8b949e" font-family="monospace" font-size="10">Active/inactive LRU</text>
+
+  <!-- Arrow: eviction -->
+  <line x1="270" y1="155" x2="270" y2="185" stroke="#58a6ff" stroke-width="1.5" marker-end="url(#th)"/>
+  <text x="285" y="175" fill="#8b949e" font-family="monospace" font-size="8">page reclaim</text>
+
+  <!-- ── Tier 2: Compressed RAM ── -->
+  <rect x="60" y="190" width="960" height="105" rx="8" fill="rgba(188,140,255,0.06)" stroke="#bc8cff" stroke-width="2"/>
+  <text x="90" y="212" fill="#bc8cff" font-family="monospace" font-size="11" font-weight="bold">Tier 2</text>
+  <rect x="170" y="198" width="200" height="32" rx="5" fill="#161b22" stroke="#bc8cff"/>
+  <text x="270" y="219" text-anchor="middle" fill="#e6edf3" font-family="monospace" font-size="11">Compressed RAM</text>
+  <text x="430" y="219" fill="#bc8cff" font-family="monospace" font-size="11">~1&ndash;10 &mu;s</text>
+  <text x="600" y="219" fill="#8b949e" font-family="monospace" font-size="10">Compress + zsmalloc</text>
+
+  <!-- zswap and zram boxes inside tier 2 -->
+  <rect x="170" y="240" width="180" height="42" rx="5" fill="#161b22" stroke="#58a6ff"/>
+  <text x="260" y="258" text-anchor="middle" fill="#58a6ff" font-family="monospace" font-size="10">zswap pool</text>
+  <text x="260" y="274" text-anchor="middle" fill="#8b949e" font-family="monospace" font-size="8">auto eviction (shrinker/LRU)</text>
+
+  <rect x="390" y="240" width="180" height="42" rx="5" fill="#161b22" stroke="#3fb950"/>
+  <text x="480" y="258" text-anchor="middle" fill="#3fb950" font-family="monospace" font-size="10">zram device</text>
+  <text x="480" y="274" text-anchor="middle" fill="#8b949e" font-family="monospace" font-size="8">manual writeback (sysfs)</text>
+
+  <text x="620" y="265" fill="#8b949e" font-family="monospace" font-size="10">2&ndash;3&times; capacity</text>
+
+  <!-- Arrows to NVMe -->
+  <line x1="260" y1="282" x2="260" y2="320" stroke="#d29922" stroke-width="1.5" marker-end="url(#th-o)"/>
+  <text x="160" y="310" fill="#d29922" font-family="monospace" font-size="8">LRU eviction (auto)</text>
+
+  <line x1="480" y1="282" x2="480" y2="320" stroke="#d29922" stroke-width="1.5" marker-end="url(#th-o)"/>
+  <text x="490" y="310" fill="#d29922" font-family="monospace" font-size="8">writeback (manual)</text>
+
+  <!-- ── Tier 3: NVMe ── -->
+  <rect x="60" y="325" width="960" height="75" rx="8" fill="rgba(210,153,34,0.06)" stroke="#d29922"/>
+  <text x="90" y="350" fill="#d29922" font-family="monospace" font-size="11" font-weight="bold">Tier 3</text>
+  <rect x="170" y="335" width="200" height="32" rx="5" fill="#161b22" stroke="#d29922"/>
+  <text x="270" y="356" text-anchor="middle" fill="#e6edf3" font-family="monospace" font-size="11">NVMe Swap Device</text>
+  <text x="430" y="356" fill="#d29922" font-family="monospace" font-size="11">~10&ndash;100 &mu;s</text>
+  <text x="600" y="356" fill="#8b949e" font-family="monospace" font-size="10">Block I/O, DMA, FTL</text>
+
+  <rect x="170" y="375" width="380" height="16" rx="3" fill="rgba(210,153,34,0.1)" stroke="none"/>
+  <text x="360" y="387" text-anchor="middle" fill="#8b949e" font-family="monospace" font-size="8">zswap: swap partition/file &ensp;|&ensp; zram: backing_dev (CONFIG_ZRAM_WRITEBACK)</text>
+
+  <!-- ── Tier 4: HDD (optional) ── -->
+  <rect x="60" y="415" width="960" height="45" rx="8" fill="rgba(248,81,73,0.04)" stroke="#f85149" stroke-dasharray="4,2"/>
+  <text x="90" y="443" fill="#f85149" font-family="monospace" font-size="11" font-weight="bold">Tier 4</text>
+  <rect x="170" y="425" width="200" height="28" rx="5" fill="#161b22" stroke="#f85149" stroke-dasharray="3,2"/>
+  <text x="270" y="444" text-anchor="middle" fill="#8b949e" font-family="monospace" font-size="10">HDD (optional)</text>
+  <text x="430" y="444" fill="#f85149" font-family="monospace" font-size="11">~5&ndash;15 ms</text>
+  <text x="600" y="444" fill="#8b949e" font-family="monospace" font-size="10">Seek + rotational latency</text>
+
+  <!-- Bandwidth annotation -->
+  <rect x="770" y="325" width="235" height="75" rx="6" fill="rgba(188,140,255,0.04)" stroke="#30363d"/>
+  <text x="888" y="343" text-anchor="middle" fill="#bc8cff" font-family="monospace" font-size="10" font-weight="bold">Latency Ratio</text>
+  <text x="888" y="360" text-anchor="middle" fill="#8b949e" font-family="monospace" font-size="9">DRAM→Compressed: ~10&ndash;50&times;</text>
+  <text x="888" y="375" text-anchor="middle" fill="#8b949e" font-family="monospace" font-size="9">Compressed→NVMe:  ~10&ndash;100&times;</text>
+  <text x="888" y="390" text-anchor="middle" fill="#8b949e" font-family="monospace" font-size="9">NVMe→HDD:         ~100&ndash;1000&times;</text>
+
+  <!-- Write reduction note -->
+  <rect x="60" y="475" width="960" height="32" rx="6" fill="rgba(63,185,80,0.06)" stroke="#3fb950"/>
+  <text x="530" y="496" text-anchor="middle" fill="#3fb950" font-family="monospace" font-size="11">With 2.5&times; avg compression, Tier 2 absorbs 60&ndash;80% of swap traffic &mdash; only coldest pages reach NVMe</text>
+</svg>
+</div>
+
+<h4>How Each Uses NVMe</h4>
+
+<div class="columns">
+<div>
+<h4><span class="tag tag-zswap">zswap</span> + NVMe Swap (automatic)</h4>
+<p>zswap <strong>requires</strong> a real swap device. An NVMe partition or swap file is the backing
+store. The kernel handles everything automatically:</p>
+<pre><code># Setup
+mkswap /dev/nvme0n1p2
+swapon /dev/nvme0n1p2
+echo 1 > /sys/module/zswap/parameters/enabled
+
+# Flow (fully automatic):
+# page evicted
+#   → compressed in RAM (zswap pool)
+#   → pool full? LRU shrinker evicts coldest
+#     → decompress → __swap_writepage()
+#       → written to NVMe swap partition
+#
+# On swapin:
+#   → check zswap first (~1 µs)
+#   → miss? read from NVMe (~50 µs)</code></pre>
+<p>zswap reduces NVMe write volume by <strong>60&ndash;80%</strong> and
+completely eliminates NVMe reads for pages still in the compressed pool.</p>
+</div>
+<div>
+<h4><span class="tag tag-zram">zram</span> + NVMe Backing (manual)</h4>
+<p>zram can <strong>optionally</strong> write back cold pages to an NVMe backing device
+(<code>CONFIG_ZRAM_WRITEBACK</code>). This is user-triggered:</p>
+<pre><code># Setup
+echo /dev/nvme0n1p3 > /sys/block/zram0/backing_dev
+
+# Trigger writeback of idle pages
+echo all > /sys/block/zram0/idle
+sleep 3600   # let pages go cold
+echo "type=idle" > /sys/block/zram0/writeback
+
+# With compressed_wb=1, compressed data
+# is written directly — no decompress cycle:
+echo 1 > /sys/block/zram0/compressed_wb
+echo "type=huge" > /sys/block/zram0/writeback</code></pre>
+<p>The <code>compressed_wb</code> option writes already-compressed data to NVMe,
+saving CPU on the writeback path. On read-back, decompression
+happens asynchronously in a high-priority workqueue.</p>
+</div>
+</div>
+
+<h4>Compressed Writeback — Saving CPU on the NVMe Path</h4>
+
+<p>Both zram and zswap support writing <strong>already-compressed data</strong> to the backing device,
+avoiding the decompress&rarr;write&rarr;recompress cycle:</p>
+
+<table>
+<tr><th></th><th>Normal Writeback</th><th>Compressed Writeback</th></tr>
+<tr>
+  <td><strong>Write path</strong></td>
+  <td>decompress (CPU) &rarr; write PAGE_SIZE to NVMe</td>
+  <td>write comp_len to NVMe directly (no CPU decompression)</td>
+</tr>
+<tr>
+  <td><strong>Read path</strong></td>
+  <td>read PAGE_SIZE from NVMe &rarr; done</td>
+  <td>read comp_len from NVMe &rarr; decompress (CPU)</td>
+</tr>
+<tr>
+  <td><strong>NVMe bandwidth</strong></td>
+  <td>Full 4 KiB per page</td>
+  <td>~1.5&ndash;2 KiB per page (compressed)</td>
+</tr>
+<tr>
+  <td><strong>CPU cost</strong></td>
+  <td>Decompression on write, none on read</td>
+  <td>None on write, decompression on read</td>
+</tr>
+<tr>
+  <td><strong>Best for</strong></td>
+  <td>Read-heavy workloads (fast swapin)</td>
+  <td>Write-heavy / SSD-wear-sensitive (fewer bytes written)</td>
+</tr>
+</table>
+
+<div class="note">
+  <strong>SSD wear reduction:</strong> With compressed writeback, each evicted page writes only
+  ~1.5&ndash;2 KiB to NVMe instead of 4 KiB. Combined with the 60&ndash;80% traffic reduction from
+  the compressed cache, total NVMe write volume can be reduced by <strong>85&ndash;95%</strong> compared
+  to raw swap &mdash; dramatically extending SSD lifespan.
+</div>
+
+
+<!-- ═══════════════════════  7. DEPLOYMENTS  ═══════════════════════ -->
+<h2 id="deployments">7. Real-World Deployments</h2>
+
+<h4>Android (zram)</h4>
+<p>Android has used zram as its primary swap mechanism since Android 4.4 (KitKat). On memory-constrained
+devices (2&ndash;4 GB RAM), zram typically provides 1&ndash;2 GB of effective additional memory through compression.
+Android's <code>lmkd</code> (Low Memory Killer Daemon) works in concert with zram &mdash; kswapd pushes pages
+to zram, and lmkd kills apps when even compressed swap is exhausted.</p>
+
+<h4>ChromeOS (zram)</h4>
+<p>ChromeOS uses zram extensively. The <code>swap_management</code> service configures zram at boot with
+LZO compression. ChromeOS also uses zram for its tab discarding heuristics &mdash; tabs are
+compressed to zram before being fully discarded.</p>
+
+<h4>Fedora / Ubuntu (zram)</h4>
+<p>Fedora 33+ enables zram by default via <code>systemd-zram-generator</code>, typically configuring
+50% of RAM as zram swap with lzo-rle compression. Ubuntu 24.10+ followed suit. This replaced
+traditional swap partitions in default desktop installations.</p>
+
+<h4>Meta / Facebook (zswap)</h4>
+<p>Meta uses zswap extensively in their server fleet. Johannes Weiner (Meta engineer) is a primary
+maintainer. Their workloads benefit from zswap's transparent cgroup integration with their
+container infrastructure. Much of the recent zswap work (memcg-aware shrinker, improved
+eviction) was driven by Meta's production experience.</p>
+
+<h4>Enterprise Linux (varies)</h4>
+<p>RHEL/CentOS typically provides both as kernel modules. Default configurations vary by deployment:
+containerized workloads tend toward zswap; bare-metal databases often disable both in favor of
+abundant RAM and no swap.</p>
+
+
+<!-- ═══════════════════════  8. ACADEMIC  ═══════════════════════ -->
+<h2 id="academic">8. Academic Context &amp; Literature</h2>
+
+<h3>Foundational Work</h3>
+
+<h4>[1] Compressed Caching &mdash; Wilson, Kaplan, Smaragdakis (1999)</h4>
+<p class="ref">Paul R. Wilson, Scott F. Kaplan, Yannis Smaragdakis. <em>"The Case for Compressed Caching in
+Virtual Memory Systems."</em> USENIX Annual Technical Conference, 1999.</p>
+<p>The seminal paper establishing that a compressed in-memory cache for evicted pages can outperform
+using the same RAM as uncompressed page cache. Key insight: with 2:1 compression, devoting
+1/8 of RAM to a compressed cache effectively doubles available memory for the marginal cost of
+CPU time. The paper's adaptive model &mdash; dynamically resizing the compressed cache based on
+observed compression ratios and access patterns &mdash; directly influenced zswap's design.</p>
+
+<h4>[2] zcache &amp; tmem (2010&ndash;2012)</h4>
+<p class="ref">Dan Magenheimer (Oracle). <em>"Transcendent Memory"</em> and <em>"zcache"</em> patches.
+Linux Plumbers Conference, 2010&ndash;2012.</p>
+<p>Proposed a "transcendent memory" abstraction where the kernel could opportunistically store
+pages in a compressed cache managed outside the normal page allocator. zcache was the
+prototype; its lessons (complexity of the cleancache/frontswap APIs, difficulty of integration)
+directly shaped zswap's simpler design.</p>
+
+<h4>[3] Memory Compression in macOS (2013)</h4>
+<p class="ref">Apple Inc. <em>"OS X Mavericks Core Technologies Overview."</em> WWDC 2013.</p>
+<p>Apple's implementation validated compressed memory at consumer scale. Their approach uses
+WKdm (a word-centric dictionary compressor optimized for memory pages) and integrates
+compression into the Mach VM layer. Unlike Linux's zram/zswap split, macOS uses a single
+unified compressed memory system.</p>
+
+<h4>[4] Memory Compression in Windows 10 (2015)</h4>
+<p class="ref">Microsoft. <em>"Memory compression"</em> in Windows 10 Memory Manager.</p>
+<p>Windows 10 introduced a "compression store" managed by the System process. Pages are compressed
+in-memory before being written to the pagefile, conceptually similar to zswap. The Windows
+implementation uses XPRESS (Huffman variant) compression.</p>
+
+<h3>Compression Algorithm Research</h3>
+
+<h4>[5] LZ4 &mdash; Collet (2011)</h4>
+<p class="ref">Yann Collet. <em>"LZ4: Extremely fast compression algorithm."</em> 2011.</p>
+<p>LZ4 achieves &gt;500 MB/s compression with ~1.2 GB/s decompression on modern CPUs, making it
+ideal for latency-critical compressed swap. Its fixed-overhead design (no Huffman tables)
+means consistent performance regardless of input entropy.</p>
+
+<h4>[6] Zstandard &mdash; Collet (2015)</h4>
+<p class="ref">Yann Collet. <em>"Zstandard: Fast real-time compression algorithm."</em> RFC 8478, 2018.
+Facebook Engineering Blog, 2015.</p>
+<p>Zstd provides compression ratios approaching DEFLATE with speeds closer to LZ4. Its
+dictionary compression mode is particularly effective for memory pages with repetitive
+structure. zram's multi-comp feature leverages zstd for background recompression of cold pages.</p>
+
+<h3>Systems Research</h3>
+
+<h4>[7] Understanding Memory Compression Trade-offs</h4>
+<p class="ref">Various authors. <em>Proceedings of Linux Plumbers Conference</em>, 2019&ndash;2024.</p>
+<p>Key findings from production deployments:</p>
+<ul>
+  <li><strong>CPU overhead is not free:</strong> On CPU-bound workloads, zram/zswap compression
+    can reduce throughput by 5&ndash;15%. The benefit depends on whether the workload is
+    memory-bound or CPU-bound.</li>
+  <li><strong>Compression ratios vary widely:</strong> Text/code pages achieve 3&ndash;4&times;; already-compressed
+    or encrypted data achieves ~1&times; (incompressible). The "huge page" detection in zram
+    avoids wasting CPU on incompressible pages.</li>
+  <li><strong>Fragmentation matters:</strong> zsmalloc's 16-byte granularity means 10&ndash;20% of allocated
+    memory is wasted on rounding. The z3fold and zbud allocators (used by earlier zswap
+    versions) had worse fragmentation but simpler code.</li>
+</ul>
+
+<h4>[8] Zpool Allocator Comparison</h4>
+<p class="ref">Seth Jennings. <em>"zbud: A Low-Latency, Low-Overhead Compressed Page Cache"</em> and
+related work on z3fold (Vitaly Wool). 2013&ndash;2016.</p>
+<p>Three allocators have been used for compressed pages in Linux:</p>
+<table>
+<tr><th>Allocator</th><th>Design</th><th>Max Objects/Page</th><th>Fragmentation</th><th>Status</th></tr>
+<tr><td><code>zbud</code></td><td>2 objects per page (buddy)</td><td>2</td><td>High (~50%)</td><td>Deprecated</td></tr>
+<tr><td><code>z3fold</code></td><td>3 objects per page</td><td>3</td><td>Medium (~33%)</td><td>Deprecated (6.1.112)</td></tr>
+<tr><td><code>zsmalloc</code></td><td>N objects per zspage</td><td>Many</td><td>Low (~15%)</td><td><strong>Current standard</strong></td></tr>
+</table>
+<p>Both zram and zswap now use zsmalloc exclusively. The zpool abstraction layer was removed from
+zswap in kernel 6.18 (Dec 2025) &mdash; zswap now calls zsmalloc directly.</p>
+
+<h4>[9] Cgroup-Aware Memory Compression</h4>
+<p class="ref">Nhat Pham, Johannes Weiner. <em>"zswap: memcg-aware compressed swap cache."</em>
+LKML patches, 2023&ndash;2024.</p>
+<p>The addition of memcg awareness to zswap's shrinker was driven by container workloads
+at Meta. Without cgroup-aware eviction, a single container's compressed pages could
+monopolize the zswap pool, degrading performance for all containers. The memcg-aware
+shrinker enables per-cgroup zswap limits and fair eviction.</p>
+
+<h3>Mobile / Android Research</h3>
+
+<h4>[10] SWAM &mdash; Samsung Research (MobiCom 2023)</h4>
+<p class="ref">Samsung Research. <em>"SWAM: Revisiting Swap and OOMK for Improving Application
+Responsiveness on Mobile Devices."</em> ACM MobiCom 2023. <a href="https://arxiv.org/abs/2306.08345">arXiv:2306.08345</a></p>
+<p>Integrates adaptive swap (memory or storage), OOM cleaner, and enhanced OOM killer.
+6.5&times; fewer killed apps, 36% faster launch, 41% faster response. Implemented on
+Pixel 6 with Linux 5.10 + AOSP 12 (7,250 LoC modified).</p>
+
+<h4>[11] Ariadne &mdash; CMU-SAFARI (HPCA 2025)</h4>
+<p class="ref">Yu Liang et al. <em>"Ariadne: A Hotness-Aware and Size-Adaptive Compressed Swap
+Technique for Fast Application Relaunch."</em> IEEE HPCA 2025.
+<a href="https://arxiv.org/abs/2502.12826">arXiv:2502.12826</a>,
+<a href="https://github.com/CMU-SAFARI/Ariadne">GitHub</a></p>
+<p>Hotness-aware data organization + size-adaptive compression (small chunks for hot data,
+large for cold) + proactive decompression. On Pixel 7: 50% reduction in relaunch latency,
+15% less CPU for compression/decompression.</p>
+
+<h4>[12] ASAP &mdash; SNU-ARC (USENIX ATC 2021)</h4>
+<p class="ref">Sam Son et al. <em>"ASAP: Fast Mobile Application Switch via Adaptive Prepaging."</em>
+USENIX ATC 2021. <a href="https://www.usenix.org/system/files/atc21-son.pdf">PDF</a></p>
+<p>Addresses decompression latency during app switch by combining footprint estimators for
+file-backed and anonymous pages with efficient prepaging. 22&ndash;28% reduction in switch time.</p>
+
+<h4>[13] oaRAM (ACM TACO 2025)</h4>
+<p class="ref"><em>"Object-Aware Memory Compression for Smartphones."</em> ACM TACO, 2025.
+<a href="https://dl.acm.org/doi/10.1145/3771285">DOI</a></p>
+<p>Proposes an object-aware compressed memory format that leaves reference information intact
+so GC threads can interpret compressed pages &mdash; addressing the fundamental incompatibility
+between zram's LZ4 format and garbage collection in managed runtimes (Java/Android).</p>
+
+<h3>Hardware Compression</h3>
+
+<h4>[14] IBM Memory Expansion Technology (MXT)</h4>
+<p class="ref">Tremaine et al. <em>"IBM Memory Expansion Technology (MXT)."</em> IBM J. Res. Dev. 45(2), 2001.
+<a href="https://ieeexplore.ieee.org/document/5389099/">IEEE</a></p>
+<p>First commercial hardware memory compression. A large low-latency cache between the processor
+bus and compressed main memory, with dedicated hardware performing real-time
+compression/decompression. Achieved &gt;2&times; effective memory with negligible performance penalty.</p>
+
+<h4>[15] QZRAM (MDPI Applied Sciences 2023)</h4>
+<p class="ref"><em>"QZRAM: A Transparent Kernel Memory Compression System with QAT Accelerator."</em>
+MDPI Applied Sciences 13(18), 2023.</p>
+<p>Offloads zram compression to Intel QAT hardware. Reduces CPU usage by 49.2%, increases
+effective memory by 1.66&times; vs software zram.</p>
+
+<h4>[16] Compresso (MICRO 2018)</h4>
+<p class="ref">Choukse et al. <em>"Compresso: Pragmatic Main Memory Compression."</em> IEEE/ACM MICRO 2018.
+<a href="https://lph.ece.utexas.edu/merez/uploads/MattanErez/micro18_compresso.pdf">PDF</a></p>
+<p>First main-memory compression architecture running unmodified OSes. 1.85&times; average compression,
+24% speedup for single-core, 27% for multi-core.</p>
+
+<h3>Earlier Linux Work</h3>
+
+<h4>[17] Cervera, Cortes, Becerra (USENIX ATC 1999)</h4>
+<p class="ref"><em>"Improving Application Performance through Swap Compression."</em> USENIX ATC 1999.
+<a href="https://www.usenix.org/legacy/event/usenix99/full_papers/cervera/cervera.pdf">PDF</a></p>
+<p>One of the earliest Linux-specific implementations of compressed swap. With ~1 MB cache sizes,
+performance improved by up to 2&times; vs uncompressed swap.</p>
+
+<h4>[18] Tuduce &amp; Gross (USENIX ATC 2005)</h4>
+<p class="ref">Irina Chihaia Tuduce, Thomas Gross. <em>"Adaptive Main Memory Compression."</em>
+USENIX ATC 2005. <a href="https://www.usenix.org/legacy/event/usenix05/tech/general/full_papers/tuduce/tuduce.pdf">PDF</a></p>
+<p>Dynamically adapts the split between compressed and uncompressed memory, managing fragmentation
+without user involvement. Directly influenced the adaptive pool management in modern zswap.</p>
+
+<h3>Future Directions</h3>
+
+<h4>Virtual Swap Spaces (2026, in progress)</h4>
+<p>Led by Nhat Pham (based on earlier proposals by Yosry Ahmed), virtual swap spaces replace
+per-device swap tables with a single virtual swap table. This would <strong>decouple zswap from
+the requirement of a backing swap device</strong>, allowing it to operate like zram (purely in-memory)
+while retaining all kernel-managed benefits (cgroup awareness, LRU, shrinker). The swap table
+refactoring merged in kernel 6.18.</p>
+
+<h4>Compression Batching for Hardware Accelerators (2024)</h4>
+<p>The <code>zswap_batch_compress()</code> API and <code>acomp_has_async_batching()</code> crypto interface
+enable hardware compression engines (e.g., Intel IAA/QAT) to process multiple pages in a single
+batch operation, significantly improving throughput on supported hardware.</p>
+
+<h4>zpdesc Memory Descriptor (2025)</h4>
+<p>A new <code>zpdesc</code> type replaces raw <code>struct page</code> usage in zsmalloc, currently overlaying
+<code>struct folio</code>. This is a foundation for future memory descriptor optimizations as the
+kernel moves away from the monolithic <code>struct page</code>.</p>
+
+
+<!-- ═══════════════════════  9. REFERENCES  ═══════════════════════ -->
+<h2 id="refs">9. References</h2>
+
+<ol class="ref">
+  <li><span class="ref-num">[1]</span> Wilson, Kaplan, Smaragdakis. <em>"The Case for Compressed Caching in Virtual Memory Systems."</em> USENIX ATC 1999. <a href="https://www.usenix.org/legacy/event/usenix99/full_papers/wilson/wilson.pdf">PDF</a></li>
+  <li><span class="ref-num">[2]</span> Magenheimer. <em>"Transcendent Memory / zcache."</em> Oracle, Linux Plumbers 2010&ndash;2012. <a href="https://www.linux-kvm.org/images/d/d7/TmemNotVirt-Linuxcon2011-Final.pdf">Slides</a></li>
+  <li><span class="ref-num">[3]</span> Apple. <em>"OS X Mavericks Core Technologies Overview."</em> WWDC 2013. <a href="https://images.apple.com/media/us/osx/2013/docs/OSX_Mavericks_Core_Technology_Overview.pdf">PDF</a></li>
+  <li><span class="ref-num">[4]</span> Microsoft. <em>"Memory Compression in Windows 10."</em> 2015.</li>
+  <li><span class="ref-num">[5]</span> Collet. <em>"LZ4: Extremely fast compression algorithm."</em> 2011. <a href="https://lz4.github.io/lz4/">lz4.github.io</a></li>
+  <li><span class="ref-num">[6]</span> Collet. <em>"Zstandard."</em> RFC 8478, 2018. <a href="https://facebook.github.io/zstd/">facebook.github.io/zstd</a></li>
+  <li><span class="ref-num">[7]</span> Linux Plumbers Conference proceedings. <em>"Memory Management Track."</em> 2019&ndash;2024.</li>
+  <li><span class="ref-num">[8]</span> Jennings / Wool. <em>"zbud / z3fold."</em> LKML 2013&ndash;2016. <a href="http://events17.linuxfoundation.org/sites/events/files/slides/z3fold.pdf">z3fold slides</a></li>
+  <li><span class="ref-num">[9]</span> Pham, Weiner. <em>"zswap memcg-aware shrinker."</em> LKML 2023&ndash;2024.</li>
+  <li><span class="ref-num">[10]</span> Samsung Research. <em>"SWAM: Revisiting Swap and OOMK."</em> MobiCom 2023. <a href="https://arxiv.org/abs/2306.08345">arXiv</a></li>
+  <li><span class="ref-num">[11]</span> Liang et al. <em>"Ariadne: Hotness-Aware Compressed Swap."</em> IEEE HPCA 2025. <a href="https://arxiv.org/abs/2502.12826">arXiv</a></li>
+  <li><span class="ref-num">[12]</span> Son et al. <em>"ASAP: Fast Mobile Application Switch."</em> USENIX ATC 2021. <a href="https://www.usenix.org/system/files/atc21-son.pdf">PDF</a></li>
+  <li><span class="ref-num">[13]</span> <em>"Object-Aware Memory Compression for Smartphones."</em> ACM TACO 2025. <a href="https://dl.acm.org/doi/10.1145/3771285">DOI</a></li>
+  <li><span class="ref-num">[14]</span> Tremaine et al. <em>"IBM Memory Expansion Technology (MXT)."</em> IBM J. Res. Dev. 2001. <a href="https://ieeexplore.ieee.org/document/5389099/">IEEE</a></li>
+  <li><span class="ref-num">[15]</span> <em>"QZRAM: Transparent Kernel Memory Compression with QAT."</em> MDPI Applied Sciences 2023. <a href="https://www.mdpi.com/2076-3417/13/18/10526">DOI</a></li>
+  <li><span class="ref-num">[16]</span> Choukse et al. <em>"Compresso: Pragmatic Main Memory Compression."</em> MICRO 2018. <a href="https://lph.ece.utexas.edu/merez/uploads/MattanErez/micro18_compresso.pdf">PDF</a></li>
+  <li><span class="ref-num">[17]</span> Cervera, Cortes, Becerra. <em>"Improving Application Performance through Swap Compression."</em> USENIX ATC 1999. <a href="https://www.usenix.org/legacy/event/usenix99/full_papers/cervera/cervera.pdf">PDF</a></li>
+  <li><span class="ref-num">[18]</span> Tuduce, Gross. <em>"Adaptive Main Memory Compression."</em> USENIX ATC 2005. <a href="https://www.usenix.org/legacy/event/usenix05/tech/general/full_papers/tuduce/tuduce.pdf">PDF</a></li>
+  <li><span class="ref-num">[19]</span> Gupta. <em>"compcache / ramzswap."</em> 2009. (predecessor to zram)</li>
+  <li><span class="ref-num">[20]</span> Down. <em>"Debunking zswap and zram myths."</em> 2026. <a href="https://chrisdown.name/2026/03/24/zswap-vs-zram-when-to-use-what.html">Blog</a>, <a href="https://lwn.net/Articles/1064478/">LWN</a></li>
+  <li><span class="ref-num">[21]</span> Linux kernel source, v7.1-rc1. <code>drivers/block/zram/</code>, <code>mm/zswap.c</code>, <code>mm/zsmalloc.c</code>.</li>
+  <li><span class="ref-num">[22]</span> Kernel docs: <a href="https://docs.kernel.org/admin-guide/blockdev/zram.html">zram</a>, <a href="https://docs.kernel.org/admin-guide/mm/zswap.html">zswap</a></li>
+  <li><span class="ref-num">[23]</span> LWN: <a href="https://lwn.net/Articles/545244/">In-kernel memory compression</a> (2013), <a href="https://lwn.net/Articles/537422/">zswap design</a> (2013), <a href="https://lwn.net/Articles/1059201/">Virtual swap spaces</a> (2026)</li>
+</ol>
+
+<footer>
+  Generated 2026-04-15 &mdash; Source: Linux 7.1-rc1 (torvalds/linux, <code>e997ac58ad0b</code>)<br>
+  zram: <code>drivers/block/zram/</code> (Sergey Senozhatsky) &bull;
+  zswap: <code>mm/zswap.c</code> (Johannes Weiner, Nhat Pham) &bull;
+  zsmalloc: <code>mm/zsmalloc.c</code>
+</footer>
+
+</body>
+</html>
