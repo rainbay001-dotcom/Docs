@@ -1,0 +1,575 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>SMAP Refinement Plan for ubturbo</title>
+<style>
+:root {
+  --bg: #0d1117;
+  --surface: #161b22;
+  --surface-2: #1c2128;
+  --border: #30363d;
+  --text: #e6edf3;
+  --muted: #8b949e;
+  --blue: #58a6ff;
+  --green: #3fb950;
+  --purple: #bc8cff;
+  --orange: #d29922;
+  --red: #f85149;
+  --cyan: #39d2c0;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+  line-height: 1.65;
+}
+main {
+  max-width: 1180px;
+  margin: 0 auto;
+  padding: 40px 56px 72px;
+}
+h1 {
+  color: var(--green);
+  font-size: 2.2rem;
+  line-height: 1.2;
+  margin: 0 0 8px;
+}
+h2 {
+  color: var(--blue);
+  font-size: 1.45rem;
+  margin: 42px 0 14px;
+  padding-left: 12px;
+  border-left: 3px solid var(--blue);
+}
+h3 {
+  color: var(--purple);
+  font-size: 1.12rem;
+  margin: 28px 0 10px;
+}
+p { margin: 10px 0; }
+ul, ol { margin: 8px 0 14px 24px; padding: 0; }
+li { margin: 5px 0; }
+code {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--cyan);
+  padding: 2px 6px;
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+  font-size: 0.9em;
+}
+pre {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  overflow-x: auto;
+  padding: 16px 18px;
+  margin: 14px 0 18px;
+}
+pre code {
+  background: none;
+  border: 0;
+  color: var(--text);
+  padding: 0;
+}
+table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 18px 0;
+}
+th, td {
+  border: 1px solid var(--border);
+  padding: 10px 12px;
+  text-align: left;
+  vertical-align: top;
+}
+th {
+  background: var(--surface-2);
+  color: var(--blue);
+}
+td { background: rgba(22, 27, 34, 0.72); }
+.subtitle {
+  color: var(--muted);
+  margin: 0 0 4px;
+}
+.hero {
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 24px;
+  margin-bottom: 28px;
+}
+.card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 18px 22px;
+  margin: 18px 0;
+}
+.toc {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 8px 24px;
+}
+.toc a {
+  color: var(--muted);
+  text-decoration: none;
+}
+.toc a:hover { color: var(--blue); }
+.badge {
+  display: inline-block;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 2px 9px;
+  margin-right: 6px;
+  color: var(--muted);
+  font-size: 0.82rem;
+}
+.note {
+  border-left: 3px solid var(--orange);
+  background: rgba(210, 153, 34, 0.08);
+  border-radius: 0 6px 6px 0;
+  padding: 12px 16px;
+  margin: 16px 0;
+}
+.svg-wrap {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  overflow-x: auto;
+  padding: 20px;
+  margin: 18px 0;
+}
+.svg-wrap svg {
+  display: block;
+  min-width: 980px;
+  width: 100%;
+  height: auto;
+}
+.small { color: var(--muted); font-size: 0.92rem; }
+.priority {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 12px;
+}
+.priority div {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: rgba(22, 27, 34, 0.72);
+  padding: 14px 16px;
+}
+@media (max-width: 720px) {
+  main { padding: 28px 20px 48px; }
+  h1 { font-size: 1.75rem; }
+}
+</style>
+</head>
+<body>
+<main>
+  <section class="hero">
+    <h1>SMAP Refinement Plan for ubturbo</h1>
+    <p class="subtitle">Source repo: <code>/Users/ray/Documents/Repo/ubturbo</code></p>
+    <p class="subtitle">Reviewed areas: <code>src/smap</code>, <code>plugins/smap</code>, <code>plugins/rmrs/src/ubturbo_plugin/common/smap</code>, and related tests.</p>
+    <p>
+      This document converts the SMAP refinement notes into an implementation-oriented design page.
+      It summarizes the current architecture, risk areas, and a prioritized plan for improving safety,
+      maintainability, observability, and migration policy quality.
+    </p>
+  </section>
+
+  <section class="card toc" aria-label="Table of contents">
+    <a href="#summary">1. Summary</a>
+    <a href="#architecture">2. Overall Architecture</a>
+    <a href="#findings">3. Main Findings</a>
+    <a href="#algorithm">4. Algorithm Refinements</a>
+    <a href="#testing">5. Testing Recommendations</a>
+    <a href="#order">6. Implementation Order</a>
+    <a href="#first-patch">7. First Patch Candidate</a>
+  </section>
+
+  <section id="summary">
+    <h2>Summary</h2>
+    <p><code>ubturbo</code> contains two SMAP layers:</p>
+    <ul>
+      <li><strong><code>src/smap</code></strong>: the UBTurbo-facing IPC/client/server bridge. It encodes SMAP requests, sends them through UBTurbo IPC, dynamically loads <code>libsmap.so</code>, and dispatches to SMAP APIs.</li>
+      <li><strong><code>plugins/smap</code></strong>: the actual SMAP package. It contains user-space management, kernel/tiering code, migration wrappers, config handling, unit tests, and design documentation.</li>
+    </ul>
+    <p>
+      SMAP is a multi-tier memory manager. It identifies hot and cold pages, migrates hot data toward local
+      or fast memory, migrates cold data toward remote or slower memory, and adjusts per-process memory allocation.
+      The existing design documentation already describes the major policy ideas: hot/cold sorting, adaptive
+      migration parameters, multi-process scheduling, and hardware HIST sliding-window scanning.
+    </p>
+  </section>
+
+  <section id="architecture">
+    <h2>Overall Architecture</h2>
+    <div class="svg-wrap">
+      <svg viewBox="0 0 1180 760" role="img" aria-labelledby="svg-title svg-desc" xmlns="http://www.w3.org/2000/svg">
+        <title id="svg-title">SMAP overall architecture in ubturbo</title>
+        <desc id="svg-desc">Architecture diagram showing applications, UBTurbo client, IPC codec, server dispatcher, dynamically loaded libsmap, user-space management, kernel tiering modules, and memory tiers.</desc>
+        <defs>
+          <marker id="arrow" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto" markerUnits="strokeWidth">
+            <path d="M0,0 L0,6 L9,3 z" fill="#58a6ff"/>
+          </marker>
+          <marker id="arrow-green" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto" markerUnits="strokeWidth">
+            <path d="M0,0 L0,6 L9,3 z" fill="#3fb950"/>
+          </marker>
+          <style>
+            .box { fill: #161b22; stroke: #30363d; stroke-width: 2; rx: 8; }
+            .box2 { fill: #1c2128; stroke: #30363d; stroke-width: 2; rx: 8; }
+            .blue { stroke: #58a6ff; }
+            .green { stroke: #3fb950; }
+            .purple { stroke: #bc8cff; }
+            .orange { stroke: #d29922; }
+            .red { stroke: #f85149; }
+            .text { fill: #e6edf3; font: 15px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+            .muted { fill: #8b949e; font: 12px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+            .label { fill: #58a6ff; font: 700 16px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+            .group { fill: rgba(88,166,255,0.06); stroke: #30363d; stroke-width: 1.5; stroke-dasharray: 7 6; rx: 10; }
+            .flow { fill: none; stroke: #58a6ff; stroke-width: 2.2; marker-end: url(#arrow); }
+            .flow2 { fill: none; stroke: #3fb950; stroke-width: 2.2; marker-end: url(#arrow-green); }
+            .dash { stroke-dasharray: 7 5; }
+          </style>
+        </defs>
+
+        <rect x="20" y="20" width="1140" height="720" class="group"/>
+        <text x="44" y="52" class="label">SMAP in ubturbo: service bridge + memory-tiering engine</text>
+
+        <rect x="60" y="95" width="220" height="86" class="box blue"/>
+        <text x="82" y="128" class="text">Applications / RMRS</text>
+        <text x="82" y="152" class="muted">Higher-level callers</text>
+        <text x="82" y="171" class="muted">Migration decisions or requests</text>
+
+        <rect x="340" y="95" width="240" height="86" class="box blue"/>
+        <text x="362" y="126" class="text">UBTurbo SMAP Client</text>
+        <text x="362" y="150" class="muted">src/smap/client</text>
+        <text x="362" y="169" class="muted">Public C API wrappers</text>
+
+        <rect x="640" y="95" width="240" height="86" class="box blue"/>
+        <text x="662" y="126" class="text">IPC Codec</text>
+        <text x="662" y="150" class="muted">src/smap/smap_handler_msg.cpp</text>
+        <text x="662" y="169" class="muted">Binary request/response encoding</text>
+
+        <rect x="940" y="95" width="180" height="86" class="box blue"/>
+        <text x="962" y="126" class="text">UBTurbo IPC</text>
+        <text x="962" y="150" class="muted">UDS request path</text>
+        <text x="962" y="169" class="muted">Function caller</text>
+
+        <path d="M280 138 H340" class="flow"/>
+        <path d="M580 138 H640" class="flow"/>
+        <path d="M880 138 H940" class="flow"/>
+
+        <rect x="60" y="255" width="280" height="112" class="box2 purple"/>
+        <text x="82" y="288" class="text">UBTurbo SMAP Server</text>
+        <text x="82" y="312" class="muted">src/smap/server/turbo_module_smap.cpp</text>
+        <text x="82" y="331" class="muted">Handler registration</text>
+        <text x="82" y="350" class="muted">Request decode + response encode</text>
+
+        <rect x="410" y="255" width="270" height="112" class="box2 purple"/>
+        <text x="432" y="288" class="text">Dynamic SMAP Loader</text>
+        <text x="432" y="312" class="muted">dlopen / dlsym</text>
+        <text x="432" y="331" class="muted">/usr/lib64/libsmap.so</text>
+        <text x="432" y="350" class="muted">Function pointer dispatch</text>
+
+        <rect x="760" y="255" width="330" height="112" class="box2 green"/>
+        <text x="782" y="288" class="text">libsmap.so User-Space Engine</text>
+        <text x="782" y="312" class="muted">plugins/smap/src/user</text>
+        <text x="782" y="331" class="muted">Process manager, NUMA accounting</text>
+        <text x="782" y="350" class="muted">Policy, config, tracking control</text>
+
+        <path d="M1030 181 V217 C1030 236 1012 246 990 246 H200 C170 246 150 253 150 255" class="flow dash"/>
+        <path d="M340 311 H410" class="flow"/>
+        <path d="M680 311 H760" class="flow2"/>
+
+        <rect x="60" y="445" width="240" height="106" class="box orange"/>
+        <text x="82" y="478" class="text">Config + State</text>
+        <text x="82" y="502" class="muted">/dev/shm/smap_config</text>
+        <text x="82" y="521" class="muted">/dev/shm/ubturbo_page_type.dat</text>
+        <text x="82" y="540" class="muted">Run mode, process, NUMA data</text>
+
+        <rect x="370" y="445" width="270" height="106" class="box green"/>
+        <text x="392" y="478" class="text">Hot/Cold Detection</text>
+        <text x="392" y="502" class="muted">Software AF-bit scanning</text>
+        <text x="392" y="521" class="muted">Hardware HIST counters</text>
+        <text x="392" y="540" class="muted">Sliding-window sampling</text>
+
+        <rect x="710" y="445" width="300" height="106" class="box green"/>
+        <text x="732" y="478" class="text">Migration Policy</text>
+        <text x="732" y="502" class="muted">Hot/cold sort</text>
+        <text x="732" y="521" class="muted">Adaptive periods</text>
+        <text x="732" y="540" class="muted">Multi-process allocation</text>
+
+        <path d="M860 367 V445" class="flow2"/>
+        <path d="M760 498 H640" class="flow2"/>
+        <path d="M370 498 H300" class="flow2"/>
+
+        <rect x="120" y="625" width="250" height="74" class="box red"/>
+        <text x="142" y="655" class="text">Local / Fast Memory</text>
+        <text x="142" y="679" class="muted">Target for hot pages</text>
+
+        <rect x="465" y="625" width="250" height="74" class="box red"/>
+        <text x="487" y="655" class="text">Remote / Slow Memory</text>
+        <text x="487" y="679" class="muted">Target for cold pages</text>
+
+        <rect x="810" y="625" width="250" height="74" class="box red"/>
+        <text x="832" y="655" class="text">Kernel Tiering Modules</text>
+        <text x="832" y="679" class="muted">plugins/smap/src/tiering + drivers</text>
+
+        <path d="M505 551 V590 C505 607 480 625 370 662" class="flow2"/>
+        <path d="M860 551 V625" class="flow2"/>
+        <path d="M810 662 H715" class="flow"/>
+        <path d="M465 662 H370" class="flow"/>
+      </svg>
+    </div>
+    <p>
+      The separation is useful: UBTurbo owns service lifecycle and IPC, while <code>libsmap.so</code>
+      owns the actual memory-tiering logic. The refinement plan keeps that boundary and improves
+      the reliability of the bridge, deployment, policy observability, and migration decisions.
+    </p>
+  </section>
+
+  <section id="findings">
+    <h2>Main Findings</h2>
+
+    <h3>1. IPC codec validation should be hardened</h3>
+    <p>
+      Several decode paths read a <code>len</code> field from the incoming IPC buffer, then use it in
+      payload-size arithmetic before validating that the value is positive and within the expected maximum.
+      Key areas include <code>SmapAddProcessTrackingCodec::DecodeRequest</code>,
+      <code>SmapRemoveProcessTrackingCodec::DecodeRequest</code>, and
+      <code>SmapEnableProcessMigrateCodec::DecodeRequest</code>.
+    </p>
+    <p>Risk:</p>
+    <ul>
+      <li>Malformed IPC can provide negative or oversized lengths.</li>
+      <li>Signed <code>int</code> can be promoted into large <code>size_t</code> arithmetic.</li>
+      <li>Copies into fixed arrays depend on later <code>memcpy_s</code> protection rather than clear precondition checks.</li>
+    </ul>
+    <p>Recommended helper layer:</p>
+    <pre><code class="language-cpp">static bool IsCountInRange(int count, int max)
+{
+    return count &gt; 0 &amp;&amp; count &lt;= max;
+}
+
+static bool CheckedAdd(size_t a, size_t b, size_t *out)
+{
+    if (SIZE_MAX - a &lt; b) {
+        return false;
+    }
+    *out = a + b;
+    return true;
+}
+
+static bool CheckedMul(size_t a, size_t b, size_t *out)
+{
+    if (a != 0 &amp;&amp; b &gt; SIZE_MAX / a) {
+        return false;
+    }
+    *out = a * b;
+    return true;
+}</code></pre>
+    <p>
+      Validate <code>len</code> before computing <code>sizeof(pid_t) * len</code>,
+      <code>sizeof(uint32_t) * len</code>, or similar payload sizes.
+    </p>
+
+    <h3>2. Codec implementation has heavy duplication</h3>
+    <p>
+      The codec file repeats the same patterns: allocate a <code>TurboByteBuffer</code>, copy fields,
+      encode an <code>int</code> response, decode an <code>int</code> response, and reset buffers on error.
+    </p>
+    <p>Recommended helper functions:</p>
+    <pre><code class="language-cpp">int EncodePlain(TurboByteBuffer &amp;buffer, const void *src, size_t size);
+int DecodePlain(const TurboByteBuffer &amp;buffer, void *dst, size_t size);
+int EncodeIntResponse(TurboByteBuffer &amp;buffer, int value);
+int DecodeIntResponse(const TurboByteBuffer &amp;buffer, int &amp;value);</code></pre>
+    <p>For compound requests, use a small append writer:</p>
+    <pre><code class="language-cpp">class BufferWriter {
+public:
+    explicit BufferWriter(TurboByteBuffer &amp;buffer, size_t size);
+    int Append(const void *src, size_t size);
+};</code></pre>
+
+    <h3>3. Client buffers should use RAII</h3>
+    <p>
+      The client code manually deletes <code>send.data</code> and <code>recv.data</code> in every function.
+      That makes future edits prone to leaks or inconsistent cleanup.
+    </p>
+    <pre><code class="language-cpp">class ByteBufferGuard {
+public:
+    TurboByteBuffer buffer{};
+
+    ~ByteBufferGuard()
+    {
+        delete[] buffer.data;
+    }
+
+    TurboByteBuffer *operator-&gt;()
+    {
+        return &amp;buffer;
+    }
+};</code></pre>
+    <p>Then client APIs can use <code>ByteBufferGuard send;</code> and <code>ByteBufferGuard recv;</code>.</p>
+
+    <h3>4. Hardcoded paths should become configuration</h3>
+    <p>Current hardcoded paths include:</p>
+    <ul>
+      <li><code>/dev/shm/ubturbo_page_type.dat</code></li>
+      <li><code>/usr/lib64/libsmap.so</code></li>
+      <li><code>/dev/shm/smap_config</code></li>
+    </ul>
+    <p>Recommended config defaults:</p>
+    <pre><code class="language-ini">smap.libsmap_path = /usr/lib64/libsmap.so
+smap.page_type_path = /dev/shm/ubturbo_page_type.dat
+smap.config_path = /dev/shm/smap_config</code></pre>
+
+    <h3>5. Dynamic symbol loading diagnostics should be explicit</h3>
+    <p>
+      <code>turbo_module_smap.cpp</code> resolves many SMAP symbols with <code>dlsym</code> and checks an aggregate
+      flag. When deployment has an old or mismatched <code>libsmap.so</code>, logs should name the exact
+      missing symbol.
+    </p>
+    <pre><code class="language-cpp">struct SmapSymbol {
+    const char *name;
+    void **target;
+};</code></pre>
+    <p>Load each symbol in a loop and log the exact missing symbol name.</p>
+
+    <h3>6. Build script has a path-check bug</h3>
+    <p>In <code>plugins/smap/build.sh</code>, the bounds-check library test includes a trailing space:</p>
+    <pre><code class="language-bash">if [[ ! -f "$LIB_BOUNDS_CHECK_FILE " ]]</code></pre>
+    <p>It should be:</p>
+    <pre><code class="language-bash">if [[ ! -f "$LIB_BOUNDS_CHECK_FILE" ]]</code></pre>
+    <p>Also quote paths consistently in shell scripts.</p>
+
+    <h3>7. Unit test script mutates source files</h3>
+    <p><code>test/run_ut.sh</code> removes <code>static</code> from production source files before building tests:</p>
+    <pre><code class="language-bash">find ${dir} -type f -name "*.cpp" | xargs -i sed -i "s/\bstatic\b//g" {}</code></pre>
+    <p>Do not rewrite source files in-place. Prefer one of:</p>
+    <ul>
+      <li>compile test-only copies under <code>test/build/generated</code>;</li>
+      <li>expose narrow test hooks behind <code>#ifdef UNIT_TEST</code>;</li>
+      <li>move private helpers into small internal translation units with test-visible headers;</li>
+      <li>use linker wrapping or mocks where feasible.</li>
+    </ul>
+
+    <h3>8. NUMA probing should avoid shell commands</h3>
+    <p><code>plugins/smap/src/user/smap_interface.c</code> uses:</p>
+    <pre><code class="language-c">popen("numastat -cvm", "r")</code></pre>
+    <p>Prefer one of:</p>
+    <ul>
+      <li><code>/sys/devices/system/node/nodeN</code>;</li>
+      <li>libnuma APIs;</li>
+      <li>topology cached during SMAP initialization;</li>
+      <li>kernel-provided node masks already visible to the module.</li>
+    </ul>
+  </section>
+
+  <section id="algorithm">
+    <h2>Algorithm-Level Refinements</h2>
+    <div class="priority">
+      <div>
+        <h3>Migration hysteresis</h3>
+        <p>Use separate promote and demote thresholds so pages do not oscillate between local and remote memory.</p>
+      </div>
+      <div>
+        <h3>Migration ROI scoring</h3>
+        <p>Only migrate when expected latency savings exceed migration cost and budget constraints.</p>
+      </div>
+      <div>
+        <h3>Per-process budgets</h3>
+        <p>Limit pages per cycle, bytes per second, CPU time spent scanning, and concurrent migration tasks.</p>
+      </div>
+      <div>
+        <h3>Anti-thrashing</h3>
+        <p>Track repeat migrations and temporarily pin or de-prioritize unstable pages or regions.</p>
+      </div>
+      <div>
+        <h3>Runtime observability</h3>
+        <p>Expose scan period, migration period, pages scanned, pages migrated, failures, bytes, and hit rates.</p>
+      </div>
+      <div>
+        <h3>Dry-run mode</h3>
+        <p>Compute candidate migrations without executing them, useful for safe policy tuning.</p>
+      </div>
+    </div>
+
+    <h3>ROI sketch</h3>
+    <pre><code class="language-text">benefit = expected_latency_saving * expected_future_accesses
+cost = migration_bytes / migration_bandwidth + CPU_overhead
+score = benefit - cost</code></pre>
+    <p>Only migrate when <code>score &gt; 0</code> and budget allows it.</p>
+  </section>
+
+  <section id="testing">
+    <h2>Testing Recommendations</h2>
+    <table>
+      <thead>
+        <tr>
+          <th>Area</th>
+          <th>Recommended tests</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>IPC and ABI</td>
+          <td>Negative length, zero length, oversized length, truncated payload, null data, payload overflow, invalid response length, public struct size/alignment/offset checks.</td>
+        </tr>
+        <tr>
+          <td>Dynamic loading</td>
+          <td>Missing <code>libsmap.so</code>, missing symbol, old library version, symbol resolved but returns error, unload/reload lifecycle.</td>
+        </tr>
+        <tr>
+          <td>Policy simulation</td>
+          <td>All-local hot, all-remote hot, steady hot set, shifting hot set, noisy access pattern, mixed heavy/light workloads.</td>
+        </tr>
+        <tr>
+          <td>Build hygiene</td>
+          <td>Scripts do not mutate tracked files, generated files stay under build/output directories, shell paths are quoted, practical shellcheck coverage.</td>
+        </tr>
+      </tbody>
+    </table>
+  </section>
+
+  <section id="order">
+    <h2>Suggested Implementation Order</h2>
+    <ol>
+      <li>Fix <code>plugins/smap/build.sh</code> path check and quoting.</li>
+      <li>Stop <code>test/run_ut.sh</code> from mutating source files.</li>
+      <li>Add codec length/range validation helpers.</li>
+      <li>Add RAII buffer guards in <code>src/smap/client</code>.</li>
+      <li>Refactor repeated codec response helpers.</li>
+      <li>Make SMAP paths configurable.</li>
+      <li>Improve <code>dlsym</code> diagnostics with a symbol table.</li>
+      <li>Add malformed IPC and ABI tests.</li>
+      <li>Replace <code>numastat</code> shell probing with sysfs/libnuma/cached topology.</li>
+      <li>Add runtime observability and dry-run mode.</li>
+      <li>Add migration hysteresis, ROI scoring, and anti-thrashing.</li>
+    </ol>
+  </section>
+
+  <section id="first-patch">
+    <h2>First Patch Candidate</h2>
+    <div class="note">
+      <span class="badge">Low risk</span>
+      <span class="badge">Safety</span>
+      <span class="badge">No policy behavior change</span>
+    </div>
+    <p>A practical first patch can include:</p>
+    <ul>
+      <li>fix the <code>"$LIB_BOUNDS_CHECK_FILE "</code> typo;</li>
+      <li>add <code>IsCountInRange</code>;</li>
+      <li>validate IPC lengths before payload-size arithmetic;</li>
+      <li>add negative and oversized length unit tests;</li>
+      <li>add a simple <code>ByteBufferGuard</code> for client cleanup.</li>
+    </ul>
+    <p class="small">
+      This improves safety and maintainability without changing SMAP's migration policy behavior.
+    </p>
+  </section>
+</main>
+</body>
+</html>

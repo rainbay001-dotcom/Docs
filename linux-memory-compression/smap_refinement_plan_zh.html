@@ -1,0 +1,573 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ubturbo SMAP 优化与重构计划</title>
+<style>
+:root {
+  --bg: #0d1117;
+  --surface: #161b22;
+  --surface-2: #1c2128;
+  --border: #30363d;
+  --text: #e6edf3;
+  --muted: #8b949e;
+  --blue: #58a6ff;
+  --green: #3fb950;
+  --purple: #bc8cff;
+  --orange: #d29922;
+  --red: #f85149;
+  --cyan: #39d2c0;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", Helvetica, Arial, sans-serif;
+  line-height: 1.75;
+}
+main {
+  max-width: 1180px;
+  margin: 0 auto;
+  padding: 40px 56px 72px;
+}
+h1 {
+  color: var(--green);
+  font-size: 2.15rem;
+  line-height: 1.25;
+  margin: 0 0 8px;
+}
+h2 {
+  color: var(--blue);
+  font-size: 1.45rem;
+  margin: 42px 0 14px;
+  padding-left: 12px;
+  border-left: 3px solid var(--blue);
+}
+h3 {
+  color: var(--purple);
+  font-size: 1.12rem;
+  margin: 28px 0 10px;
+}
+p { margin: 10px 0; }
+ul, ol { margin: 8px 0 14px 24px; padding: 0; }
+li { margin: 5px 0; }
+code {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--cyan);
+  padding: 2px 6px;
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+  font-size: 0.9em;
+}
+pre {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  overflow-x: auto;
+  padding: 16px 18px;
+  margin: 14px 0 18px;
+}
+pre code {
+  background: none;
+  border: 0;
+  color: var(--text);
+  padding: 0;
+}
+table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 18px 0;
+}
+th, td {
+  border: 1px solid var(--border);
+  padding: 10px 12px;
+  text-align: left;
+  vertical-align: top;
+}
+th {
+  background: var(--surface-2);
+  color: var(--blue);
+}
+td { background: rgba(22, 27, 34, 0.72); }
+.subtitle {
+  color: var(--muted);
+  margin: 0 0 4px;
+}
+.hero {
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 24px;
+  margin-bottom: 28px;
+}
+.card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 18px 22px;
+  margin: 18px 0;
+}
+.toc {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 8px 24px;
+}
+.toc a {
+  color: var(--muted);
+  text-decoration: none;
+}
+.toc a:hover { color: var(--blue); }
+.badge {
+  display: inline-block;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 2px 9px;
+  margin-right: 6px;
+  color: var(--muted);
+  font-size: 0.82rem;
+}
+.note {
+  border-left: 3px solid var(--orange);
+  background: rgba(210, 153, 34, 0.08);
+  border-radius: 0 6px 6px 0;
+  padding: 12px 16px;
+  margin: 16px 0;
+}
+.svg-wrap {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  overflow-x: auto;
+  padding: 20px;
+  margin: 18px 0;
+}
+.svg-wrap svg {
+  display: block;
+  min-width: 980px;
+  width: 100%;
+  height: auto;
+}
+.small { color: var(--muted); font-size: 0.92rem; }
+.priority {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 12px;
+}
+.priority div {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: rgba(22, 27, 34, 0.72);
+  padding: 14px 16px;
+}
+@media (max-width: 720px) {
+  main { padding: 28px 20px 48px; }
+  h1 { font-size: 1.72rem; }
+}
+</style>
+</head>
+<body>
+<main>
+  <section class="hero">
+    <h1>ubturbo SMAP 优化与重构计划</h1>
+    <p class="subtitle">源码仓库：<code>/Users/ray/Documents/Repo/ubturbo</code></p>
+    <p class="subtitle">审阅范围：<code>src/smap</code>、<code>plugins/smap</code>、<code>plugins/rmrs/src/ubturbo_plugin/common/smap</code> 以及相关测试。</p>
+    <p>
+      本文将 SMAP 审阅结果整理为面向实现的优化计划，重点覆盖当前架构、主要风险点、
+      安全加固、可维护性、可观测性以及迁移策略优化。
+    </p>
+  </section>
+
+  <section class="card toc" aria-label="目录">
+    <a href="#summary">1. 总览</a>
+    <a href="#architecture">2. 整体架构</a>
+    <a href="#findings">3. 主要发现</a>
+    <a href="#algorithm">4. 算法层优化</a>
+    <a href="#testing">5. 测试建议</a>
+    <a href="#order">6. 实施顺序</a>
+    <a href="#first-patch">7. 首个补丁建议</a>
+  </section>
+
+  <section id="summary">
+    <h2>总览</h2>
+    <p><code>ubturbo</code> 中有两层 SMAP 相关代码：</p>
+    <ul>
+      <li><strong><code>src/smap</code></strong>：面向 UBTurbo 的 IPC 客户端与服务端桥接层。它负责编码 SMAP 请求、通过 UBTurbo IPC 发送请求、动态加载 <code>libsmap.so</code>，并分发到 SMAP API。</li>
+      <li><strong><code>plugins/smap</code></strong>：真正的 SMAP 实现包，包含用户态管理、内核 tiering 代码、迁移 wrapper、配置管理、单元测试和设计文档。</li>
+    </ul>
+    <p>
+      SMAP 是一个多级内存管理组件。它识别冷热页，将热数据迁移到本地或快速内存，
+      将冷数据迁移到远端或慢速内存，并调整进程级内存分配。现有设计文档已经覆盖了
+      冷热排序、自适应迁移参数、多进程调度、硬件 HIST 滑窗扫描等核心策略。
+    </p>
+  </section>
+
+  <section id="architecture">
+    <h2>整体架构</h2>
+    <div class="svg-wrap">
+      <svg viewBox="0 0 1180 760" role="img" aria-labelledby="svg-title svg-desc" xmlns="http://www.w3.org/2000/svg">
+        <title id="svg-title">ubturbo 中 SMAP 的整体架构</title>
+        <desc id="svg-desc">架构图展示应用、UBTurbo 客户端、IPC 编解码、服务端分发、动态加载的 libsmap、用户态管理、内核 tiering 模块和内存层级。</desc>
+        <defs>
+          <marker id="arrow" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto" markerUnits="strokeWidth">
+            <path d="M0,0 L0,6 L9,3 z" fill="#58a6ff"/>
+          </marker>
+          <marker id="arrow-green" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto" markerUnits="strokeWidth">
+            <path d="M0,0 L0,6 L9,3 z" fill="#3fb950"/>
+          </marker>
+          <style>
+            .box { fill: #161b22; stroke: #30363d; stroke-width: 2; rx: 8; }
+            .box2 { fill: #1c2128; stroke: #30363d; stroke-width: 2; rx: 8; }
+            .blue { stroke: #58a6ff; }
+            .green { stroke: #3fb950; }
+            .purple { stroke: #bc8cff; }
+            .orange { stroke: #d29922; }
+            .red { stroke: #f85149; }
+            .text { fill: #e6edf3; font: 15px -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", sans-serif; }
+            .muted { fill: #8b949e; font: 12px -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", sans-serif; }
+            .label { fill: #58a6ff; font: 700 16px -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", sans-serif; }
+            .group { fill: rgba(88,166,255,0.06); stroke: #30363d; stroke-width: 1.5; stroke-dasharray: 7 6; rx: 10; }
+            .flow { fill: none; stroke: #58a6ff; stroke-width: 2.2; marker-end: url(#arrow); }
+            .flow2 { fill: none; stroke: #3fb950; stroke-width: 2.2; marker-end: url(#arrow-green); }
+            .dash { stroke-dasharray: 7 5; }
+          </style>
+        </defs>
+
+        <rect x="20" y="20" width="1140" height="720" class="group"/>
+        <text x="44" y="52" class="label">ubturbo 中的 SMAP：服务桥接层 + 内存分级引擎</text>
+
+        <rect x="60" y="95" width="220" height="86" class="box blue"/>
+        <text x="82" y="128" class="text">应用 / RMRS</text>
+        <text x="82" y="152" class="muted">上层调用方</text>
+        <text x="82" y="171" class="muted">迁移决策或迁移请求</text>
+
+        <rect x="340" y="95" width="240" height="86" class="box blue"/>
+        <text x="362" y="126" class="text">UBTurbo SMAP 客户端</text>
+        <text x="362" y="150" class="muted">src/smap/client</text>
+        <text x="362" y="169" class="muted">公共 C API 封装</text>
+
+        <rect x="640" y="95" width="240" height="86" class="box blue"/>
+        <text x="662" y="126" class="text">IPC 编解码</text>
+        <text x="662" y="150" class="muted">src/smap/smap_handler_msg.cpp</text>
+        <text x="662" y="169" class="muted">二进制请求 / 响应编码</text>
+
+        <rect x="940" y="95" width="180" height="86" class="box blue"/>
+        <text x="962" y="126" class="text">UBTurbo IPC</text>
+        <text x="962" y="150" class="muted">UDS 请求路径</text>
+        <text x="962" y="169" class="muted">Function caller</text>
+
+        <path d="M280 138 H340" class="flow"/>
+        <path d="M580 138 H640" class="flow"/>
+        <path d="M880 138 H940" class="flow"/>
+
+        <rect x="60" y="255" width="280" height="112" class="box2 purple"/>
+        <text x="82" y="288" class="text">UBTurbo SMAP 服务端</text>
+        <text x="82" y="312" class="muted">src/smap/server/turbo_module_smap.cpp</text>
+        <text x="82" y="331" class="muted">Handler 注册</text>
+        <text x="82" y="350" class="muted">请求解码 + 响应编码</text>
+
+        <rect x="410" y="255" width="270" height="112" class="box2 purple"/>
+        <text x="432" y="288" class="text">动态 SMAP 加载器</text>
+        <text x="432" y="312" class="muted">dlopen / dlsym</text>
+        <text x="432" y="331" class="muted">/usr/lib64/libsmap.so</text>
+        <text x="432" y="350" class="muted">函数指针分发</text>
+
+        <rect x="760" y="255" width="330" height="112" class="box2 green"/>
+        <text x="782" y="288" class="text">libsmap.so 用户态引擎</text>
+        <text x="782" y="312" class="muted">plugins/smap/src/user</text>
+        <text x="782" y="331" class="muted">进程管理、NUMA 账本</text>
+        <text x="782" y="350" class="muted">策略、配置、tracking 控制</text>
+
+        <path d="M1030 181 V217 C1030 236 1012 246 990 246 H200 C170 246 150 253 150 255" class="flow dash"/>
+        <path d="M340 311 H410" class="flow"/>
+        <path d="M680 311 H760" class="flow2"/>
+
+        <rect x="60" y="445" width="240" height="106" class="box orange"/>
+        <text x="82" y="478" class="text">配置与状态</text>
+        <text x="82" y="502" class="muted">/dev/shm/smap_config</text>
+        <text x="82" y="521" class="muted">/dev/shm/ubturbo_page_type.dat</text>
+        <text x="82" y="540" class="muted">运行模式、进程、NUMA 数据</text>
+
+        <rect x="370" y="445" width="270" height="106" class="box green"/>
+        <text x="392" y="478" class="text">冷热识别</text>
+        <text x="392" y="502" class="muted">软件 AF-bit 扫描</text>
+        <text x="392" y="521" class="muted">硬件 HIST 计数器</text>
+        <text x="392" y="540" class="muted">滑窗采样</text>
+
+        <rect x="710" y="445" width="300" height="106" class="box green"/>
+        <text x="732" y="478" class="text">迁移策略</text>
+        <text x="732" y="502" class="muted">冷热排序</text>
+        <text x="732" y="521" class="muted">自适应周期</text>
+        <text x="732" y="540" class="muted">多进程资源分配</text>
+
+        <path d="M860 367 V445" class="flow2"/>
+        <path d="M760 498 H640" class="flow2"/>
+        <path d="M370 498 H300" class="flow2"/>
+
+        <rect x="120" y="625" width="250" height="74" class="box red"/>
+        <text x="142" y="655" class="text">本地 / 快速内存</text>
+        <text x="142" y="679" class="muted">热页目标位置</text>
+
+        <rect x="465" y="625" width="250" height="74" class="box red"/>
+        <text x="487" y="655" class="text">远端 / 慢速内存</text>
+        <text x="487" y="679" class="muted">冷页目标位置</text>
+
+        <rect x="810" y="625" width="250" height="74" class="box red"/>
+        <text x="832" y="655" class="text">内核 Tiering 模块</text>
+        <text x="832" y="679" class="muted">plugins/smap/src/tiering + drivers</text>
+
+        <path d="M505 551 V590 C505 607 480 625 370 662" class="flow2"/>
+        <path d="M860 551 V625" class="flow2"/>
+        <path d="M810 662 H715" class="flow"/>
+        <path d="M465 662 H370" class="flow"/>
+      </svg>
+    </div>
+    <p>
+      这个分层边界是合理的：UBTurbo 负责服务生命周期和 IPC，<code>libsmap.so</code>
+      负责实际的内存分级逻辑。优化计划会保留这个边界，重点提升桥接层可靠性、
+      部署可配置性、策略可观测性和迁移决策质量。
+    </p>
+  </section>
+
+  <section id="findings">
+    <h2>主要发现</h2>
+
+    <h3>1. IPC 编解码需要加强输入校验</h3>
+    <p>
+      多个 decode 路径会先从 IPC buffer 中读取 <code>len</code> 字段，然后在确认
+      <code>len</code> 为正且不超过上限之前，就参与 payload 大小计算。重点区域包括
+      <code>SmapAddProcessTrackingCodec::DecodeRequest</code>、
+      <code>SmapRemoveProcessTrackingCodec::DecodeRequest</code> 和
+      <code>SmapEnableProcessMigrateCodec::DecodeRequest</code>。
+    </p>
+    <p>风险：</p>
+    <ul>
+      <li>异常 IPC 消息可以传入负数或超大长度。</li>
+      <li>有符号 <code>int</code> 在和 <code>size_t</code> 混合计算时可能被提升为很大的无符号值。</li>
+      <li>对固定数组的拷贝过度依赖后续 <code>memcpy_s</code> 兜底，而不是在前置条件阶段明确拒绝非法输入。</li>
+    </ul>
+    <p>建议增加公共校验工具：</p>
+    <pre><code class="language-cpp">static bool IsCountInRange(int count, int max)
+{
+    return count &gt; 0 &amp;&amp; count &lt;= max;
+}
+
+static bool CheckedAdd(size_t a, size_t b, size_t *out)
+{
+    if (SIZE_MAX - a &lt; b) {
+        return false;
+    }
+    *out = a + b;
+    return true;
+}
+
+static bool CheckedMul(size_t a, size_t b, size_t *out)
+{
+    if (a != 0 &amp;&amp; b &gt; SIZE_MAX / a) {
+        return false;
+    }
+    *out = a * b;
+    return true;
+}</code></pre>
+    <p>
+      在计算 <code>sizeof(pid_t) * len</code>、<code>sizeof(uint32_t) * len</code>
+      等 payload 大小之前，先校验 <code>len</code>。
+    </p>
+
+    <h3>2. Codec 实现重复较多</h3>
+    <p>
+      codec 文件反复出现相同模式：分配 <code>TurboByteBuffer</code>、拷贝字段、
+      编码 <code>int</code> 响应、解码 <code>int</code> 响应、错误时重置 buffer。
+    </p>
+    <p>建议抽出公共函数：</p>
+    <pre><code class="language-cpp">int EncodePlain(TurboByteBuffer &amp;buffer, const void *src, size_t size);
+int DecodePlain(const TurboByteBuffer &amp;buffer, void *dst, size_t size);
+int EncodeIntResponse(TurboByteBuffer &amp;buffer, int value);
+int DecodeIntResponse(const TurboByteBuffer &amp;buffer, int &amp;value);</code></pre>
+    <p>对于复合请求，可以使用小型 append writer：</p>
+    <pre><code class="language-cpp">class BufferWriter {
+public:
+    explicit BufferWriter(TurboByteBuffer &amp;buffer, size_t size);
+    int Append(const void *src, size_t size);
+};</code></pre>
+
+    <h3>3. 客户端 buffer 应使用 RAII</h3>
+    <p>
+      客户端代码在每个函数中手动 <code>delete[] send.data</code> 和
+      <code>delete[] recv.data</code>。随着 API 增长，这种写法容易在新增早退路径时遗漏释放。
+    </p>
+    <pre><code class="language-cpp">class ByteBufferGuard {
+public:
+    TurboByteBuffer buffer{};
+
+    ~ByteBufferGuard()
+    {
+        delete[] buffer.data;
+    }
+
+    TurboByteBuffer *operator-&gt;()
+    {
+        return &amp;buffer;
+    }
+};</code></pre>
+    <p>之后客户端 API 可以使用 <code>ByteBufferGuard send;</code> 和 <code>ByteBufferGuard recv;</code>。</p>
+
+    <h3>4. 硬编码路径应改为配置项</h3>
+    <p>当前硬编码路径包括：</p>
+    <ul>
+      <li><code>/dev/shm/ubturbo_page_type.dat</code></li>
+      <li><code>/usr/lib64/libsmap.so</code></li>
+      <li><code>/dev/shm/smap_config</code></li>
+    </ul>
+    <p>建议在配置中提供默认值：</p>
+    <pre><code class="language-ini">smap.libsmap_path = /usr/lib64/libsmap.so
+smap.page_type_path = /dev/shm/ubturbo_page_type.dat
+smap.config_path = /dev/shm/smap_config</code></pre>
+
+    <h3>5. 动态符号加载日志应更明确</h3>
+    <p>
+      <code>turbo_module_smap.cpp</code> 使用 <code>dlsym</code> 解析很多 SMAP 符号，
+      但主要做聚合失败判断。当部署了旧版本或不匹配的 <code>libsmap.so</code> 时，
+      日志应明确指出缺失的符号名。
+    </p>
+    <pre><code class="language-cpp">struct SmapSymbol {
+    const char *name;
+    void **target;
+};</code></pre>
+    <p>使用表驱动循环加载，并对每个缺失符号单独打日志。</p>
+
+    <h3>6. 构建脚本存在路径判断问题</h3>
+    <p><code>plugins/smap/build.sh</code> 中，boundscheck 库判断包含了多余空格：</p>
+    <pre><code class="language-bash">if [[ ! -f "$LIB_BOUNDS_CHECK_FILE " ]]</code></pre>
+    <p>应修改为：</p>
+    <pre><code class="language-bash">if [[ ! -f "$LIB_BOUNDS_CHECK_FILE" ]]</code></pre>
+    <p>同时建议统一为 shell 脚本中的路径变量加双引号。</p>
+
+    <h3>7. 单元测试脚本不应修改源码</h3>
+    <p><code>test/run_ut.sh</code> 在构建测试前会移除生产源码中的 <code>static</code>：</p>
+    <pre><code class="language-bash">find ${dir} -type f -name "*.cpp" | xargs -i sed -i "s/\bstatic\b//g" {}</code></pre>
+    <p>不要原地改写源码。更合适的方案包括：</p>
+    <ul>
+      <li>在 <code>test/build/generated</code> 下编译测试专用源码副本；</li>
+      <li>通过 <code>#ifdef UNIT_TEST</code> 暴露少量测试 hook；</li>
+      <li>将私有 helper 拆到 internal translation unit，并提供测试可见头文件；</li>
+      <li>在可行处使用 linker wrapping 或 mock。</li>
+    </ul>
+
+    <h3>8. NUMA 探测应避免 shell 命令</h3>
+    <p><code>plugins/smap/src/user/smap_interface.c</code> 使用：</p>
+    <pre><code class="language-c">popen("numastat -cvm", "r")</code></pre>
+    <p>建议替换为：</p>
+    <ul>
+      <li><code>/sys/devices/system/node/nodeN</code>；</li>
+      <li>libnuma API；</li>
+      <li>SMAP 初始化阶段缓存的拓扑信息；</li>
+      <li>内核模块已经可见的 node mask。</li>
+    </ul>
+  </section>
+
+  <section id="algorithm">
+    <h2>算法层优化</h2>
+    <div class="priority">
+      <div>
+        <h3>迁移滞回</h3>
+        <p>使用不同的 promote/demote 阈值，避免页面在本地和远端内存之间来回震荡。</p>
+      </div>
+      <div>
+        <h3>迁移 ROI 评分</h3>
+        <p>只有当预期时延收益大于迁移成本，并且预算允许时才执行迁移。</p>
+      </div>
+      <div>
+        <h3>进程级预算</h3>
+        <p>限制每周期页数、每秒迁移字节、扫描 CPU 时间和并发迁移任务数。</p>
+      </div>
+      <div>
+        <h3>反抖动机制</h3>
+        <p>记录重复迁移，对不稳定页面或区域进行临时 pin、降权或提高滞回阈值。</p>
+      </div>
+      <div>
+        <h3>运行时可观测性</h3>
+        <p>暴露扫描周期、迁移周期、扫描页数、迁移页数、失败次数、迁移字节数和命中率。</p>
+      </div>
+      <div>
+        <h3>Dry-run 模式</h3>
+        <p>只计算候选迁移集合，不真正执行迁移，用于安全调参和策略验证。</p>
+      </div>
+    </div>
+
+    <h3>ROI 计算草图</h3>
+    <pre><code class="language-text">benefit = expected_latency_saving * expected_future_accesses
+cost = migration_bytes / migration_bandwidth + CPU_overhead
+score = benefit - cost</code></pre>
+    <p>仅当 <code>score &gt; 0</code> 且预算允许时才执行迁移。</p>
+  </section>
+
+  <section id="testing">
+    <h2>测试建议</h2>
+    <table>
+      <thead>
+        <tr>
+          <th>测试领域</th>
+          <th>建议覆盖内容</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>IPC 与 ABI</td>
+          <td>负数长度、零长度、超大长度、截断 payload、空 data、payload 溢出、非法 response 长度，以及公共 struct 的 size/alignment/offset 检查。</td>
+        </tr>
+        <tr>
+          <td>动态加载</td>
+          <td>缺失 <code>libsmap.so</code>、缺失单个符号、旧版本动态库、符号解析成功但函数返回错误、卸载/重载生命周期。</td>
+        </tr>
+        <tr>
+          <td>策略仿真</td>
+          <td>本地全热、远端全热、稳定热集、变化热集、噪声访问模式、重载与轻载混部。</td>
+        </tr>
+        <tr>
+          <td>构建卫生</td>
+          <td>脚本不修改 tracked 文件、生成物只进入 build/output 目录、shell 路径加引号、尽量通过 shellcheck。</td>
+        </tr>
+      </tbody>
+    </table>
+  </section>
+
+  <section id="order">
+    <h2>建议实施顺序</h2>
+    <ol>
+      <li>修复 <code>plugins/smap/build.sh</code> 路径判断和 shell 引号问题。</li>
+      <li>停止 <code>test/run_ut.sh</code> 对源码做原地修改。</li>
+      <li>增加 codec 长度和范围校验 helper。</li>
+      <li>在 <code>src/smap/client</code> 增加 RAII buffer guard。</li>
+      <li>重构重复的 codec response helper。</li>
+      <li>将 SMAP 路径改为配置项。</li>
+      <li>使用符号表改善 <code>dlsym</code> 诊断日志。</li>
+      <li>增加异常 IPC 和 ABI 测试。</li>
+      <li>用 sysfs/libnuma/缓存拓扑替代 <code>numastat</code> shell 探测。</li>
+      <li>增加运行时可观测性和 dry-run 模式。</li>
+      <li>增加迁移滞回、ROI 评分和反抖动机制。</li>
+    </ol>
+  </section>
+
+  <section id="first-patch">
+    <h2>首个补丁建议</h2>
+    <div class="note">
+      <span class="badge">低风险</span>
+      <span class="badge">安全加固</span>
+      <span class="badge">不改变策略行为</span>
+    </div>
+    <p>一个合适的首个补丁可以包含：</p>
+    <ul>
+      <li>修复 <code>"$LIB_BOUNDS_CHECK_FILE "</code> 这个 typo；</li>
+      <li>增加 <code>IsCountInRange</code>；</li>
+      <li>在 payload-size 计算前校验 IPC 长度；</li>
+      <li>增加负数长度和超大长度的单元测试；</li>
+      <li>为客户端 cleanup 增加简单的 <code>ByteBufferGuard</code>。</li>
+    </ul>
+    <p class="small">
+      这组改动可以提升安全性和可维护性，同时不改变 SMAP 的迁移策略行为。
+    </p>
+  </section>
+</main>
+</body>
+</html>
