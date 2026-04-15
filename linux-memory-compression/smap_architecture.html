@@ -1,0 +1,1375 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>SMAP Architecture Deep Dive: Smart Memory Adaptive Platform</title>
+<style>
+:root {
+    --bg: #0d1117;
+    --card: #161b22;
+    --border: #30363d;
+    --text: #c9d1d9;
+    --heading: #e6edf3;
+    --accent: #58a6ff;
+    --accent2: #7ee787;
+    --accent3: #d2a8ff;
+    --accent4: #ff7b72;
+    --accent5: #ffa657;
+    --code-bg: #0d1117;
+    --link: #58a6ff;
+}
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    line-height: 1.7;
+    padding: 2rem;
+    max-width: 1200px;
+    margin: 0 auto;
+}
+h1 { color: var(--heading); font-size: 2.2rem; margin-bottom: 0.5rem; border-bottom: 1px solid var(--border); padding-bottom: 1rem; }
+h2 { color: var(--accent); font-size: 1.6rem; margin-top: 2.5rem; margin-bottom: 1rem; border-bottom: 1px solid var(--border); padding-bottom: 0.5rem; }
+h3 { color: var(--accent2); font-size: 1.25rem; margin-top: 1.8rem; margin-bottom: 0.8rem; }
+h4 { color: var(--accent3); font-size: 1.05rem; margin-top: 1.2rem; margin-bottom: 0.5rem; }
+p { margin-bottom: 1rem; }
+a { color: var(--link); text-decoration: none; }
+a:hover { text-decoration: underline; }
+code {
+    font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
+    background: var(--code-bg);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 0.15em 0.4em;
+    font-size: 0.88em;
+    color: var(--accent5);
+}
+pre {
+    background: var(--code-bg);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 1.2rem;
+    overflow-x: auto;
+    margin-bottom: 1.2rem;
+    font-size: 0.85rem;
+    line-height: 1.5;
+}
+pre code { border: none; padding: 0; background: none; color: var(--text); }
+.card {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 1.5rem;
+    margin-bottom: 1.5rem;
+}
+.svg-container {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 1rem;
+    margin: 1.5rem 0;
+    overflow-x: auto;
+    text-align: center;
+}
+.svg-container svg { max-width: 100%; height: auto; }
+table { width: 100%; border-collapse: collapse; margin-bottom: 1.5rem; }
+th, td { padding: 0.6rem 0.8rem; border: 1px solid var(--border); text-align: left; font-size: 0.9rem; }
+th { background: #1c2128; color: var(--accent); font-weight: 600; }
+td { background: var(--card); }
+ul, ol { margin: 0.5rem 0 1rem 1.5rem; }
+li { margin-bottom: 0.3rem; }
+.tag {
+    display: inline-block;
+    padding: 0.1em 0.5em;
+    border-radius: 12px;
+    font-size: 0.78em;
+    font-weight: 600;
+}
+.tag-kernel { background: #3fb95020; color: #3fb950; border: 1px solid #3fb95040; }
+.tag-user { background: #58a6ff20; color: #58a6ff; border: 1px solid #58a6ff40; }
+.tag-ipc { background: #d2a8ff20; color: #d2a8ff; border: 1px solid #d2a8ff40; }
+.tag-driver { background: #ffa65720; color: #ffa657; border: 1px solid #ffa65740; }
+.subtitle { color: #8b949e; font-size: 1.1rem; margin-bottom: 2rem; }
+.toc { background: var(--card); border: 1px solid var(--border); border-radius: 8px; padding: 1.5rem; margin: 1.5rem 0; }
+.toc h3 { margin-top: 0; color: var(--heading); }
+.toc ol { margin-bottom: 0; }
+.toc li { margin-bottom: 0.4rem; }
+.toc a { color: var(--accent); }
+.file-ref { color: #8b949e; font-size: 0.85em; font-style: italic; }
+.highlight { color: var(--accent5); font-weight: 600; }
+</style>
+</head>
+<body>
+
+<h1>SMAP Architecture Deep Dive</h1>
+<p class="subtitle">Smart Memory Adaptive Platform &mdash; Huawei ubturbo Memory Tiering Subsystem</p>
+<p>SMAP is the core memory tiering plugin within Huawei's <strong>ubturbo</strong> framework, managing page migration between local DRAM (L1) and remote CXL/PMEM memory (L2) NUMA nodes. It uses hardware ACTC counters and software AF-bit page table scanning to detect page hotness, applies frequency-based strategies to classify hot/cold pages, and performs multi-threaded kernel-level page migration via <code>migrate_pages()</code>.</p>
+
+<div class="toc">
+<h3>Table of Contents</h3>
+<ol>
+<li><a href="#overview">System Overview &amp; Architecture</a></li>
+<li><a href="#ipc">IPC &amp; SDK Layer</a></li>
+<li><a href="#process-mgmt">Process Management</a></li>
+<li><a href="#access-tracking">Access Tracking &amp; Hotness Detection</a></li>
+<li><a href="#strategy">Strategy Engine</a></li>
+<li><a href="#scene">Scene Classification</a></li>
+<li><a href="#kernel-tiering">Kernel Tiering Engine</a></li>
+<li><a href="#migration-flow">End-to-End Migration Flow</a></li>
+<li><a href="#data-structures">Core Data Structures</a></li>
+<li><a href="#config">Configuration &amp; Persistence</a></li>
+<li><a href="#references">Source File Reference</a></li>
+</ol>
+</div>
+
+<!-- ============================================================ -->
+<h2 id="overview">1. System Overview &amp; Architecture</h2>
+
+<p>SMAP operates across three layers: a <strong>public SDK</strong> (C API with IPC), a <strong>user-space daemon</strong> (strategy + process management), and <strong>kernel modules</strong> (access tracking drivers + tiering migration engine). The ubturbo framework provides IPC transport, lifecycle management, and logging infrastructure.</p>
+
+<div class="svg-container">
+<svg viewBox="0 0 1100 820" xmlns="http://www.w3.org/2000/svg" font-family="system-ui, sans-serif">
+  <defs>
+    <marker id="ah1" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <path d="M0,0 L8,3 L0,6" fill="none" stroke="#58a6ff" stroke-width="1.2"/>
+    </marker>
+    <marker id="ah2" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <path d="M0,0 L8,3 L0,6" fill="none" stroke="#7ee787" stroke-width="1.2"/>
+    </marker>
+    <marker id="ah3" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <path d="M0,0 L8,3 L0,6" fill="none" stroke="#d2a8ff" stroke-width="1.2"/>
+    </marker>
+    <marker id="ah4" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <path d="M0,0 L8,3 L0,6" fill="none" stroke="#ffa657" stroke-width="1.2"/>
+    </marker>
+  </defs>
+
+  <!-- Background layers -->
+  <rect x="30" y="10" width="1040" height="120" rx="8" fill="#58a6ff10" stroke="#58a6ff40" stroke-dasharray="5,3"/>
+  <text x="50" y="35" fill="#58a6ff" font-size="13" font-weight="bold">EXTERNAL / RMRS ORCHESTRATOR</text>
+
+  <rect x="30" y="145" width="1040" height="100" rx="8" fill="#d2a8ff10" stroke="#d2a8ff40" stroke-dasharray="5,3"/>
+  <text x="50" y="170" fill="#d2a8ff" font-size="13" font-weight="bold">IPC LAYER (ubturbo Framework)</text>
+
+  <rect x="30" y="260" width="1040" height="250" rx="8" fill="#7ee78710" stroke="#7ee78740" stroke-dasharray="5,3"/>
+  <text x="50" y="285" fill="#7ee787" font-size="13" font-weight="bold">USER SPACE (libsmap.so)</text>
+
+  <rect x="30" y="525" width="1040" height="280" rx="8" fill="#ffa65710" stroke="#ffa65740" stroke-dasharray="5,3"/>
+  <text x="50" y="550" fill="#ffa657" font-size="13" font-weight="bold">KERNEL SPACE (smap_tiering.ko + smap_access.ko)</text>
+
+  <!-- External layer boxes -->
+  <rect x="80" y="50" width="200" height="60" rx="6" fill="#161b22" stroke="#58a6ff" stroke-width="1.5"/>
+  <text x="180" y="75" fill="#e6edf3" font-size="12" text-anchor="middle" font-weight="bold">RMRS Plugin</text>
+  <text x="180" y="92" fill="#8b949e" font-size="10" text-anchor="middle">Resource Scheduling</text>
+
+  <rect x="340" y="50" width="200" height="60" rx="6" fill="#161b22" stroke="#58a6ff" stroke-width="1.5"/>
+  <text x="440" y="75" fill="#e6edf3" font-size="12" text-anchor="middle" font-weight="bold">Custom Application</text>
+  <text x="440" y="92" fill="#8b949e" font-size="10" text-anchor="middle">SDK Consumer</text>
+
+  <rect x="600" y="50" width="200" height="60" rx="6" fill="#161b22" stroke="#58a6ff" stroke-width="1.5"/>
+  <text x="700" y="75" fill="#e6edf3" font-size="12" text-anchor="middle" font-weight="bold">ubturbo CLI</text>
+  <text x="700" y="92" fill="#8b949e" font-size="10" text-anchor="middle">Manual Control</text>
+
+  <!-- IPC layer boxes -->
+  <rect x="80" y="175" width="280" height="55" rx="6" fill="#161b22" stroke="#d2a8ff" stroke-width="1.5"/>
+  <text x="220" y="200" fill="#e6edf3" font-size="12" text-anchor="middle" font-weight="bold">smap_client.cpp</text>
+  <text x="220" y="217" fill="#8b949e" font-size="10" text-anchor="middle">SDK &rarr; IPC Encode &rarr; UBTurboFunctionCaller()</text>
+
+  <rect x="420" y="175" width="150" height="55" rx="6" fill="#161b22" stroke="#d2a8ff" stroke-width="1.5"/>
+  <text x="495" y="200" fill="#e6edf3" font-size="12" text-anchor="middle" font-weight="bold">19 IPC Services</text>
+  <text x="495" y="217" fill="#8b949e" font-size="10" text-anchor="middle">Codec Encode/Decode</text>
+
+  <rect x="630" y="175" width="280" height="55" rx="6" fill="#161b22" stroke="#d2a8ff" stroke-width="1.5"/>
+  <text x="770" y="200" fill="#e6edf3" font-size="12" text-anchor="middle" font-weight="bold">turbo_module_smap.cpp</text>
+  <text x="770" y="217" fill="#8b949e" font-size="10" text-anchor="middle">Server: dlopen(libsmap.so) &rarr; Handler()</text>
+
+  <!-- User space boxes -->
+  <rect x="60" y="300" width="230" height="80" rx="6" fill="#161b22" stroke="#7ee787" stroke-width="1.5"/>
+  <text x="175" y="322" fill="#e6edf3" font-size="12" text-anchor="middle" font-weight="bold">Process Manager</text>
+  <text x="175" y="340" fill="#8b949e" font-size="10" text-anchor="middle">ProcessAttribute linked list</text>
+  <text x="175" y="355" fill="#8b949e" font-size="10" text-anchor="middle">NUMA topology, DevFds</text>
+  <text x="175" y="370" fill="#8b949e" font-size="10" text-anchor="middle">VM detection (libvirt)</text>
+
+  <rect x="310" y="300" width="220" height="80" rx="6" fill="#161b22" stroke="#7ee787" stroke-width="1.5"/>
+  <text x="420" y="322" fill="#e6edf3" font-size="12" text-anchor="middle" font-weight="bold">Strategy Engine</text>
+  <text x="420" y="340" fill="#8b949e" font-size="10" text-anchor="middle">SeparateStrategy()</text>
+  <text x="420" y="355" fill="#8b949e" font-size="10" text-anchor="middle">Frequency sort + binary search</text>
+  <text x="420" y="370" fill="#8b949e" font-size="10" text-anchor="middle">DEMOTE / PROMOTE / SWAP</text>
+
+  <rect x="550" y="300" width="200" height="80" rx="6" fill="#161b22" stroke="#7ee787" stroke-width="1.5"/>
+  <text x="650" y="322" fill="#e6edf3" font-size="12" text-anchor="middle" font-weight="bold">Scene Classifier</text>
+  <text x="650" y="340" fill="#8b949e" font-size="10" text-anchor="middle">LIGHT_STABLE</text>
+  <text x="650" y="355" fill="#8b949e" font-size="10" text-anchor="middle">HEAVY_STABLE</text>
+  <text x="650" y="370" fill="#8b949e" font-size="10" text-anchor="middle">UNSTABLE</text>
+
+  <rect x="770" y="300" width="230" height="80" rx="6" fill="#161b22" stroke="#7ee787" stroke-width="1.5"/>
+  <text x="885" y="322" fill="#e6edf3" font-size="12" text-anchor="middle" font-weight="bold">Migration Controller</text>
+  <text x="885" y="340" fill="#8b949e" font-size="10" text-anchor="middle">ScanMigrateWork() periodic</text>
+  <text x="885" y="355" fill="#8b949e" font-size="10" text-anchor="middle">BuildMigrationMsg()</text>
+  <text x="885" y="370" fill="#8b949e" font-size="10" text-anchor="middle">DoMigration() &rarr; ioctl()</text>
+
+  <rect x="60" y="410" width="230" height="70" rx="6" fill="#161b22" stroke="#7ee787" stroke-width="1.5"/>
+  <text x="175" y="435" fill="#e6edf3" font-size="12" text-anchor="middle" font-weight="bold">Thread Manager</text>
+  <text x="175" y="453" fill="#8b949e" font-size="10" text-anchor="middle">ThreadCtx + pthread workers</text>
+  <text x="175" y="468" fill="#8b949e" font-size="10" text-anchor="middle">Periodic ScanMigrateWork()</text>
+
+  <rect x="310" y="410" width="220" height="70" rx="6" fill="#161b22" stroke="#7ee787" stroke-width="1.5"/>
+  <text x="420" y="435" fill="#e6edf3" font-size="12" text-anchor="middle" font-weight="bold">OOM Handler</text>
+  <text x="420" y="453" fill="#8b949e" font-size="10" text-anchor="middle">FindPidMigrateSize()</text>
+  <text x="420" y="468" fill="#8b949e" font-size="10" text-anchor="middle">Emergency local &rarr; remote</text>
+
+  <rect x="550" y="410" width="200" height="70" rx="6" fill="#161b22" stroke="#7ee787" stroke-width="1.5"/>
+  <text x="650" y="435" fill="#e6edf3" font-size="12" text-anchor="middle" font-weight="bold">Config Persistence</text>
+  <text x="650" y="453" fill="#8b949e" font-size="10" text-anchor="middle">/dev/shm/smap_config</text>
+  <text x="650" y="468" fill="#8b949e" font-size="10" text-anchor="middle">Binary header + payloads</text>
+
+  <!-- Kernel space boxes -->
+  <rect x="60" y="565" width="300" height="90" rx="6" fill="#161b22" stroke="#ffa657" stroke-width="1.5"/>
+  <text x="210" y="590" fill="#e6edf3" font-size="12" text-anchor="middle" font-weight="bold">Access Tracking Driver (smap_access.ko)</text>
+  <text x="210" y="608" fill="#8b949e" font-size="10" text-anchor="middle">AF-bit PTE scanning (4K &amp; 2M)</text>
+  <text x="210" y="623" fill="#8b949e" font-size="10" text-anchor="middle">ACTC hardware counters (ACPI)</text>
+  <text x="210" y="638" fill="#8b949e" font-size="10" text-anchor="middle">Sliding window freq accumulation</text>
+  <text x="210" y="650" fill="#8b949e" font-size="9" text-anchor="middle">delayed_work periodic scan</text>
+
+  <rect x="390" y="565" width="300" height="90" rx="6" fill="#161b22" stroke="#ffa657" stroke-width="1.5"/>
+  <text x="540" y="590" fill="#e6edf3" font-size="12" text-anchor="middle" font-weight="bold">Tiering Migration Engine (smap_tiering.ko)</text>
+  <text x="540" y="608" fill="#8b949e" font-size="10" text-anchor="middle">char dev /dev/smap_mig_device</text>
+  <text x="540" y="623" fill="#8b949e" font-size="10" text-anchor="middle">Multi-thread migration (up to 32 kthreads)</text>
+  <text x="540" y="638" fill="#8b949e" font-size="10" text-anchor="middle">isolate_folio &rarr; migrate_pages()</text>
+  <text x="540" y="650" fill="#8b949e" font-size="9" text-anchor="middle">Kprobe symbol resolution</text>
+
+  <rect x="720" y="565" width="280" height="90" rx="6" fill="#161b22" stroke="#ffa657" stroke-width="1.5"/>
+  <text x="860" y="590" fill="#e6edf3" font-size="12" text-anchor="middle" font-weight="bold">Support Modules</text>
+  <text x="860" y="608" fill="#8b949e" font-size="10" text-anchor="middle">rmap.c &mdash; Reverse mapping (page&rarr;task)</text>
+  <text x="860" y="623" fill="#8b949e" font-size="10" text-anchor="middle">acpi_mem.c &mdash; SRAT NUMA topology</text>
+  <text x="860" y="638" fill="#8b949e" font-size="10" text-anchor="middle">iomem.c &mdash; Physical memory ranges</text>
+  <text x="860" y="650" fill="#8b949e" font-size="9" text-anchor="middle">coherence_maintain.c / ksm.c</text>
+
+  <!-- Hardware layer -->
+  <rect x="60" y="680" width="940" height="60" rx="6" fill="#161b22" stroke="#ff7b72" stroke-width="1.5"/>
+  <text x="530" y="705" fill="#e6edf3" font-size="13" text-anchor="middle" font-weight="bold">Hardware: CPU Page Tables (AF bit) &nbsp;|&nbsp; ACTC Counters (ACPI SRAT) &nbsp;|&nbsp; NUMA: L1 Local DRAM (0-3) + L2 Remote CXL/PMEM (4-21)</text>
+  <text x="530" y="725" fill="#8b949e" font-size="10" text-anchor="middle">migrate_pages() kernel API &nbsp;|&nbsp; UB Bus / OBMM region management &nbsp;|&nbsp; Up to 4 local + 18 remote NUMA nodes</text>
+
+  <!-- Arrows: External to IPC -->
+  <line x1="180" y1="110" x2="180" y2="175" stroke="#58a6ff" stroke-width="1.5" marker-end="url(#ah1)"/>
+  <line x1="440" y1="110" x2="360" y2="175" stroke="#58a6ff" stroke-width="1.5" marker-end="url(#ah1)"/>
+
+  <!-- IPC flow arrows -->
+  <line x1="360" y1="202" x2="418" y2="202" stroke="#d2a8ff" stroke-width="1.5" marker-end="url(#ah3)"/>
+  <line x1="570" y1="202" x2="628" y2="202" stroke="#d2a8ff" stroke-width="1.5" marker-end="url(#ah3)"/>
+
+  <!-- IPC to User space -->
+  <line x1="770" y1="230" x2="420" y2="298" stroke="#d2a8ff" stroke-width="1.5" marker-end="url(#ah3)" stroke-dasharray="4,3"/>
+  <text x="590" y="258" fill="#d2a8ff" font-size="9">dlopen &rarr; function call</text>
+
+  <!-- User space internal arrows -->
+  <line x1="290" y1="340" x2="308" y2="340" stroke="#7ee787" stroke-width="1.2" marker-end="url(#ah2)"/>
+  <line x1="530" y1="340" x2="548" y2="340" stroke="#7ee787" stroke-width="1.2" marker-end="url(#ah2)"/>
+  <line x1="530" y1="355" x2="768" y2="340" stroke="#7ee787" stroke-width="1.2" marker-end="url(#ah2)"/>
+  <line x1="175" y1="380" x2="175" y2="408" stroke="#7ee787" stroke-width="1.2" marker-end="url(#ah2)"/>
+
+  <!-- User to Kernel arrows -->
+  <line x1="885" y1="380" x2="540" y2="563" stroke="#ffa657" stroke-width="1.8" marker-end="url(#ah4)"/>
+  <text x="735" y="475" fill="#ffa657" font-size="10" transform="rotate(-40,735,475)">ioctl(SMAP_MIG_MIGRATE)</text>
+
+  <line x1="175" y1="480" x2="210" y2="563" stroke="#ffa657" stroke-width="1.2" marker-end="url(#ah4)" stroke-dasharray="4,3"/>
+  <text x="140" y="525" fill="#ffa657" font-size="9">tracking ioctl</text>
+
+  <!-- Kernel to Hardware -->
+  <line x1="210" y1="655" x2="350" y2="680" stroke="#ff7b72" stroke-width="1.2" marker-end="url(#ah4)" stroke-dasharray="4,3"/>
+  <line x1="540" y1="655" x2="540" y2="678" stroke="#ff7b72" stroke-width="1.2" marker-end="url(#ah4)" stroke-dasharray="4,3"/>
+</svg>
+</div>
+
+<p>The system manages up to <strong>4 local NUMA nodes</strong> (L1, IDs 0&ndash;3) and <strong>18 remote NUMA nodes</strong> (L2, IDs 4&ndash;21), supporting up to 300 processes (4K mode) or 100 VMs (2M mode) simultaneously.</p>
+
+<!-- ============================================================ -->
+<h2 id="ipc">2. IPC &amp; SDK Layer</h2>
+
+<p>SMAP exposes a C SDK with 17 public API functions. The SDK communicates with the SMAP daemon via ubturbo's IPC framework. On the server side, <code>TurboModuleSmap</code> loads <code>libsmap.so</code> at startup via <code>dlopen()</code> and registers 19 IPC service handlers.</p>
+
+<div class="svg-container">
+<svg viewBox="0 0 1050 420" xmlns="http://www.w3.org/2000/svg" font-family="system-ui, sans-serif">
+  <defs>
+    <marker id="ipc-a" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <path d="M0,0 L8,3 L0,6" fill="none" stroke="#d2a8ff" stroke-width="1.2"/>
+    </marker>
+  </defs>
+
+  <!-- Client side -->
+  <rect x="30" y="30" width="280" height="360" rx="8" fill="#161b22" stroke="#58a6ff" stroke-width="1.5"/>
+  <text x="170" y="55" fill="#58a6ff" font-size="14" text-anchor="middle" font-weight="bold">SDK Client (smap_client.cpp)</text>
+
+  <rect x="50" y="70" width="240" height="45" rx="4" fill="#0d1117" stroke="#30363d"/>
+  <text x="170" y="88" fill="#e6edf3" font-size="11" text-anchor="middle">ubturbo_smap_migrate_out(msg, pidType)</text>
+  <text x="170" y="105" fill="#8b949e" font-size="9" text-anchor="middle">+ 16 more public API functions</text>
+
+  <rect x="50" y="130" width="240" height="35" rx="4" fill="#0d1117" stroke="#30363d"/>
+  <text x="170" y="153" fill="#ffa657" font-size="11" text-anchor="middle">1. Validate input (NULL, array bounds)</text>
+
+  <rect x="50" y="180" width="240" height="35" rx="4" fill="#0d1117" stroke="#30363d"/>
+  <text x="170" y="203" fill="#ffa657" font-size="11" text-anchor="middle">2. Codec.EncodeRequest(send, ...)</text>
+
+  <rect x="50" y="230" width="240" height="35" rx="4" fill="#0d1117" stroke="#d2a8ff"/>
+  <text x="170" y="253" fill="#d2a8ff" font-size="11" text-anchor="middle">3. UBTurboFunctionCaller(name, &amp;send, &amp;recv)</text>
+
+  <rect x="50" y="280" width="240" height="35" rx="4" fill="#0d1117" stroke="#30363d"/>
+  <text x="170" y="303" fill="#ffa657" font-size="11" text-anchor="middle">4. Codec.DecodeResponse(recv)</text>
+
+  <rect x="50" y="330" width="240" height="35" rx="4" fill="#0d1117" stroke="#30363d"/>
+  <text x="170" y="353" fill="#ffa657" font-size="11" text-anchor="middle">5. Cleanup &amp; return result</text>
+
+  <!-- IPC Transport -->
+  <rect x="350" y="120" width="120" height="200" rx="8" fill="#161b22" stroke="#d2a8ff" stroke-width="1.5"/>
+  <text x="410" y="145" fill="#d2a8ff" font-size="12" text-anchor="middle" font-weight="bold">IPC</text>
+  <text x="410" y="165" fill="#8b949e" font-size="10" text-anchor="middle">TurboByteBuffer</text>
+  <text x="410" y="185" fill="#8b949e" font-size="10" text-anchor="middle">19 Codec</text>
+  <text x="410" y="205" fill="#8b949e" font-size="10" text-anchor="middle">Classes</text>
+  <text x="410" y="235" fill="#8b949e" font-size="9" text-anchor="middle">smap_handler</text>
+  <text x="410" y="250" fill="#8b949e" font-size="9" text-anchor="middle">_msg.h</text>
+  <text x="410" y="280" fill="#d2a8ff" font-size="10" text-anchor="middle">Encode &darr;</text>
+  <text x="410" y="300" fill="#d2a8ff" font-size="10" text-anchor="middle">&uarr; Decode</text>
+
+  <line x1="290" y1="248" x2="348" y2="220" stroke="#d2a8ff" stroke-width="1.5" marker-end="url(#ipc-a)"/>
+  <line x1="470" y1="220" x2="508" y2="248" stroke="#d2a8ff" stroke-width="1.5" marker-end="url(#ipc-a)"/>
+
+  <!-- Server side -->
+  <rect x="510" y="30" width="510" height="360" rx="8" fill="#161b22" stroke="#7ee787" stroke-width="1.5"/>
+  <text x="765" y="55" fill="#7ee787" font-size="14" text-anchor="middle" font-weight="bold">IPC Server (turbo_module_smap.cpp)</text>
+
+  <rect x="530" y="70" width="230" height="55" rx="4" fill="#0d1117" stroke="#30363d"/>
+  <text x="645" y="90" fill="#e6edf3" font-size="11" text-anchor="middle" font-weight="bold">TurboModuleSmap::Start()</text>
+  <text x="645" y="108" fill="#8b949e" font-size="9" text-anchor="middle">OpenSmapHandler() + RegSmapHandler()</text>
+
+  <rect x="530" y="140" width="230" height="55" rx="4" fill="#0d1117" stroke="#ffa657"/>
+  <text x="645" y="160" fill="#e6edf3" font-size="11" text-anchor="middle" font-weight="bold">OpenSmapHandler()</text>
+  <text x="645" y="178" fill="#ffa657" font-size="9" text-anchor="middle">dlopen("/usr/lib64/libsmap.so")</text>
+
+  <rect x="530" y="210" width="230" height="55" rx="4" fill="#0d1117" stroke="#30363d"/>
+  <text x="645" y="230" fill="#e6edf3" font-size="11" text-anchor="middle">dlsym() &rarr; 17 function pointers</text>
+  <text x="645" y="248" fill="#8b949e" font-size="9" text-anchor="middle">g_smapMigrateOut, g_smapInit, ...</text>
+
+  <rect x="530" y="280" width="230" height="45" rx="4" fill="#0d1117" stroke="#7ee787"/>
+  <text x="645" y="300" fill="#e6edf3" font-size="11" text-anchor="middle">SmapMigrateOutHandler()</text>
+  <text x="645" y="316" fill="#8b949e" font-size="9" text-anchor="middle">Decode &rarr; g_smapMigrateOut() &rarr; Encode</text>
+
+  <rect x="530" y="340" width="230" height="35" rx="4" fill="#0d1117" stroke="#30363d"/>
+  <text x="645" y="363" fill="#8b949e" font-size="10" text-anchor="middle">+ 18 more handlers registered</text>
+
+  <!-- Global function pointers detail -->
+  <rect x="790" y="140" width="210" height="230" rx="4" fill="#0d1117" stroke="#30363d"/>
+  <text x="895" y="160" fill="#ffa657" font-size="11" text-anchor="middle" font-weight="bold">Global Function Pointers</text>
+  <text x="810" y="180" fill="#8b949e" font-size="9">g_smapMigrateOut</text>
+  <text x="810" y="196" fill="#8b949e" font-size="9">g_smapMigrateBack</text>
+  <text x="810" y="212" fill="#8b949e" font-size="9">g_smapRemove</text>
+  <text x="810" y="228" fill="#8b949e" font-size="9">g_smapEnableNode</text>
+  <text x="810" y="244" fill="#8b949e" font-size="9">g_smapInit</text>
+  <text x="810" y="260" fill="#8b949e" font-size="9">g_smapStop</text>
+  <text x="810" y="276" fill="#8b949e" font-size="9">g_smapUrgentMigrateOut</text>
+  <text x="810" y="292" fill="#8b949e" font-size="9">g_smapAddProcessTracking</text>
+  <text x="810" y="308" fill="#8b949e" font-size="9">g_smapMigrateOutSync</text>
+  <text x="810" y="324" fill="#8b949e" font-size="9">g_setSmapRunMode</text>
+  <text x="810" y="340" fill="#8b949e" font-size="9">... (17 total)</text>
+  <text x="810" y="360" fill="#d2a8ff" font-size="9">Resolved via dlsym() at startup</text>
+
+  <line x1="760" y1="195" x2="788" y2="195" stroke="#ffa657" stroke-width="1" stroke-dasharray="3,2"/>
+</svg>
+</div>
+
+<h3>Public API Functions</h3>
+<p class="file-ref">smap_interface.h (SDK header, 319 lines)</p>
+
+<table>
+<tr><th>Function</th><th>Purpose</th><th>Key Parameters</th></tr>
+<tr><td><code>ubturbo_smap_start()</code></td><td>Initialize SMAP module</td><td>pageType (4K=0, 2M=1), logger callback</td></tr>
+<tr><td><code>ubturbo_smap_stop()</code></td><td>Shutdown SMAP module</td><td>&mdash;</td></tr>
+<tr><td><code>ubturbo_smap_migrate_out()</code></td><td>Demote cold pages to remote NUMA</td><td>MigrateOutMsg (up to 40 procs), pidType</td></tr>
+<tr><td><code>ubturbo_smap_migrate_out_sync()</code></td><td>Synchronous migrate-out with timeout</td><td>+ maxWaitTime (ms)</td></tr>
+<tr><td><code>ubturbo_smap_migrate_back()</code></td><td>Promote pages back to local NUMA</td><td>MigrateBackMsg (up to 50 addr ranges)</td></tr>
+<tr><td><code>ubturbo_smap_process_tracking_add()</code></td><td>Add processes to hotness scanning</td><td>pid array, scanTime, duration, scanType</td></tr>
+<tr><td><code>ubturbo_smap_process_tracking_remove()</code></td><td>Remove processes from scanning</td><td>pid array</td></tr>
+<tr><td><code>ubturbo_smap_process_migrate_enable()</code></td><td>Enable/disable per-process migration</td><td>pid array, enable flag</td></tr>
+<tr><td><code>ubturbo_smap_node_enable()</code></td><td>Enable/disable a remote NUMA node</td><td>EnableNodeMsg (nid, enable)</td></tr>
+<tr><td><code>ubturbo_smap_remote_numa_info_set()</code></td><td>Set L1&rarr;L2 capacity limits</td><td>srcNid, destNid, size</td></tr>
+<tr><td><code>ubturbo_smap_freq_query()</code></td><td>Query page hotness frequencies</td><td>pid, data buffer, dataSource</td></tr>
+<tr><td><code>ubturbo_smap_run_mode_set()</code></td><td>Set waterline vs mempool mode</td><td>runMode</td></tr>
+<tr><td><code>ubturbo_smap_urgent_migrate_out()</code></td><td>Emergency OOM migration</td><td>size (bytes to free)</td></tr>
+<tr><td><code>ubturbo_smap_remote_numa_migrate()</code></td><td>Migrate between remote NUMA nodes</td><td>MigrateNumaMsg (src, dest, memids)</td></tr>
+<tr><td><code>ubturbo_smap_remove()</code></td><td>Remove processes from migration</td><td>RemoveMsg (up to 40 procs)</td></tr>
+</table>
+
+
+<!-- ============================================================ -->
+<h2 id="process-mgmt">3. Process Management</h2>
+
+<p>The <code>ProcessManager</code> is a global singleton managing all tracked processes. Each process is represented by a <code>ProcessAttribute</code> struct (30+ fields) in a singly-linked list. The manager tracks device file descriptors, NUMA topology, thread contexts, and remote NUMA capacity accounting.</p>
+
+<div class="svg-container">
+<svg viewBox="0 0 1050 500" xmlns="http://www.w3.org/2000/svg" font-family="system-ui, sans-serif">
+  <defs>
+    <marker id="pm-a" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <path d="M0,0 L8,3 L0,6" fill="none" stroke="#7ee787" stroke-width="1.2"/>
+    </marker>
+  </defs>
+
+  <!-- ProcessManager box -->
+  <rect x="30" y="20" width="350" height="460" rx="8" fill="#161b22" stroke="#7ee787" stroke-width="2"/>
+  <text x="205" y="48" fill="#7ee787" font-size="14" text-anchor="middle" font-weight="bold">struct ProcessManager</text>
+  <text x="205" y="68" fill="#8b949e" font-size="10" text-anchor="middle">manage.h:318 &mdash; Global singleton</text>
+
+  <rect x="50" y="80" width="310" height="25" rx="3" fill="#0d1117" stroke="#30363d"/>
+  <text x="60" y="97" fill="#ffa657" font-size="10">ProcessAttr *processes</text>
+  <text x="310" y="97" fill="#8b949e" font-size="9">linked list head</text>
+
+  <rect x="50" y="110" width="310" height="25" rx="3" fill="#0d1117" stroke="#30363d"/>
+  <text x="60" y="127" fill="#ffa657" font-size="10">uint16_t nr[TYPE_MAX]</text>
+  <text x="310" y="127" fill="#8b949e" font-size="9">[PROCESS, VM]</text>
+
+  <rect x="50" y="140" width="310" height="25" rx="3" fill="#0d1117" stroke="#30363d"/>
+  <text x="60" y="157" fill="#ffa657" font-size="10">uint16_t nrLocalNuma</text>
+  <text x="310" y="157" fill="#8b949e" font-size="9">detected at init</text>
+
+  <rect x="50" y="170" width="310" height="25" rx="3" fill="#0d1117" stroke="#30363d"/>
+  <text x="60" y="187" fill="#ffa657" font-size="10">DevFds fds</text>
+  <text x="250" y="187" fill="#8b949e" font-size="9">nodes[22], migrate, access, lock</text>
+
+  <rect x="50" y="200" width="310" height="25" rx="3" fill="#0d1117" stroke="#30363d"/>
+  <text x="60" y="217" fill="#ffa657" font-size="10">TrackingAttr tracking</text>
+  <text x="270" y="217" fill="#8b949e" font-size="9">pageSize, nrCold/Hot</text>
+
+  <rect x="50" y="230" width="310" height="25" rx="3" fill="#0d1117" stroke="#30363d"/>
+  <text x="60" y="247" fill="#ffa657" font-size="10">void *threadCtx[MAX_THREADS]</text>
+  <text x="325" y="247" fill="#8b949e" font-size="9">10 max</text>
+
+  <rect x="50" y="260" width="310" height="25" rx="3" fill="#0d1117" stroke="#30363d"/>
+  <text x="60" y="277" fill="#ffa657" font-size="10">RemoteNumaInfo remoteNumaInfo</text>
+  <text x="340" y="277" fill="#8b949e" font-size="9">4x18</text>
+
+  <rect x="50" y="290" width="310" height="25" rx="3" fill="#0d1117" stroke="#30363d"/>
+  <text x="60" y="307" fill="#ffa657" font-size="10">SceneInfo sceneInfo</text>
+  <text x="295" y="307" fill="#8b949e" font-size="9">global scene state</text>
+
+  <rect x="50" y="320" width="310" height="25" rx="3" fill="#0d1117" stroke="#30363d"/>
+  <text x="60" y="337" fill="#ffa657" font-size="10">EnvMutex lock, threadLock</text>
+  <text x="310" y="337" fill="#8b949e" font-size="9">sync</text>
+
+  <!-- Initialization sequence -->
+  <rect x="50" y="360" width="310" height="105" rx="4" fill="#0d111780" stroke="#58a6ff40"/>
+  <text x="60" y="380" fill="#58a6ff" font-size="10" font-weight="bold">ProcessManagerInit(pageType):</text>
+  <text x="60" y="398" fill="#8b949e" font-size="9">1. GeneratePeriodConfigFile()</text>
+  <text x="60" y="412" fill="#8b949e" font-size="9">2. sysconf(_SC_PAGESIZE) &rarr; 4K or 64K</text>
+  <text x="60" y="426" fill="#8b949e" font-size="9">3. Set g_pageSizeNormal / g_pageSizeHuge</text>
+  <text x="60" y="440" fill="#8b949e" font-size="9">4. Init DevFds to -1, NUMA info, locks</text>
+  <text x="60" y="454" fill="#8b949e" font-size="9">5. InitSceneInfo(), set WATERLINE_MODE</text>
+
+  <!-- ProcessAttribute linked list -->
+  <rect x="420" y="20" width="280" height="310" rx="8" fill="#161b22" stroke="#58a6ff" stroke-width="1.5"/>
+  <text x="560" y="45" fill="#58a6ff" font-size="13" text-anchor="middle" font-weight="bold">struct ProcessAttribute</text>
+  <text x="560" y="62" fill="#8b949e" font-size="9" text-anchor="middle">manage.h:205 &mdash; Per-process state</text>
+
+  <rect x="435" y="72" width="250" height="20" rx="2" fill="#0d1117" stroke="#30363d"/>
+  <text x="445" y="87" fill="#ffa657" font-size="9">PidType type; pid_t pid; ProcessState state;</text>
+  <rect x="435" y="96" width="250" height="20" rx="2" fill="#0d1117" stroke="#30363d"/>
+  <text x="445" y="111" fill="#ffa657" font-size="9">uint32_t scanTime; ScanType scanType;</text>
+  <rect x="435" y="120" width="250" height="20" rx="2" fill="#0d1117" stroke="#30363d"/>
+  <text x="445" y="135" fill="#ffa657" font-size="9">MigrateMode migrateMode; int initLocalMemRatio;</text>
+  <rect x="435" y="144" width="250" height="20" rx="2" fill="#0d1117" stroke="#30363d"/>
+  <text x="445" y="159" fill="#ffa657" font-size="9">migrateParam[18]: {nid, memSize}</text>
+  <rect x="435" y="168" width="250" height="20" rx="2" fill="#0d1117" stroke="#30363d"/>
+  <text x="445" y="183" fill="#ffa657" font-size="9">NumaAttribute numaAttr: cpuMask, numaNodes</text>
+  <rect x="435" y="192" width="250" height="20" rx="2" fill="#0d1117" stroke="#30363d"/>
+  <text x="445" y="207" fill="#ffa657" font-size="9">WalkPage walkPage: nrPages[22]</text>
+  <rect x="435" y="216" width="250" height="20" rx="2" fill="#0d1117" stroke="#30363d"/>
+  <text x="445" y="231" fill="#ffa657" font-size="9">StrategyAttribute strategyAttr</text>
+  <rect x="435" y="240" width="250" height="20" rx="2" fill="#0d1117" stroke="#30363d"/>
+  <text x="445" y="255" fill="#ffa657" font-size="9">ScanAttribute scanAttr: actcData[22], actCount</text>
+  <rect x="435" y="264" width="250" height="20" rx="2" fill="#0d1117" stroke="#30363d"/>
+  <text x="445" y="279" fill="#ffa657" font-size="9">AdaptMem adaptMem: SceneInfo + enable</text>
+  <rect x="435" y="288" width="250" height="20" rx="2" fill="#0d1117" stroke="#30363d"/>
+  <text x="445" y="303" fill="#58a6ff" font-size="9">ProcessAttribute *next; &rarr; linked list</text>
+
+  <!-- Linked list illustration -->
+  <rect x="420" y="350" width="100" height="40" rx="4" fill="#0d1117" stroke="#58a6ff"/>
+  <text x="470" y="375" fill="#e6edf3" font-size="10" text-anchor="middle">Process A</text>
+  <rect x="550" y="350" width="100" height="40" rx="4" fill="#0d1117" stroke="#58a6ff"/>
+  <text x="600" y="375" fill="#e6edf3" font-size="10" text-anchor="middle">Process B</text>
+  <rect x="680" y="350" width="100" height="40" rx="4" fill="#0d1117" stroke="#58a6ff"/>
+  <text x="730" y="375" fill="#e6edf3" font-size="10" text-anchor="middle">VM C</text>
+  <line x1="520" y1="370" x2="548" y2="370" stroke="#58a6ff" stroke-width="1.2" marker-end="url(#pm-a)"/>
+  <line x1="650" y1="370" x2="678" y2="370" stroke="#58a6ff" stroke-width="1.2" marker-end="url(#pm-a)"/>
+  <text x="790" y="375" fill="#8b949e" font-size="10">NULL</text>
+  <line x1="780" y1="370" x2="787" y2="370" stroke="#8b949e" stroke-width="1"/>
+
+  <!-- Arrow from PM.processes to list head -->
+  <line x1="360" y1="92" x2="418" y2="92" stroke="#7ee787" stroke-width="1.5" marker-end="url(#pm-a)"/>
+
+  <!-- ProcessState enum -->
+  <rect x="740" y="20" width="280" height="130" rx="6" fill="#161b22" stroke="#d2a8ff" stroke-width="1.5"/>
+  <text x="880" y="45" fill="#d2a8ff" font-size="12" text-anchor="middle" font-weight="bold">enum ProcessState</text>
+  <text x="760" y="70" fill="#7ee787" font-size="10">PROC_IDLE</text>
+  <text x="900" y="70" fill="#8b949e" font-size="9">not migrating</text>
+  <text x="760" y="90" fill="#ffa657" font-size="10">PROC_MIGRATE</text>
+  <text x="900" y="90" fill="#8b949e" font-size="9">hot/cold migration active</text>
+  <text x="760" y="110" fill="#58a6ff" font-size="10">PROC_BACK</text>
+  <text x="900" y="110" fill="#8b949e" font-size="9">migrate-back in progress</text>
+  <text x="760" y="130" fill="#ff7b72" font-size="10">PROC_MOVE</text>
+  <text x="900" y="130" fill="#8b949e" font-size="9">emergency OOM escape</text>
+
+  <!-- MigrateDirection enum -->
+  <rect x="740" y="170" width="280" height="100" rx="6" fill="#161b22" stroke="#ffa657" stroke-width="1.5"/>
+  <text x="880" y="195" fill="#ffa657" font-size="12" text-anchor="middle" font-weight="bold">enum MigrateDirection</text>
+  <text x="760" y="220" fill="#ff7b72" font-size="10">DEMOTE</text>
+  <text x="860" y="220" fill="#8b949e" font-size="9">L1 &rarr; L2 (cold pages out)</text>
+  <text x="760" y="240" fill="#7ee787" font-size="10">PROMOTE</text>
+  <text x="860" y="240" fill="#8b949e" font-size="9">L2 &rarr; L1 (hot pages back)</text>
+  <text x="760" y="260" fill="#d2a8ff" font-size="10">SWAP</text>
+  <text x="860" y="260" fill="#8b949e" font-size="9">bidirectional exchange</text>
+
+  <!-- Thread context -->
+  <rect x="740" y="290" width="280" height="100" rx="6" fill="#161b22" stroke="#7ee787" stroke-width="1.5"/>
+  <text x="880" y="315" fill="#7ee787" font-size="12" text-anchor="middle" font-weight="bold">struct ThreadContext</text>
+  <text x="760" y="340" fill="#ffa657" font-size="9">EnvAtomic stop;</text>
+  <text x="760" y="355" fill="#ffa657" font-size="9">ProcessManager *processManager;</text>
+  <text x="760" y="370" fill="#ffa657" font-size="9">uint32_t period; pthread_t thread;</text>
+  <text x="760" y="385" fill="#ffa657" font-size="9">int (*workFunc)(ThreadCtx *);</text>
+
+  <!-- Device paths -->
+  <rect x="420" y="410" width="600" height="70" rx="6" fill="#161b22" stroke="#ffa657" stroke-width="1"/>
+  <text x="720" y="435" fill="#ffa657" font-size="12" text-anchor="middle" font-weight="bold">Kernel Device Interfaces (DevFds)</text>
+  <text x="440" y="458" fill="#8b949e" font-size="9">/dev/smap_mig_device (migration) | /dev/smap_node0..21 (per-NUMA tracking) | /dev/smap_access_device | /dev/smap_workqueue</text>
+  <text x="440" y="472" fill="#8b949e" font-size="9">udev rules: 99-smap.rules &mdash; owner ubturbo:ubturbo, mode 0600</text>
+</svg>
+</div>
+
+<h3>Process Lifecycle</h3>
+<ol>
+<li><strong>Add:</strong> <code>ProcessAddManage()</code> &mdash; validates PID, detects VM via <code>IsQemuTask()</code> (checks <code>/proc/[pid]/comm</code>), sets L1/L2 NUMA nodes, allocates <code>ProcessAttr</code>, appends to linked list</li>
+<li><strong>Track:</strong> Registers process with kernel access tracking driver via ioctl, starts AF-bit scanning</li>
+<li><strong>Migrate:</strong> Periodic <code>ScanMigrateWork()</code> runs strategy, builds migration message, issues ioctl</li>
+<li><strong>Remove:</strong> <code>RemoveManagedProcess()</code> &mdash; stops scanning, frees actcData buffers, unlinks from list</li>
+<li><strong>Invalidation:</strong> <code>CheckAndRemoveInvalidProcess()</code> &mdash; removes processes whose PIDs no longer exist</li>
+</ol>
+
+<!-- ============================================================ -->
+<h2 id="access-tracking">4. Access Tracking &amp; Hotness Detection</h2>
+
+<p>SMAP uses two complementary mechanisms to detect page access frequency:</p>
+<ul>
+<li><strong>Software AF-bit scanning:</strong> Walks page tables, reads and clears the hardware Accessed Flag (AF) bit on PTEs, increments per-page frequency counters</li>
+<li><strong>Hardware ACTC counters:</strong> Reads Access Counter Table (ACTC) values from ACPI SRAT-derived memory regions (Huawei-specific hardware)</li>
+</ul>
+
+<div class="svg-container">
+<svg viewBox="0 0 1050 620" xmlns="http://www.w3.org/2000/svg" font-family="system-ui, sans-serif">
+  <defs>
+    <marker id="at-a" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <path d="M0,0 L8,3 L0,6" fill="none" stroke="#ffa657" stroke-width="1.2"/>
+    </marker>
+    <marker id="at-b" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <path d="M0,0 L8,3 L0,6" fill="none" stroke="#58a6ff" stroke-width="1.2"/>
+    </marker>
+  </defs>
+
+  <!-- access_pid struct -->
+  <rect x="30" y="20" width="300" height="240" rx="8" fill="#161b22" stroke="#ffa657" stroke-width="1.5"/>
+  <text x="180" y="45" fill="#ffa657" font-size="13" text-anchor="middle" font-weight="bold">struct access_pid</text>
+  <text x="180" y="62" fill="#8b949e" font-size="9" text-anchor="middle">access_pid.h:57 &mdash; Per-process tracking state</text>
+  <rect x="45" y="72" width="270" height="18" rx="2" fill="#0d1117" stroke="#30363d"/>
+  <text x="55" y="86" fill="#ffa657" font-size="9">pid_t pid; u32 numa_nodes; scan_type type;</text>
+  <rect x="45" y="94" width="270" height="18" rx="2" fill="#0d1117" stroke="#30363d"/>
+  <text x="55" y="108" fill="#ffa657" font-size="9">u32 scan_time; u32 ntimes; u32 cur_times;</text>
+  <rect x="45" y="116" width="270" height="18" rx="2" fill="#0d1117" stroke="#30363d"/>
+  <text x="55" y="130" fill="#ffa657" font-size="9">struct delayed_work scan_work;</text>
+  <rect x="45" y="138" width="270" height="18" rx="2" fill="#0d1117" stroke="#30363d"/>
+  <text x="55" y="152" fill="#ffa657" font-size="9">u32 scan_count[SMAP_MAX_NUMNODES];</text>
+  <rect x="45" y="160" width="270" height="18" rx="2" fill="#0d1117" stroke="#30363d"/>
+  <text x="55" y="174" fill="#ffa657" font-size="9">size_t page_num[]; size_t bm_len[];</text>
+  <rect x="45" y="182" width="270" height="18" rx="2" fill="#0d1117" stroke="#30363d"/>
+  <text x="55" y="196" fill="#58a6ff" font-size="9">unsigned long *paddr_bm[]; // page bitmaps</text>
+  <rect x="45" y="204" width="270" height="18" rx="2" fill="#0d1117" stroke="#30363d"/>
+  <text x="55" y="218" fill="#58a6ff" font-size="9">unsigned long *white_list_bm[]; // skip pages</text>
+  <rect x="45" y="226" width="270" height="18" rx="2" fill="#0d1117" stroke="#30363d"/>
+  <text x="55" y="240" fill="#ffa657" font-size="9">struct vm_mapping_info info; // VA segments</text>
+
+  <!-- Scanning flow -->
+  <rect x="370" y="20" width="650" height="240" rx="8" fill="#161b22" stroke="#58a6ff" stroke-width="1.5"/>
+  <text x="695" y="45" fill="#58a6ff" font-size="13" text-anchor="middle" font-weight="bold">AF-Bit Scanning Pipeline</text>
+  <text x="695" y="62" fill="#8b949e" font-size="9" text-anchor="middle">accessed_bit.c (1474 lines) &mdash; Periodic page table walk</text>
+
+  <!-- Step boxes -->
+  <rect x="390" y="75" width="160" height="55" rx="4" fill="#0d1117" stroke="#7ee787"/>
+  <text x="470" y="95" fill="#7ee787" font-size="10" text-anchor="middle" font-weight="bold">1. submit_one_work()</text>
+  <text x="470" y="112" fill="#8b949e" font-size="9" text-anchor="middle">delayed_work periodic</text>
+  <text x="470" y="125" fill="#8b949e" font-size="9" text-anchor="middle">scan_time ms interval</text>
+
+  <rect x="570" y="75" width="160" height="55" rx="4" fill="#0d1117" stroke="#7ee787"/>
+  <text x="650" y="95" fill="#7ee787" font-size="10" text-anchor="middle" font-weight="bold">2. work_func()</text>
+  <text x="650" y="112" fill="#8b949e" font-size="9" text-anchor="middle">Walk page tables</text>
+  <text x="650" y="125" fill="#8b949e" font-size="9" text-anchor="middle">4K: scan_forward_4k_mm</text>
+
+  <rect x="750" y="75" width="160" height="55" rx="4" fill="#0d1117" stroke="#7ee787"/>
+  <text x="830" y="95" fill="#7ee787" font-size="10" text-anchor="middle" font-weight="bold">3. check_pte_young()</text>
+  <text x="830" y="112" fill="#8b949e" font-size="9" text-anchor="middle">Test AF bit on PTE</text>
+  <text x="830" y="125" fill="#8b949e" font-size="9" text-anchor="middle">Clear if set &rarr; freq++</text>
+
+  <line x1="550" y1="102" x2="568" y2="102" stroke="#7ee787" stroke-width="1.2" marker-end="url(#at-a)"/>
+  <line x1="730" y1="102" x2="748" y2="102" stroke="#7ee787" stroke-width="1.2" marker-end="url(#at-a)"/>
+
+  <!-- VM path -->
+  <rect x="390" y="145" width="290" height="50" rx="4" fill="#0d1117" stroke="#d2a8ff"/>
+  <text x="535" y="165" fill="#d2a8ff" font-size="10" text-anchor="middle" font-weight="bold">VM Mode: scan_kvm_memslots()</text>
+  <text x="535" y="182" fill="#8b949e" font-size="9" text-anchor="middle">Walk KVM stage-2 page tables for 2M hugepages</text>
+
+  <!-- Output -->
+  <rect x="390" y="210" width="610" height="40" rx="4" fill="#0d111780" stroke="#ffa657"/>
+  <text x="695" y="228" fill="#ffa657" font-size="10" text-anchor="middle" font-weight="bold">Output: per-page frequency counter (u16) in paddr_bm[] bitmap &mdash; fed to strategy engine as actcData[]</text>
+  <text x="695" y="242" fill="#8b949e" font-size="9" text-anchor="middle">Max frequency value: 256 (STRATEGY_ACTC_MAX_FREQ) &mdash; saturating counter</text>
+
+  <!-- Sliding window -->
+  <rect x="30" y="280" width="500" height="200" rx="8" fill="#161b22" stroke="#d2a8ff" stroke-width="1.5"/>
+  <text x="280" y="305" fill="#d2a8ff" font-size="13" text-anchor="middle" font-weight="bold">Sliding Window Frequency Accumulation</text>
+  <text x="280" y="320" fill="#8b949e" font-size="9" text-anchor="middle">statistics_tracking_info &mdash; Multi-window statistical tracking</text>
+
+  <rect x="50" y="335" width="460" height="130" rx="4" fill="#0d1117" stroke="#30363d"/>
+  <text x="60" y="355" fill="#7ee787" font-size="10" font-weight="bold">Algorithm:</text>
+  <text x="60" y="375" fill="#8b949e" font-size="9">1. Duration / scan_period = window_count (e.g., 10s / 200ms = 50 windows)</text>
+  <text x="60" y="392" fill="#8b949e" font-size="9">2. Each window stores 1 bit per page (accessed or not in that interval)</text>
+  <text x="60" y="409" fill="#8b949e" font-size="9">3. scan_num % window_count = current window to update</text>
+  <text x="60" y="426" fill="#8b949e" font-size="9">4. Final frequency = popcount across all windows for each page</text>
+  <text x="60" y="443" fill="#8b949e" font-size="9">5. Higher frequency = hotter page (accessed in more time windows)</text>
+  <text x="60" y="460" fill="#ffa657" font-size="9">struct sliding_windows: u8 **data, window_num, scan_num</text>
+
+  <!-- ACTC hardware -->
+  <rect x="560" y="280" width="460" height="200" rx="8" fill="#161b22" stroke="#ff7b72" stroke-width="1.5"/>
+  <text x="790" y="305" fill="#ff7b72" font-size="13" text-anchor="middle" font-weight="bold">Hardware ACTC Counters</text>
+  <text x="790" y="320" fill="#8b949e" font-size="9" text-anchor="middle">access_acpi_mem.c + acpi_mem.c &mdash; ACPI SRAT integration</text>
+
+  <rect x="580" y="335" width="420" height="130" rx="4" fill="#0d1117" stroke="#30363d"/>
+  <text x="590" y="355" fill="#7ee787" font-size="10" font-weight="bold">ACTC (Access Counter Table):</text>
+  <text x="590" y="375" fill="#8b949e" font-size="9">Hardware maintains per-page access counters in memory-mapped region</text>
+  <text x="590" y="392" fill="#8b949e" font-size="9">ACPI SRAT table provides NUMA topology + ACTC base addresses</text>
+  <text x="590" y="409" fill="#8b949e" font-size="9">calc_paddr_acidx(): physical address &rarr; ACTC array index</text>
+  <text x="590" y="426" fill="#8b949e" font-size="9">get_node_actc_len(): returns counter array size per NUMA node</text>
+  <text x="590" y="443" fill="#8b949e" font-size="9">actc_t = uint16_t frequency value per page</text>
+  <text x="590" y="460" fill="#ffa657" font-size="9">Mode: ACTC_MODE=0, CPI_MODE_AND=1, ACCESS_MODE_AND=4, etc.</text>
+
+  <!-- Workqueue detail -->
+  <rect x="30" y="500" width="990" height="100" rx="8" fill="#161b22" stroke="#ffa657" stroke-width="1"/>
+  <text x="525" y="525" fill="#ffa657" font-size="12" text-anchor="middle" font-weight="bold">Periodic Scanning Workqueue (access_tracking.c, 592 lines)</text>
+  <text x="50" y="550" fill="#8b949e" font-size="10">1. <code>submit_one_work(ap)</code> schedules <code>delayed_work</code> with <code>ap->scan_time</code> ms delay (50ms unit, range 5&ndash;200ms)</text>
+  <text x="50" y="570" fill="#8b949e" font-size="10">2. <code>work_func()</code> runs in workqueue context: walks pages, reads AF bits, updates freq counters</text>
+  <text x="50" y="590" fill="#8b949e" font-size="10">3. Reschedules itself after completion &mdash; continuous scanning loop until process removed or SMAP stopped</text>
+</svg>
+</div>
+
+<h3>AP State Machine</h3>
+<p>The <code>access_pid_struct</code> tracks a global state bitmask controlling what operation is in progress:</p>
+<table>
+<tr><th>State</th><th>Bit</th><th>Meaning</th></tr>
+<tr><td><code>AP_STATE_WALK</code></td><td>bit 0</td><td>Page table walk (pagemap scanning) in progress</td></tr>
+<tr><td><code>AP_STATE_READ</code></td><td>bit 1</td><td>Reading frequency data from kernel to user</td></tr>
+<tr><td><code>AP_STATE_FREQ</code></td><td>bit 2</td><td>Frequency query active</td></tr>
+<tr><td><code>AP_STATE_MIG</code></td><td>bit 3</td><td>Migration consuming access data</td></tr>
+</table>
+
+<h3>Scan Types</h3>
+<table>
+<tr><th>Type</th><th>Value</th><th>Use Case</th></tr>
+<tr><td><code>HAM_SCAN</code></td><td>0</td><td>Hardware-assisted monitoring (ACTC-based)</td></tr>
+<tr><td><code>NORMAL_SCAN</code></td><td>1</td><td>Standard AF-bit software scanning</td></tr>
+<tr><td><code>STATISTIC_SCAN</code></td><td>2</td><td>Statistical sliding-window mode with duration limit</td></tr>
+</table>
+
+
+<!-- ============================================================ -->
+<h2 id="strategy">5. Strategy Engine</h2>
+
+<p>The strategy engine decides which pages to migrate and in which direction. It takes the per-page frequency data from the access tracking layer, sorts pages by frequency, and uses a binary search algorithm to find the optimal hot/cold threshold.</p>
+
+<div class="svg-container">
+<svg viewBox="0 0 1050 580" xmlns="http://www.w3.org/2000/svg" font-family="system-ui, sans-serif">
+  <defs>
+    <marker id="st-a" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <path d="M0,0 L8,3 L0,6" fill="none" stroke="#7ee787" stroke-width="1.2"/>
+    </marker>
+  </defs>
+
+  <!-- Title -->
+  <text x="525" y="25" fill="#7ee787" font-size="16" text-anchor="middle" font-weight="bold">Strategy Engine Pipeline</text>
+
+  <!-- Stage 1: Input -->
+  <rect x="30" y="45" width="220" height="130" rx="6" fill="#161b22" stroke="#ffa657" stroke-width="1.5"/>
+  <text x="140" y="70" fill="#ffa657" font-size="12" text-anchor="middle" font-weight="bold">1. Input: actcData[]</text>
+  <text x="50" y="92" fill="#8b949e" font-size="9">Per-NUMA array of (addr, freq, prior)</text>
+  <text x="50" y="108" fill="#8b949e" font-size="9">freq: 0&ndash;256 access count</text>
+  <text x="50" y="124" fill="#8b949e" font-size="9">addr: physical address of page</text>
+  <text x="50" y="140" fill="#8b949e" font-size="9">prior: priority (whitelist flag)</text>
+  <text x="50" y="160" fill="#ffa657" font-size="9">ActcData {u64 addr; actc_t freq;</text>
+  <text x="50" y="172" fill="#ffa657" font-size="9">&nbsp;&nbsp;u8 prior; bool isWhiteListPage;}</text>
+
+  <!-- Stage 2: Direction -->
+  <rect x="280" y="45" width="220" height="130" rx="6" fill="#161b22" stroke="#58a6ff" stroke-width="1.5"/>
+  <text x="390" y="70" fill="#58a6ff" font-size="12" text-anchor="middle" font-weight="bold">2. Direction Decision</text>
+  <text x="300" y="92" fill="#8b949e" font-size="9">For each NUMA pair (L1, L2):</text>
+  <text x="300" y="112" fill="#ff7b72" font-size="10">DEMOTE: L1 under memory pressure</text>
+  <text x="300" y="130" fill="#7ee787" font-size="10">PROMOTE: L2 has hot pages on L1</text>
+  <text x="300" y="148" fill="#d2a8ff" font-size="10">SWAP: bidirectional exchange</text>
+  <text x="300" y="168" fill="#8b949e" font-size="9">Based on waterline / mempool mode</text>
+
+  <!-- Stage 3: Sort -->
+  <rect x="530" y="45" width="220" height="130" rx="6" fill="#161b22" stroke="#7ee787" stroke-width="1.5"/>
+  <text x="640" y="70" fill="#7ee787" font-size="12" text-anchor="middle" font-weight="bold">3. Frequency Sort</text>
+  <text x="550" y="92" fill="#8b949e" font-size="9">DEMOTE: ActcFreqAscFunc()</text>
+  <text x="550" y="108" fill="#8b949e" font-size="9">&nbsp;&nbsp;Sort L1 pages ascending (cold first)</text>
+  <text x="550" y="128" fill="#8b949e" font-size="9">PROMOTE: ActcFreqDescFunc()</text>
+  <text x="550" y="144" fill="#8b949e" font-size="9">&nbsp;&nbsp;Sort L2 pages descending (hot first)</text>
+  <text x="550" y="164" fill="#ffa657" font-size="9">qsort() on actcData[] array</text>
+
+  <!-- Stage 4: Threshold -->
+  <rect x="780" y="45" width="240" height="130" rx="6" fill="#161b22" stroke="#d2a8ff" stroke-width="1.5"/>
+  <text x="900" y="70" fill="#d2a8ff" font-size="12" text-anchor="middle" font-weight="bold">4. Binary Search Threshold</text>
+  <text x="800" y="92" fill="#8b949e" font-size="9">CalLowMigrateNum():</text>
+  <text x="800" y="108" fill="#8b949e" font-size="9">Binary search for optimal cut-off</text>
+  <text x="800" y="124" fill="#8b949e" font-size="9">where freq[i] &lt; threshold</text>
+  <text x="800" y="140" fill="#8b949e" font-size="9">threshold = freqWt * maxFreq / 5</text>
+  <text x="800" y="160" fill="#ffa657" font-size="9">min threshold: 2</text>
+  <text x="800" y="172" fill="#ffa657" font-size="9">(STRATEGY_MIN_HOT_COLD_THRED_VALUE)</text>
+
+  <!-- Arrows between stages -->
+  <line x1="250" y1="110" x2="278" y2="110" stroke="#7ee787" stroke-width="1.5" marker-end="url(#st-a)"/>
+  <line x1="500" y1="110" x2="528" y2="110" stroke="#7ee787" stroke-width="1.5" marker-end="url(#st-a)"/>
+  <line x1="750" y1="110" x2="778" y2="110" stroke="#7ee787" stroke-width="1.5" marker-end="url(#st-a)"/>
+
+  <!-- Stage 5: Build MigList -->
+  <rect x="30" y="210" width="990" height="100" rx="6" fill="#161b22" stroke="#ff7b72" stroke-width="1.5"/>
+  <text x="525" y="235" fill="#ff7b72" font-size="13" text-anchor="middle" font-weight="bold">5. Build MigList &mdash; CalcMigrateNumByFreq()</text>
+  <text x="50" y="260" fill="#8b949e" font-size="10">Select top-K coldest pages (DEMOTE) or hottest pages (PROMOTE) up to maxMigrate limit</text>
+  <text x="50" y="278" fill="#8b949e" font-size="10">maxMigrate = total_pages / divisor (ratio-based) or memSize / pageSize (size-based)</text>
+  <text x="50" y="296" fill="#ffa657" font-size="10">Output: MigList[from_node][to_node] = {pid, from, to, nr_pages, addr_array[]}</text>
+
+  <!-- Strategy variants -->
+  <rect x="30" y="330" width="310" height="120" rx="6" fill="#161b22" stroke="#7ee787" stroke-width="1.5"/>
+  <text x="185" y="355" fill="#7ee787" font-size="12" text-anchor="middle" font-weight="bold">SeparateStrategy()</text>
+  <text x="185" y="373" fill="#8b949e" font-size="9" text-anchor="middle">separate_strategy.c &mdash; Standard 2M mode</text>
+  <text x="50" y="395" fill="#8b949e" font-size="9">Single L1 &rarr; single L2 pair</text>
+  <text x="50" y="412" fill="#8b949e" font-size="9">BaseStrategy() for direction decision</text>
+  <text x="50" y="429" fill="#8b949e" font-size="9">CalcMigrateNumByFreq() for page selection</text>
+  <text x="50" y="446" fill="#8b949e" font-size="9">AddMigList() to populate MigList</text>
+
+  <rect x="370" y="330" width="310" height="120" rx="6" fill="#161b22" stroke="#58a6ff" stroke-width="1.5"/>
+  <text x="525" y="355" fill="#58a6ff" font-size="12" text-anchor="middle" font-weight="bold">SeparateStrategy4K()</text>
+  <text x="525" y="373" fill="#8b949e" font-size="9" text-anchor="middle">separate_strategy.c &mdash; 4K page mode</text>
+  <text x="390" y="395" fill="#8b949e" font-size="9">Same algorithm, 4K page granularity</text>
+  <text x="390" y="412" fill="#8b949e" font-size="9">Larger page counts, more sorting</text>
+  <text x="390" y="429" fill="#8b949e" font-size="9">KB &rarr; page conversion via KBToNormalPage()</text>
+
+  <rect x="710" y="330" width="310" height="120" rx="6" fill="#161b22" stroke="#d2a8ff" stroke-width="1.5"/>
+  <text x="865" y="355" fill="#d2a8ff" font-size="12" text-anchor="middle" font-weight="bold">SeparateStrategyMultiNumaVm()</text>
+  <text x="865" y="373" fill="#8b949e" font-size="9" text-anchor="middle">Multi-NUMA VM mode</text>
+  <text x="730" y="395" fill="#8b949e" font-size="9">VM spanning multiple L1 + L2 nodes</text>
+  <text x="730" y="412" fill="#8b949e" font-size="9">Per-NUMA-pair strategy evaluation</text>
+  <text x="730" y="429" fill="#8b949e" font-size="9">Cross-node page accounting</text>
+  <text x="730" y="446" fill="#8b949e" font-size="9">IsMultiNumaVm() detection</text>
+
+  <!-- RunStrategy dispatcher -->
+  <rect x="30" y="470" width="990" height="90" rx="6" fill="#161b22" stroke="#ffa657" stroke-width="1.5"/>
+  <text x="525" y="495" fill="#ffa657" font-size="13" text-anchor="middle" font-weight="bold">RunStrategy() &mdash; Dispatcher (strategy.c:69)</text>
+  <text x="50" y="520" fill="#8b949e" font-size="10">1. CheckActcDataValid() &mdash; ensure frequency data exists for at least one NUMA node</text>
+  <text x="50" y="538" fill="#8b949e" font-size="10">2. Dispatch to SeparateStrategy() / SeparateStrategy4K() / SeparateStrategyMultiNumaVm() based on page type and VM topology</text>
+  <text x="50" y="556" fill="#8b949e" font-size="10">3. Returns populated MigList[MAX_NODES][MAX_NODES] matrix with per-pair migration instructions</text>
+</svg>
+</div>
+
+<h3>Key Constants</h3>
+<table>
+<tr><th>Constant</th><th>Value</th><th>Purpose</th></tr>
+<tr><td><code>STRATEGY_ACTC_MAX_FREQ</code></td><td>256</td><td>Maximum frequency value (saturating counter)</td></tr>
+<tr><td><code>STRATEGY_MIN_HOT_COLD_THRED_VALUE</code></td><td>2</td><td>Minimum threshold for hot/cold separation</td></tr>
+<tr><td><code>STRATEGY_FREQ_THRED_DIVISOR</code></td><td>5</td><td>Frequency weight divisor for threshold calculation</td></tr>
+<tr><td><code>USER_DEFAULT_MIGRATE_OUT_RATIO</code></td><td>25</td><td>Default: migrate 25% of pages as cold</td></tr>
+<tr><td><code>PERCENTAGE_BASE_INT</code></td><td>100</td><td>Percentage base for ratio calculations</td></tr>
+</table>
+
+<!-- ============================================================ -->
+<h2 id="scene">6. Scene Classification</h2>
+
+<p>The scene classifier analyzes workload behavior over a sliding window of <code>PageInfo</code> snapshots to adaptively tune scanning intervals and migration aggressiveness. It maintains a <code>PAGE_INFO_DEPTH=8</code> ring buffer of historical page statistics.</p>
+
+<div class="svg-container">
+<svg viewBox="0 0 1050 340" xmlns="http://www.w3.org/2000/svg" font-family="system-ui, sans-serif">
+  <defs>
+    <marker id="sc-a" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <path d="M0,0 L8,3 L0,6" fill="none" stroke="#d2a8ff" stroke-width="1.2"/>
+    </marker>
+  </defs>
+
+  <!-- Three scenes -->
+  <rect x="30" y="20" width="300" height="180" rx="8" fill="#161b22" stroke="#7ee787" stroke-width="2"/>
+  <text x="180" y="48" fill="#7ee787" font-size="14" text-anchor="middle" font-weight="bold">LIGHT_STABLE</text>
+  <text x="50" y="72" fill="#8b949e" font-size="10">Default scene. Low hotpage ratio.</text>
+  <text x="50" y="92" fill="#8b949e" font-size="10">Scan cycle: 200ms</text>
+  <text x="50" y="112" fill="#8b949e" font-size="10">Migrate cycle: 2000ms</text>
+  <text x="50" y="132" fill="#8b949e" font-size="10">Conservative migration &mdash; most pages stable</text>
+  <text x="50" y="158" fill="#ffa657" font-size="9">Transition out: hot ratio &gt; 60% for 3 windows</text>
+  <text x="50" y="175" fill="#ffa657" font-size="9">or instability detected (1% change threshold)</text>
+
+  <rect x="370" y="20" width="300" height="180" rx="8" fill="#161b22" stroke="#ffa657" stroke-width="2"/>
+  <text x="520" y="48" fill="#ffa657" font-size="14" text-anchor="middle" font-weight="bold">HEAVY_STABLE</text>
+  <text x="390" y="72" fill="#8b949e" font-size="10">High memory pressure, stable access pattern.</text>
+  <text x="390" y="92" fill="#8b949e" font-size="10">Scan cycle: 200ms</text>
+  <text x="390" y="112" fill="#8b949e" font-size="10">Migrate cycle: 2000ms</text>
+  <text x="390" y="132" fill="#8b949e" font-size="10">Aggressive migration &mdash; many hot pages</text>
+  <text x="390" y="158" fill="#ffa657" font-size="9">hot_ratio &gt; 60% (HEAVY_HOT_RATIO)</text>
+  <text x="390" y="175" fill="#ffa657" font-size="9">Stable over ENTER_HEAVY_WINDOW_SIZE=3</text>
+
+  <rect x="710" y="20" width="310" height="180" rx="8" fill="#161b22" stroke="#ff7b72" stroke-width="2"/>
+  <text x="865" y="48" fill="#ff7b72" font-size="14" text-anchor="middle" font-weight="bold">UNSTABLE</text>
+  <text x="730" y="72" fill="#8b949e" font-size="10">Rapidly changing access patterns.</text>
+  <text x="730" y="92" fill="#8b949e" font-size="10">Scan cycle: 200ms</text>
+  <text x="730" y="112" fill="#8b949e" font-size="10">Migrate cycle: 2000ms</text>
+  <text x="730" y="132" fill="#8b949e" font-size="10">Cautious &mdash; avoid thrashing</text>
+  <text x="730" y="158" fill="#ffa657" font-size="9">Enter: &gt;1% page ratio change in 2 windows</text>
+  <text x="730" y="175" fill="#ffa657" font-size="9">Exit: &lt;0.2% change over 6 windows</text>
+
+  <!-- Transition arrows -->
+  <line x1="330" y1="80" x2="368" y2="80" stroke="#d2a8ff" stroke-width="1.5" marker-end="url(#sc-a)"/>
+  <text x="340" y="70" fill="#d2a8ff" font-size="8">hot&gt;60%</text>
+  <line x1="368" y1="100" x2="330" y2="100" stroke="#d2a8ff" stroke-width="1.5" marker-end="url(#sc-a)"/>
+  <text x="338" y="118" fill="#d2a8ff" font-size="8">hot&lt;60%</text>
+
+  <line x1="670" y1="80" x2="708" y2="80" stroke="#d2a8ff" stroke-width="1.5" marker-end="url(#sc-a)"/>
+  <text x="674" y="70" fill="#d2a8ff" font-size="8">&gt;1%&Delta;</text>
+  <line x1="708" y1="100" x2="670" y2="100" stroke="#d2a8ff" stroke-width="1.5" marker-end="url(#sc-a)"/>
+  <text x="674" y="118" fill="#d2a8ff" font-size="8">&lt;0.2%&Delta;</text>
+
+  <!-- PageInfo struct -->
+  <rect x="30" y="220" width="450" height="100" rx="6" fill="#161b22" stroke="#58a6ff" stroke-width="1"/>
+  <text x="255" y="245" fill="#58a6ff" font-size="12" text-anchor="middle" font-weight="bold">struct PageInfo (scene_info.h:74)</text>
+  <text x="50" y="268" fill="#ffa657" font-size="9">nrPages, nrL1Page, nrL2Page &mdash; total and per-level page counts</text>
+  <text x="50" y="285" fill="#ffa657" font-size="9">nrHot, nrL1Hot, nrL2Hot &mdash; hot page counts per level</text>
+  <text x="50" y="302" fill="#ffa657" font-size="9">nrL1Guarantee, nrL1GuaranteeBk, nrL1Planed &mdash; guaranteed local memory</text>
+
+  <rect x="520" y="220" width="500" height="100" rx="6" fill="#161b22" stroke="#58a6ff" stroke-width="1"/>
+  <text x="770" y="245" fill="#58a6ff" font-size="12" text-anchor="middle" font-weight="bold">struct SceneInfo (scene_info.h:86)</text>
+  <text x="540" y="268" fill="#ffa657" font-size="9">int pageInfoIndex &mdash; ring buffer cursor (0..PAGE_INFO_DEPTH-1)</text>
+  <text x="540" y="285" fill="#ffa657" font-size="9">PageInfo pageInfo[8] &mdash; historical snapshot ring buffer</text>
+  <text x="540" y="302" fill="#ffa657" font-size="9">Scene lastScene, currScene &mdash; state transition tracking</text>
+  <text x="540" y="318" fill="#ffa657" font-size="9">SceneCycle cycles &mdash; {scanCycle, migCycle} for current scene</text>
+</svg>
+</div>
+
+
+<!-- ============================================================ -->
+<h2 id="kernel-tiering">7. Kernel Tiering Engine</h2>
+
+<p>The kernel tiering engine is a loadable kernel module (<code>smap_tiering.ko</code>) that provides the actual page migration capability. It creates a character device (<code>/dev/smap_mig_device</code>), receives migration commands via ioctl, and performs multi-threaded page migration using the kernel's <code>migrate_pages()</code> API.</p>
+
+<div class="svg-container">
+<svg viewBox="0 0 1050 680" xmlns="http://www.w3.org/2000/svg" font-family="system-ui, sans-serif">
+  <defs>
+    <marker id="ke-a" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <path d="M0,0 L8,3 L0,6" fill="none" stroke="#ffa657" stroke-width="1.2"/>
+    </marker>
+    <marker id="ke-b" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <path d="M0,0 L8,3 L0,6" fill="none" stroke="#ff7b72" stroke-width="1.2"/>
+    </marker>
+  </defs>
+
+  <!-- ioctl interface -->
+  <rect x="30" y="20" width="500" height="150" rx="8" fill="#161b22" stroke="#ffa657" stroke-width="2"/>
+  <text x="280" y="48" fill="#ffa657" font-size="14" text-anchor="middle" font-weight="bold">Character Device &amp; ioctl Interface</text>
+  <text x="280" y="65" fill="#8b949e" font-size="9" text-anchor="middle">mig_init.c (593 lines) &mdash; /dev/smap_mig_device</text>
+
+  <rect x="50" y="80" width="210" height="35" rx="3" fill="#0d1117" stroke="#ff7b72"/>
+  <text x="155" y="102" fill="#ff7b72" font-size="10" text-anchor="middle">SMAP_MIG_MIGRATE (0)</text>
+  <text x="50" y="130" fill="#8b949e" font-size="9">__ioctl_migrate() &rarr; do_migrate()</text>
+
+  <rect x="280" y="80" width="230" height="35" rx="3" fill="#0d1117" stroke="#ff7b72"/>
+  <text x="395" y="102" fill="#ff7b72" font-size="10" text-anchor="middle">SMAP_MIG_MIGRATE_NUMA (2)</text>
+  <text x="280" y="130" fill="#8b949e" font-size="9">__ioctl_migrate_numa() &rarr; smap_migrate_numa()</text>
+
+  <rect x="50" y="140" width="460" height="20" rx="2" fill="#0d111780" stroke="#30363d"/>
+  <text x="280" y="155" fill="#8b949e" font-size="9" text-anchor="middle">SMAP_CHECK_PAGESIZE (1) | SMAP_MIG_PID_REMOTE_NUMA (3)</text>
+
+  <!-- kprobe symbol resolution -->
+  <rect x="560" y="20" width="460" height="150" rx="8" fill="#161b22" stroke="#d2a8ff" stroke-width="2"/>
+  <text x="790" y="48" fill="#d2a8ff" font-size="14" text-anchor="middle" font-weight="bold">Kprobe Symbol Resolution</text>
+  <text x="790" y="65" fill="#8b949e" font-size="9" text-anchor="middle">smap_migrate_wrapper.c &mdash; Runtime kernel symbol lookup</text>
+
+  <text x="580" y="92" fill="#7ee787" font-size="10">lookup_kallsyms_lookup_name()</text>
+  <text x="580" y="110" fill="#8b949e" font-size="9">&rarr; kprobe on "kallsyms_lookup_name" to get its address</text>
+  <text x="580" y="130" fill="#7ee787" font-size="10">smap_process_symbols()</text>
+  <text x="580" y="148" fill="#8b949e" font-size="9">&rarr; Resolves 3 unexported kernel functions:</text>
+  <text x="600" y="162" fill="#ffa657" font-size="9">fp_migrate_pages, fp_putback_movable_pages, fp_isolate_folio_to_list</text>
+
+  <!-- Migration engine -->
+  <rect x="30" y="190" width="990" height="210" rx="8" fill="#161b22" stroke="#ff7b72" stroke-width="2"/>
+  <text x="525" y="218" fill="#ff7b72" font-size="14" text-anchor="middle" font-weight="bold">Migration Engine (smap_migrate_pages.c, 1069 lines)</text>
+
+  <!-- do_migrate -->
+  <rect x="50" y="235" width="200" height="65" rx="4" fill="#0d1117" stroke="#ffa657"/>
+  <text x="150" y="258" fill="#ffa657" font-size="11" text-anchor="middle" font-weight="bold">do_migrate()</text>
+  <text x="150" y="275" fill="#8b949e" font-size="9" text-anchor="middle">Entry point from ioctl</text>
+  <text x="150" y="290" fill="#8b949e" font-size="9" text-anchor="middle">Iterates mig_list[] entries</text>
+
+  <!-- smap_migrate -->
+  <rect x="280" y="235" width="200" height="65" rx="4" fill="#0d1117" stroke="#ffa657"/>
+  <text x="380" y="258" fill="#ffa657" font-size="11" text-anchor="middle" font-weight="bold">smap_migrate()</text>
+  <text x="380" y="275" fill="#8b949e" font-size="9" text-anchor="middle">Core dispatcher</text>
+  <text x="380" y="290" fill="#8b949e" font-size="9" text-anchor="middle">Single/multi thread decision</text>
+
+  <!-- Thread split -->
+  <rect x="510" y="230" width="230" height="40" rx="4" fill="#0d1117" stroke="#7ee787"/>
+  <text x="625" y="255" fill="#7ee787" font-size="10" text-anchor="middle">migrate_multi_threaded()</text>
+
+  <rect x="510" y="280" width="230" height="40" rx="4" fill="#0d1117" stroke="#58a6ff"/>
+  <text x="625" y="305" fill="#58a6ff" font-size="10" text-anchor="middle">migrate_single_thread()</text>
+
+  <!-- kthreads -->
+  <rect x="770" y="235" width="230" height="75" rx="4" fill="#0d1117" stroke="#ff7b72"/>
+  <text x="885" y="258" fill="#ff7b72" font-size="11" text-anchor="middle" font-weight="bold">thread_fn() kthread workers</text>
+  <text x="885" y="278" fill="#8b949e" font-size="9" text-anchor="middle">Up to MAX_NR_MIGRATE_THREADS=32</text>
+  <text x="885" y="293" fill="#8b949e" font-size="9" text-anchor="middle">Each handles folio subset</text>
+  <text x="885" y="308" fill="#8b949e" font-size="9" text-anchor="middle">kthread_create() + wake_up_process()</text>
+
+  <!-- Core migration path -->
+  <rect x="50" y="320" width="950" height="65" rx="4" fill="#0d111780" stroke="#ffa657"/>
+  <text x="525" y="343" fill="#ffa657" font-size="12" text-anchor="middle" font-weight="bold">Per-folio Migration Path</text>
+  <text x="70" y="363" fill="#8b949e" font-size="10">1. fp_isolate_folio_to_list(folio, &amp;from_list) &mdash; Isolate folio from LRU</text>
+  <text x="70" y="378" fill="#8b949e" font-size="10">2. fp_migrate_pages(&amp;from_list, alloc_fn, NULL, dest_nid, MIGRATE_SYNC, MR_NUMA_MISPLACED) &mdash; Core kernel migration</text>
+
+  <!-- Arrows -->
+  <line x1="250" y1="268" x2="278" y2="268" stroke="#ffa657" stroke-width="1.5" marker-end="url(#ke-a)"/>
+  <line x1="480" y1="255" x2="508" y2="250" stroke="#7ee787" stroke-width="1.2" marker-end="url(#ke-a)"/>
+  <line x1="480" y1="280" x2="508" y2="295" stroke="#58a6ff" stroke-width="1.2" marker-end="url(#ke-a)"/>
+  <line x1="740" y1="250" x2="768" y2="260" stroke="#ff7b72" stroke-width="1.5" marker-end="url(#ke-b)"/>
+
+  <!-- Migrate back -->
+  <rect x="30" y="420" width="480" height="120" rx="8" fill="#161b22" stroke="#58a6ff" stroke-width="1.5"/>
+  <text x="270" y="448" fill="#58a6ff" font-size="13" text-anchor="middle" font-weight="bold">Migrate-Back Subsystem</text>
+  <text x="270" y="465" fill="#8b949e" font-size="9" text-anchor="middle">migrate_task.c &mdash; Address-range based promotion</text>
+  <text x="50" y="490" fill="#8b949e" font-size="10">migrate_back_task: task_id, subtask_cnt, progress, status</text>
+  <text x="50" y="508" fill="#8b949e" font-size="10">migrate_back_subtask: pa_start, pa_end, src_nid, dest_nid</text>
+  <text x="50" y="526" fill="#8b949e" font-size="10">smap_handle_migrate_back_subtask(): walk PA range, isolate, migrate</text>
+
+  <!-- rmap -->
+  <rect x="540" y="420" width="480" height="120" rx="8" fill="#161b22" stroke="#7ee787" stroke-width="1.5"/>
+  <text x="780" y="448" fill="#7ee787" font-size="13" text-anchor="middle" font-weight="bold">Reverse Mapping (rmap.c)</text>
+  <text x="780" y="465" fill="#8b949e" font-size="9" text-anchor="middle">Page &rarr; owning task association</text>
+  <text x="560" y="490" fill="#8b949e" font-size="10">find_page_task(page): walks anon_vma or i_mmap to find owner</text>
+  <text x="560" y="508" fill="#8b949e" font-size="10">smap_rmap_walk_anon(): anonymous page reverse mapping</text>
+  <text x="560" y="526" fill="#8b949e" font-size="10">smap_rmap_walk_file(): file-backed page reverse mapping</text>
+
+  <!-- Migration types -->
+  <rect x="30" y="560" width="990" height="100" rx="6" fill="#161b22" stroke="#ffa657" stroke-width="1"/>
+  <text x="525" y="585" fill="#ffa657" font-size="12" text-anchor="middle" font-weight="bold">Migration Types (enum smap_migrate_type)</text>
+
+  <rect x="50" y="600" width="280" height="45" rx="4" fill="#0d1117" stroke="#ff7b72"/>
+  <text x="190" y="618" fill="#ff7b72" font-size="11" text-anchor="middle">MIGRATE_TYPE_HOTNESS</text>
+  <text x="190" y="636" fill="#8b949e" font-size="9" text-anchor="middle">Standard hot/cold demotion/promotion</text>
+
+  <rect x="370" y="600" width="280" height="45" rx="4" fill="#0d1117" stroke="#58a6ff"/>
+  <text x="510" y="618" fill="#58a6ff" font-size="11" text-anchor="middle">MIGRATE_TYPE_BACK</text>
+  <text x="510" y="636" fill="#8b949e" font-size="9" text-anchor="middle">Explicit migrate-back by address range</text>
+
+  <rect x="690" y="600" width="280" height="45" rx="4" fill="#0d1117" stroke="#d2a8ff"/>
+  <text x="830" y="618" fill="#d2a8ff" font-size="11" text-anchor="middle">MIGRATE_TYPE_REMOTE</text>
+  <text x="830" y="636" fill="#8b949e" font-size="9" text-anchor="middle">Remote NUMA to remote NUMA transfer</text>
+</svg>
+</div>
+
+<h3>Allocation Functions</h3>
+<table>
+<tr><th>Function</th><th>Used For</th><th>Behavior</th></tr>
+<tr><td><code>smap_alloc_new_node_page()</code></td><td>Hotness migration</td><td>Allocate normal page on destination NUMA node</td></tr>
+<tr><td><code>smap_alloc_new_node_page_mig_back()</code></td><td>Migrate-back</td><td>Allocate on destination node for promotion</td></tr>
+<tr><td><code>alloc_demote_page()</code></td><td>Demotion</td><td>Allocate on remote NUMA for cold page placement</td></tr>
+<tr><td><code>smap_alloc_huge_page_node()</code></td><td>2M hugepage migration</td><td>Hugepage allocation on specific node</td></tr>
+</table>
+
+
+<!-- ============================================================ -->
+<h2 id="migration-flow">8. End-to-End Migration Flow</h2>
+
+<p>This section traces the complete path from periodic timer firing to physical page movement.</p>
+
+<div class="svg-container">
+<svg viewBox="0 0 1050 850" xmlns="http://www.w3.org/2000/svg" font-family="system-ui, sans-serif">
+  <defs>
+    <marker id="fl-a" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <path d="M0,0 L8,3 L0,6" fill="none" stroke="#58a6ff" stroke-width="1.2"/>
+    </marker>
+    <marker id="fl-b" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <path d="M0,0 L8,3 L0,6" fill="none" stroke="#7ee787" stroke-width="1.2"/>
+    </marker>
+    <marker id="fl-c" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <path d="M0,0 L8,3 L0,6" fill="none" stroke="#ffa657" stroke-width="1.2"/>
+    </marker>
+  </defs>
+
+  <text x="525" y="25" fill="#e6edf3" font-size="16" text-anchor="middle" font-weight="bold">Periodic Migration Cycle (ScanMigrateWork)</text>
+
+  <!-- Step 1 -->
+  <rect x="380" y="45" width="290" height="55" rx="6" fill="#161b22" stroke="#7ee787" stroke-width="2"/>
+  <text x="525" y="68" fill="#7ee787" font-size="12" text-anchor="middle" font-weight="bold">ThreadMain() wakes up</text>
+  <text x="525" y="88" fill="#8b949e" font-size="10" text-anchor="middle">Every migCycle ms (default 2000ms)</text>
+
+  <!-- Step 2 -->
+  <rect x="380" y="120" width="290" height="55" rx="6" fill="#161b22" stroke="#7ee787" stroke-width="1.5"/>
+  <text x="525" y="143" fill="#7ee787" font-size="12" text-anchor="middle" font-weight="bold">ScanMigrateWork(ctx)</text>
+  <text x="525" y="163" fill="#8b949e" font-size="10" text-anchor="middle">migration.c &mdash; Main periodic entry point</text>
+
+  <!-- Step 3 -->
+  <rect x="80" y="200" width="250" height="60" rx="6" fill="#161b22" stroke="#58a6ff" stroke-width="1.5"/>
+  <text x="205" y="225" fill="#58a6ff" font-size="11" text-anchor="middle" font-weight="bold">CheckAndRemoveInvalidProcess()</text>
+  <text x="205" y="245" fill="#8b949e" font-size="9" text-anchor="middle">Prune dead PIDs from list</text>
+
+  <rect x="400" y="200" width="250" height="60" rx="6" fill="#161b22" stroke="#58a6ff" stroke-width="1.5"/>
+  <text x="525" y="225" fill="#58a6ff" font-size="11" text-anchor="middle" font-weight="bold">BuildAllPidData()</text>
+  <text x="525" y="245" fill="#8b949e" font-size="9" text-anchor="middle">Read freq data from kernel driver</text>
+
+  <rect x="720" y="200" width="250" height="60" rx="6" fill="#161b22" stroke="#58a6ff" stroke-width="1.5"/>
+  <text x="845" y="225" fill="#58a6ff" font-size="11" text-anchor="middle" font-weight="bold">GetNrFreePagesByNode()</text>
+  <text x="845" y="245" fill="#8b949e" font-size="9" text-anchor="middle">Read /proc/buddyinfo for each node</text>
+
+  <!-- For each process -->
+  <rect x="130" y="290" width="790" height="30" rx="4" fill="#d2a8ff15" stroke="#d2a8ff40"/>
+  <text x="525" y="310" fill="#d2a8ff" font-size="11" text-anchor="middle">FOR EACH ProcessAttribute in manager->processes linked list:</text>
+
+  <!-- Step 4 -->
+  <rect x="80" y="340" width="250" height="55" rx="6" fill="#161b22" stroke="#ffa657" stroke-width="1.5"/>
+  <text x="205" y="363" fill="#ffa657" font-size="11" text-anchor="middle" font-weight="bold">PreMigration(process)</text>
+  <text x="205" y="383" fill="#8b949e" font-size="9" text-anchor="middle">Validate state, check forbidden nodes</text>
+
+  <!-- Step 5 -->
+  <rect x="380" y="340" width="250" height="55" rx="6" fill="#161b22" stroke="#7ee787" stroke-width="1.5"/>
+  <text x="505" y="363" fill="#7ee787" font-size="11" text-anchor="middle" font-weight="bold">RunStrategy(process, mlist)</text>
+  <text x="505" y="383" fill="#8b949e" font-size="9" text-anchor="middle">Sort by freq, find threshold, build list</text>
+
+  <!-- Step 6 -->
+  <rect x="700" y="340" width="250" height="55" rx="6" fill="#161b22" stroke="#ff7b72" stroke-width="1.5"/>
+  <text x="825" y="363" fill="#ff7b72" font-size="11" text-anchor="middle" font-weight="bold">PerformMigration(process)</text>
+  <text x="825" y="383" fill="#8b949e" font-size="9" text-anchor="middle">Build msg from mlist &rarr; ioctl</text>
+
+  <!-- Step 7: ioctl -->
+  <rect x="200" y="425" width="650" height="50" rx="6" fill="#161b22" stroke="#ffa657" stroke-width="2"/>
+  <text x="525" y="448" fill="#ffa657" font-size="12" text-anchor="middle" font-weight="bold">DoMigration(mMsg, manager) &mdash; ioctl(fd, SMAP_MIG_MIGRATE, &amp;msg)</text>
+  <text x="525" y="465" fill="#8b949e" font-size="9" text-anchor="middle">Cross user/kernel boundary via /dev/smap_mig_device</text>
+
+  <!-- Kernel space marker -->
+  <rect x="30" y="495" width="990" height="30" rx="0" fill="#ffa65710" stroke="none"/>
+  <text x="525" y="515" fill="#ffa657" font-size="11" text-anchor="middle" font-weight="bold">&mdash;&mdash; KERNEL SPACE &mdash;&mdash;</text>
+
+  <!-- Step 8 -->
+  <rect x="200" y="540" width="300" height="50" rx="6" fill="#161b22" stroke="#ff7b72" stroke-width="1.5"/>
+  <text x="350" y="563" fill="#ff7b72" font-size="11" text-anchor="middle" font-weight="bold">__ioctl_migrate()</text>
+  <text x="350" y="580" fill="#8b949e" font-size="9" text-anchor="middle">copy_from_user, validate, call do_migrate()</text>
+
+  <rect x="550" y="540" width="300" height="50" rx="6" fill="#161b22" stroke="#ff7b72" stroke-width="1.5"/>
+  <text x="700" y="563" fill="#ff7b72" font-size="11" text-anchor="middle" font-weight="bold">do_migrate(msg, mig_list)</text>
+  <text x="700" y="580" fill="#8b949e" font-size="9" text-anchor="middle">Iterate list entries, resolve PAs</text>
+
+  <!-- Step 9 -->
+  <rect x="80" y="615" width="250" height="55" rx="6" fill="#161b22" stroke="#ffa657" stroke-width="1.5"/>
+  <text x="205" y="638" fill="#ffa657" font-size="11" text-anchor="middle" font-weight="bold">walk_pid_pagemap(pm)</text>
+  <text x="205" y="655" fill="#8b949e" font-size="9" text-anchor="middle">Walk /proc/pid/pagemap for PFNs</text>
+
+  <rect x="380" y="615" width="280" height="55" rx="6" fill="#161b22" stroke="#ffa657" stroke-width="1.5"/>
+  <text x="520" y="638" fill="#ffa657" font-size="11" text-anchor="middle" font-weight="bold">convert_pos_to_paddr_sorted()</text>
+  <text x="520" y="655" fill="#8b949e" font-size="9" text-anchor="middle">Bitmap pos &rarr; sorted phys addr list</text>
+
+  <rect x="710" y="615" width="280" height="55" rx="6" fill="#161b22" stroke="#ff7b72" stroke-width="1.5"/>
+  <text x="850" y="638" fill="#ff7b72" font-size="11" text-anchor="middle" font-weight="bold">smap_migrate(folios, nr, to_node)</text>
+  <text x="850" y="655" fill="#8b949e" font-size="9" text-anchor="middle">Core: isolate + migrate_pages()</text>
+
+  <!-- Step 10 -->
+  <rect x="280" y="695" width="490" height="55" rx="6" fill="#161b22" stroke="#ff7b72" stroke-width="2"/>
+  <text x="525" y="718" fill="#ff7b72" font-size="12" text-anchor="middle" font-weight="bold">migrate_multi_threaded() or migrate_single_thread()</text>
+  <text x="525" y="738" fill="#8b949e" font-size="10" text-anchor="middle">Partition folios across kthreads: fp_isolate &rarr; fp_migrate_pages &rarr; fp_putback</text>
+
+  <!-- Step 11: Result -->
+  <rect x="200" y="775" width="650" height="50" rx="6" fill="#161b22" stroke="#7ee787" stroke-width="1.5"/>
+  <text x="525" y="798" fill="#7ee787" font-size="12" text-anchor="middle" font-weight="bold">UpdateMigResult(mMsg, manager) &mdash; Update process stats with success/fail counts</text>
+  <text x="525" y="815" fill="#8b949e" font-size="9" text-anchor="middle">MigList.nr = successful, MigList.failedMigNr = failed, MigList.failedIsolatedNr = isolation failures</text>
+
+  <!-- Flow arrows -->
+  <line x1="525" y1="100" x2="525" y2="118" stroke="#58a6ff" stroke-width="1.5" marker-end="url(#fl-a)"/>
+  <line x1="525" y1="175" x2="205" y2="198" stroke="#58a6ff" stroke-width="1.2" marker-end="url(#fl-a)"/>
+  <line x1="525" y1="175" x2="525" y2="198" stroke="#58a6ff" stroke-width="1.2" marker-end="url(#fl-a)"/>
+  <line x1="525" y1="175" x2="845" y2="198" stroke="#58a6ff" stroke-width="1.2" marker-end="url(#fl-a)"/>
+  <line x1="205" y1="260" x2="205" y2="338" stroke="#58a6ff" stroke-width="1.2" marker-end="url(#fl-a)"/>
+  <line x1="330" y1="367" x2="378" y2="367" stroke="#7ee787" stroke-width="1.5" marker-end="url(#fl-b)"/>
+  <line x1="630" y1="367" x2="698" y2="367" stroke="#ff7b72" stroke-width="1.5" marker-end="url(#fl-c)"/>
+  <line x1="825" y1="395" x2="525" y2="423" stroke="#ffa657" stroke-width="1.5" marker-end="url(#fl-c)"/>
+  <line x1="525" y1="475" x2="350" y2="538" stroke="#ff7b72" stroke-width="1.5" marker-end="url(#fl-c)"/>
+  <line x1="500" y1="565" x2="548" y2="565" stroke="#ff7b72" stroke-width="1.2" marker-end="url(#fl-c)"/>
+  <line x1="700" y1="590" x2="520" y2="613" stroke="#ffa657" stroke-width="1.2" marker-end="url(#fl-c)"/>
+  <line x1="700" y1="590" x2="850" y2="613" stroke="#ff7b72" stroke-width="1.2" marker-end="url(#fl-c)"/>
+  <line x1="205" y1="670" x2="380" y2="643" stroke="#ffa657" stroke-width="1.2" marker-end="url(#fl-c)"/>
+  <line x1="850" y1="670" x2="525" y2="693" stroke="#ff7b72" stroke-width="1.5" marker-end="url(#fl-c)"/>
+  <line x1="525" y1="750" x2="525" y2="773" stroke="#7ee787" stroke-width="1.5" marker-end="url(#fl-b)"/>
+</svg>
+</div>
+
+<h3>OOM Emergency Migration</h3>
+<div class="card">
+<p>When local memory is exhausted, <code>ubturbo_smap_urgent_migrate_out(size)</code> triggers an emergency path:</p>
+<ol>
+<li><code>FindPidMigrateSize()</code> identifies processes with the most remote-eligible pages</li>
+<li>Bypasses normal strategy &mdash; migrates all possible cold pages immediately</li>
+<li>Process state set to <code>PROC_MOVE</code> during emergency migration</li>
+<li>Does not wait for frequency data &mdash; uses last known scan results</li>
+</ol>
+</div>
+
+
+<!-- ============================================================ -->
+<h2 id="data-structures">9. Core Data Structures</h2>
+
+<h3>Kernel Message Structures</h3>
+<p class="file-ref">smap_msg.h, mig_init.h, migrate_task.h</p>
+
+<pre><code>// ioctl message for hotness migration
+struct migrate_msg {
+    int cnt;                          // number of migration list entries
+    struct mig_pra mul_mig;           // {pageSize, nrThread, isMulThread}
+    struct mig_list *mig_list;        // array of per-process migration data
+};
+
+struct mig_list {
+    bool success_to_user;
+    u64 nr;                           // pages to migrate
+    u64 failed_mig_nr;                // migration failures
+    u64 failed_isolated_nr;           // isolation failures
+    pid_t pid;
+    int from;                         // source NUMA node
+    int to;                           // destination NUMA node
+    u64 *addr;                        // physical address array
+};
+
+// Migrate-back task management
+struct migrate_back_task {
+    unsigned long long task_id;
+    int subtask_cnt;
+    int progress;
+    enum migrate_back_task_status status;  // CREATED/WAITING/DONE/ERR
+    struct list_head task_node;
+    struct list_head subtask;
+};
+
+struct migrate_back_subtask {
+    bool isolated_flag;
+    int src_nid, dest_nid;
+    struct migrate_back_task *task;
+    enum mb_subtask_status status;    // WAITING/DONE/ERR
+    u64 pa_start, pa_end;             // physical address range
+    struct list_head task_list;
+};</code></pre>
+
+<h3>User-Space Strategy Structures</h3>
+<p class="file-ref">manage.h, separate_strategy.h</p>
+
+<pre><code>// Per-page frequency data (from kernel access tracking)
+typedef struct {
+    uint64_t addr;        // physical address
+    actc_t freq;          // access frequency (0-256)
+    uint8_t prior;        // priority level
+    bool isWhiteListPage; // skip flag
+} ActcData;
+
+// Frequency statistics summary per NUMA node
+typedef struct {
+    uint16_t freqMin, freqMax;  // frequency range
+    uint32_t freqZero;          // pages with zero accesses
+    uint64_t freqNum;           // total non-zero freq pages
+    uint64_t pageNum;           // total pages scanned
+    uint64_t freqSum;           // sum of all frequencies
+} ActCount;
+
+// Strategy output parameters
+typedef struct {
+    uint64_t maxMigrate;  // max pages to migrate
+    uint32_t freqWt;      // frequency weight for threshold
+    uint32_t slowThred;   // slow threshold value
+} SeparateParam;
+
+// Strategy decision per NUMA node
+typedef struct {
+    ...
+    MigrateDirection dir[MAX_NODES];  // DEMOTE/PROMOTE/SWAP per node
+    uint32_t nrMigratePages[MAX_NODES][MAX_NODES]; // page count matrix
+    SeparateParam separateParam;
+} StrategyAttribute;
+
+// Remote NUMA capacity tracking
+struct RemoteNumaInfo {
+    EnvMutex lock;
+    uint64_t privateSize[LOCAL_NUMA_NUM][REMOTE_NUMA_NUM];  // per-L1 allocated
+    uint64_t sharedSize[REMOTE_NUMA_NUM];                    // shared capacity
+    struct RemoteNumaUsedInfo usedInfo[REMOTE_NUMA_NUM];     // actual usage
+};</code></pre>
+
+<h3>OBMM Region (UB Bus Integration)</h3>
+<p class="file-ref">smap_migrate_wrapper.h</p>
+
+<pre><code>// Remote memory region managed by OBMM (UB Bus)
+struct obmm_import_region {
+    struct obmm_region region;
+    u64 uba;              // UB Bus address
+    unsigned int tokenid;
+    u32 dcna, scna;       // destination/source CNA
+    struct resource *parent, *resource;
+    u64 pa;               // imported physical address
+    int numa_id;           // assigned NUMA node ID
+    void *preimport_handle;
+};</code></pre>
+
+
+<!-- ============================================================ -->
+<h2 id="config">10. Configuration &amp; Persistence</h2>
+
+<div class="card">
+<h3>Configuration Files</h3>
+<table>
+<tr><th>Path</th><th>Format</th><th>Content</th></tr>
+<tr><td><code>/dev/shm/smap_config</code></td><td>Binary</td><td>Process configs, NUMA capacity, run mode. Survives module restart.</td></tr>
+<tr><td><code>/dev/shm/ubturbo_page_type.dat</code></td><td>Binary (4B)</td><td>Page type (0=4K, 1=2M). Persists last SDK init.</td></tr>
+<tr><td><code>/opt/ubturbo/conf/smap/period.config</code></td><td>Text</td><td>Scan/migration period configuration.</td></tr>
+</table>
+
+<h3>Config Binary Layout (/dev/shm/smap_config)</h3>
+<pre><code>SmapConfigHeader (8 bytes):
+| ver (1B) | runMode (1B) | headerLen (2B) | totalLen (4B) |
+
+NUMA Payload Section:
+| numaCount (4B) | NumaPayload[numaCount] |
+  NumaPayload (12B each): int16 local, int16 remote, uint32 size_MB
+
+Process Payload Section:
+| procCount (4B) | ProcessPayload[procCount] |
+  ProcessPayload: pid, scanType, type, state, migrateMode,
+                  numaNodes, scanTime, duration,
+                  count, migrate_params[]</code></pre>
+
+<h3>Recovery Sequence</h3>
+<ol>
+<li><code>RecoverFromConfig()</code> reads <code>/dev/shm/smap_config</code> at startup</li>
+<li>Restores run mode (WATERLINE or MEM_POOL)</li>
+<li>Restores NUMA capacity allocations</li>
+<li>Re-adds tracked processes with their migration parameters</li>
+<li>Validated against config version <code>SMAP_CONFIG_VER=1</code></li>
+</ol>
+</div>
+
+<h3>Initialization Sequence</h3>
+
+<div class="svg-container">
+<svg viewBox="0 0 1050 380" xmlns="http://www.w3.org/2000/svg" font-family="system-ui, sans-serif">
+  <defs>
+    <marker id="in-a" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <path d="M0,0 L8,3 L0,6" fill="none" stroke="#58a6ff" stroke-width="1.2"/>
+    </marker>
+  </defs>
+
+  <text x="525" y="25" fill="#e6edf3" font-size="14" text-anchor="middle" font-weight="bold">System Boot &rarr; SMAP Ready</text>
+
+  <rect x="30" y="45" width="190" height="60" rx="6" fill="#161b22" stroke="#d2a8ff" stroke-width="1.5"/>
+  <text x="125" y="70" fill="#d2a8ff" font-size="11" text-anchor="middle" font-weight="bold">Phase 1: Module Load</text>
+  <text x="125" y="90" fill="#8b949e" font-size="9" text-anchor="middle">TurboModuleSmap::Start()</text>
+
+  <rect x="240" y="45" width="190" height="60" rx="6" fill="#161b22" stroke="#ffa657" stroke-width="1.5"/>
+  <text x="335" y="70" fill="#ffa657" font-size="11" text-anchor="middle" font-weight="bold">Phase 2: dlopen</text>
+  <text x="335" y="90" fill="#8b949e" font-size="9" text-anchor="middle">OpenSmapHandler() &rarr; 17 syms</text>
+
+  <rect x="450" y="45" width="190" height="60" rx="6" fill="#161b22" stroke="#7ee787" stroke-width="1.5"/>
+  <text x="545" y="70" fill="#7ee787" font-size="11" text-anchor="middle" font-weight="bold">Phase 3: IPC Register</text>
+  <text x="545" y="90" fill="#8b949e" font-size="9" text-anchor="middle">RegSmapHandler() 19 services</text>
+
+  <rect x="660" y="45" width="190" height="60" rx="6" fill="#161b22" stroke="#ff7b72" stroke-width="1.5"/>
+  <text x="755" y="70" fill="#ff7b72" font-size="11" text-anchor="middle" font-weight="bold">Phase 4: Kernel Init</text>
+  <text x="755" y="90" fill="#8b949e" font-size="9" text-anchor="middle">g_smapInit(pageType, log)</text>
+
+  <rect x="870" y="45" width="150" height="60" rx="6" fill="#161b22" stroke="#58a6ff" stroke-width="1.5"/>
+  <text x="945" y="70" fill="#58a6ff" font-size="11" text-anchor="middle" font-weight="bold">Phase 5: Recovery</text>
+  <text x="945" y="90" fill="#8b949e" font-size="9" text-anchor="middle">RecoverFromConfig()</text>
+
+  <line x1="220" y1="75" x2="238" y2="75" stroke="#58a6ff" stroke-width="1.2" marker-end="url(#in-a)"/>
+  <line x1="430" y1="75" x2="448" y2="75" stroke="#58a6ff" stroke-width="1.2" marker-end="url(#in-a)"/>
+  <line x1="640" y1="75" x2="658" y2="75" stroke="#58a6ff" stroke-width="1.2" marker-end="url(#in-a)"/>
+  <line x1="850" y1="75" x2="868" y2="75" stroke="#58a6ff" stroke-width="1.2" marker-end="url(#in-a)"/>
+
+  <!-- Kernel init detail -->
+  <rect x="30" y="130" width="990" height="100" rx="6" fill="#161b22" stroke="#ff7b72" stroke-width="1"/>
+  <text x="525" y="155" fill="#ff7b72" font-size="12" text-anchor="middle" font-weight="bold">Kernel Module Initialization Detail</text>
+  <text x="50" y="178" fill="#8b949e" font-size="10">1. <code>smap_process_symbols()</code> &mdash; kprobe lookup for migrate_pages, isolate_folio_to_list, putback_movable_pages</text>
+  <text x="50" y="196" fill="#8b949e" font-size="10">2. <code>init_migrate()</code> &mdash; Register char device /dev/smap_mig_device, class, device node</text>
+  <text x="50" y="214" fill="#8b949e" font-size="10">3. Access tracking driver init &mdash; Create per-node /dev/smap_nodeN devices, setup workqueues</text>
+
+  <!-- ProcessManager init -->
+  <rect x="30" y="250" width="990" height="100" rx="6" fill="#161b22" stroke="#7ee787" stroke-width="1"/>
+  <text x="525" y="275" fill="#7ee787" font-size="12" text-anchor="middle" font-weight="bold">ProcessManager Initialization (ProcessManagerInit)</text>
+  <text x="50" y="298" fill="#8b949e" font-size="10">1. Detect page size (4K/64K) via sysconf &rarr; set g_pageSizeNormal, g_pageSizeHuge=2M</text>
+  <text x="50" y="316" fill="#8b949e" font-size="10">2. Open kernel device FDs: /dev/smap_mig_device, /dev/smap_node[0-21], /dev/smap_access_device</text>
+  <text x="50" y="334" fill="#8b949e" font-size="10">3. RemoteNumaInfoInit() &mdash; zero 4x18 privateSize + 18 sharedSize matrices, init lock</text>
+  <text x="50" y="352" fill="#8b949e" font-size="10">4. InitThread(manager, period, ScanMigrateWork) &mdash; Start periodic migration thread</text>
+</svg>
+</div>
+
+
+<!-- ============================================================ -->
+<h2 id="references">11. Source File Reference</h2>
+
+<h3>Kernel Modules <span class="tag tag-kernel">kernel</span></h3>
+<table>
+<tr><th>File</th><th>Lines</th><th>Purpose</th></tr>
+<tr><td><code>plugins/smap/src/tiering/smap_migrate_pages.c</code></td><td>1069</td><td>Core migration engine: do_migrate, smap_migrate, multi-threading</td></tr>
+<tr><td><code>plugins/smap/src/tiering/mig_init.c</code></td><td>593</td><td>Char device /dev/smap_mig_device, ioctl dispatcher</td></tr>
+<tr><td><code>plugins/smap/src/tiering/smap_migrate_wrapper.c</code></td><td>&mdash;</td><td>Kprobe-based kernel symbol resolution</td></tr>
+<tr><td><code>plugins/smap/src/tiering/rmap.c</code></td><td>&mdash;</td><td>Reverse mapping: find_page_task, anon/file rmap walks</td></tr>
+<tr><td><code>plugins/smap/src/tiering/acpi_mem.c</code></td><td>&mdash;</td><td>ACPI SRAT parsing, NUMA topology, calc_paddr_acidx</td></tr>
+<tr><td><code>plugins/smap/src/tiering/migrate_task.c</code></td><td>&mdash;</td><td>Migrate-back task/subtask lifecycle management</td></tr>
+<tr><td><code>plugins/smap/src/tiering/coherence_maintain.c</code></td><td>&mdash;</td><td>Memory coherence maintenance during migration</td></tr>
+</table>
+
+<h3>Access Tracking Drivers <span class="tag tag-driver">driver</span></h3>
+<table>
+<tr><th>File</th><th>Lines</th><th>Purpose</th></tr>
+<tr><td><code>plugins/smap/src/drivers/accessed_bit.c</code></td><td>1474</td><td>AF-bit PTE scanning: 4K and 2M modes, KVM stage-2 walk</td></tr>
+<tr><td><code>plugins/smap/src/drivers/access_tracking.c</code></td><td>592</td><td>Workqueue setup, delayed_work periodic scanning, submit_one_work</td></tr>
+<tr><td><code>plugins/smap/src/drivers/access_acpi_mem.c</code></td><td>&mdash;</td><td>Hardware ACTC counter reading via ACPI</td></tr>
+<tr><td><code>plugins/smap/src/drivers/access_pid.c</code></td><td>&mdash;</td><td>Per-PID tracking state: add/remove/query, pagemap walk</td></tr>
+<tr><td><code>plugins/smap/src/drivers/kvm_pgtable.c</code></td><td>&mdash;</td><td>KVM stage-2 page table walking for VM mode</td></tr>
+<tr><td><code>plugins/smap/src/drivers/hist_tracking.c</code></td><td>&mdash;</td><td>Historical tracking / histogram operations</td></tr>
+</table>
+
+<h3>User-Space Strategy <span class="tag tag-user">user</span></h3>
+<table>
+<tr><th>File</th><th>Lines</th><th>Purpose</th></tr>
+<tr><td><code>plugins/smap/src/user/strategy/separate_strategy.c</code></td><td>&mdash;</td><td>Core frequency-based strategy: sort, threshold, page selection</td></tr>
+<tr><td><code>plugins/smap/src/user/strategy/strategy.c</code></td><td>&mdash;</td><td>RunStrategy() dispatcher, free page queries</td></tr>
+<tr><td><code>plugins/smap/src/user/strategy/migration.c</code></td><td>&mdash;</td><td>ScanMigrateWork periodic loop, BuildMigrationMsg, DoMigration</td></tr>
+<tr><td><code>plugins/smap/src/user/manage/manage.c</code></td><td>&mdash;</td><td>ProcessManager init/destroy, process add/remove lifecycle</td></tr>
+<tr><td><code>plugins/smap/src/user/manage/thread.c</code></td><td>&mdash;</td><td>InitThread, DestroyAllThread, ThreadMain loop</td></tr>
+<tr><td><code>plugins/smap/src/user/manage/smap_config.c</code></td><td>&mdash;</td><td>Binary config persistence to /dev/shm/smap_config</td></tr>
+<tr><td><code>plugins/smap/src/user/manage/oom_migrate.c</code></td><td>&mdash;</td><td>Emergency OOM migration handler</td></tr>
+<tr><td><code>plugins/smap/src/user/advanced-strategy/scene.c</code></td><td>&mdash;</td><td>Scene classification: light/heavy/unstable</td></tr>
+</table>
+
+<h3>IPC &amp; SDK <span class="tag tag-ipc">IPC</span></h3>
+<table>
+<tr><th>File</th><th>Lines</th><th>Purpose</th></tr>
+<tr><td><code>src/smap/smap_interface.h</code></td><td>319</td><td>Public C API header: 17 functions, message structs</td></tr>
+<tr><td><code>src/smap/client/smap_client.cpp</code></td><td>592</td><td>SDK client: encode &rarr; IPC &rarr; decode for all functions</td></tr>
+<tr><td><code>src/smap/smap_handler_msg.h</code></td><td>180</td><td>19 codec classes for message serialization</td></tr>
+<tr><td><code>src/smap/server/turbo_module_smap.cpp</code></td><td>810</td><td>IPC server: dlopen, handler registration, lifecycle</td></tr>
+</table>
+
+<hr>
+<p style="color:#8b949e; font-size:0.85rem; margin-top:2rem;">
+Generated from source analysis of <a href="https://gitcode.com/openeuler/ubturbo">openeuler/ubturbo</a> repository.
+SMAP version 6.0, Mulan PSL v2 licensed. Document created 2026-04-15.
+</p>
+
+</body>
+</html>
