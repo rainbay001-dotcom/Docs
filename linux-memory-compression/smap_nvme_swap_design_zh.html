@@ -1,0 +1,978 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>SMAP NVMe Swap — 冷页换出设计提案</title>
+<style>
+:root { --bg: #0d1117; --surface: #161b22; --border: #30363d; --text: #e6edf3; --muted: #8b949e;
+  --green: #3fb950; --blue: #58a6ff; --purple: #bc8cff; --orange: #d29922; --red: #f85149; --cyan: #39d2c0; }
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { background: var(--bg); color: var(--text); font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', monospace;
+  line-height: 1.7; padding: 40px 60px; max-width: 1200px; margin: 0 auto; }
+h1 { color: var(--green); font-size: 2em; margin-bottom: 8px; }
+h2 { color: var(--blue); font-size: 1.4em; margin: 40px 0 16px; border-left: 3px solid var(--blue); padding-left: 12px; }
+h3 { color: var(--purple); font-size: 1.15em; margin: 28px 0 12px; }
+h4 { color: var(--orange); font-size: 1em; margin: 20px 0 8px; }
+hr { border: none; border-top: 2px solid var(--blue); margin: 20px 0 30px; }
+p { margin: 10px 0; }
+a { color: var(--blue); text-decoration: none; }
+code { background: var(--surface); padding: 2px 6px; border-radius: 4px; font-size: 0.92em; color: var(--cyan); }
+pre { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 16px 20px;
+  overflow-x: auto; margin: 12px 0; font-size: 0.88em; line-height: 1.6; }
+pre code { background: none; padding: 0; color: var(--text); }
+table { border-collapse: collapse; width: 100%; margin: 16px 0; }
+th, td { border: 1px solid var(--border); padding: 10px 14px; text-align: left; }
+th { background: var(--surface); color: var(--blue); }
+td { color: var(--text); }
+tr:nth-child(even) td { background: rgba(22,27,34,0.5); }
+.subtitle { color: var(--muted); font-size: 0.95em; margin-bottom: 6px; }
+.badge { display: inline-block; padding: 2px 10px; border-radius: 12px; font-size: 0.8em; font-weight: bold; margin-right: 6px; }
+.badge-green { background: rgba(63,185,80,0.15); color: var(--green); border: 1px solid var(--green); }
+.badge-orange { background: rgba(210,153,34,0.15); color: var(--orange); border: 1px solid var(--orange); }
+.badge-red { background: rgba(248,81,73,0.15); color: var(--red); border: 1px solid var(--red); }
+.badge-purple { background: rgba(188,140,255,0.15); color: var(--purple); border: 1px solid var(--purple); }
+.note { background: rgba(88,166,255,0.08); border-left: 3px solid var(--blue); padding: 12px 16px; margin: 16px 0; border-radius: 0 6px 6px 0; }
+.warn { background: rgba(210,153,34,0.08); border-left: 3px solid var(--orange); padding: 12px 16px; margin: 16px 0; border-radius: 0 6px 6px 0; }
+.svg-wrap { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 20px; margin: 20px 0; overflow-x: auto; }
+ul, ol { margin: 8px 0 8px 24px; }
+li { margin: 4px 0; }
+.toc { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 20px 28px; margin: 20px 0; }
+.toc ul { list-style: none; margin: 0; padding: 0; }
+.toc li { margin: 4px 0; }
+.toc li ul { padding-left: 20px; }
+.toc a { color: var(--muted); }
+.toc a:hover { color: var(--blue); }
+.kw { color: var(--purple); } .fn { color: var(--blue); } .cm { color: var(--muted); font-style: italic; }
+.str { color: var(--green); } .num { color: var(--orange); }
+</style>
+</head>
+<body>
+
+<h1>SMAP NVMe Swap: 为内存分层添加冷页换出功能</h1>
+<p class="subtitle">设计提案 &mdash; ubturbo/SMAP (openEuler) &mdash; 2026 年 4 月</p>
+<p class="subtitle">源码位置: <code>plugins/smap/</code> + <code>src/smap/</code> (ubturbo 仓库)</p>
+<hr>
+
+<!-- ─── 目录 ─── -->
+<div class="toc">
+<strong style="color:var(--green)">目录</strong>
+<ul>
+<li>1. <a href="#background">背景与问题陈述</a>
+  <ul>
+    <li>1.1 <a href="#smap-today">SMAP 现状: 仅内存层级迁移</a></li>
+    <li>1.2 <a href="#gap">缺口: 没有通向持久化存储的路径</a></li>
+    <li>1.3 <a href="#why-nvme">为什么需要 NVMe Swap</a></li>
+  </ul>
+</li>
+<li>2. <a href="#arch-overview">架构概览</a>
+  <ul>
+    <li>2.1 <a href="#current-arch">当前 SMAP 架构</a></li>
+    <li>2.2 <a href="#proposed-arch">新增 NVMe Swap 后的架构</a></li>
+  </ul>
+</li>
+<li>3. <a href="#design">详细设计</a>
+  <ul>
+    <li>3.1 <a href="#strategy">策略层: 三级决策引擎</a></li>
+    <li>3.2 <a href="#swap-module">内核模块: swap_out / swap_in 路径</a></li>
+    <li>3.3 <a href="#backing-dev">后端设备管理</a></li>
+    <li>3.4 <a href="#accounting">Swap 记账与限制</a></li>
+    <li>3.5 <a href="#config">配置与接口</a></li>
+  </ul>
+</li>
+<li>4. <a href="#data-structures">新增数据结构</a></li>
+<li>5. <a href="#code-changes">代码变更清单</a></li>
+<li>6. <a href="#flow">运行流程</a></li>
+<li>7. <a href="#integration">与内核 Swap 子系统的集成</a></li>
+<li>8. <a href="#tradeoffs">设计权衡与替代方案</a></li>
+<li>9. <a href="#references">参考资料</a></li>
+</ul>
+</div>
+
+<!-- ─── 1. 背景 ─── -->
+<h2 id="background">1. 背景与问题陈述</h2>
+
+<h3 id="smap-today">1.1 SMAP 现状: 仅内存层级迁移</h3>
+
+<p>ubturbo 中的 SMAP (Smart Memory Adaptive Platform) 管理两级内存层次结构:</p>
+
+<table>
+<tr><th>层级</th><th>介质</th><th>延迟</th><th>容量</th><th>SMAP 角色</th></tr>
+<tr><td><span class="badge badge-green">L1</span> 本地 NUMA</td><td>DRAM (DDR5)</td><td>~80&ndash;120 ns</td><td>基础容量</td><td>热页驻留于此</td></tr>
+<tr><td><span class="badge badge-orange">L2</span> 远端 NUMA</td><td>CXL / PMEM / UB 互连</td><td>~200&ndash;500 ns</td><td>扩展池</td><td>冷页降级至此</td></tr>
+</table>
+
+<p>迁移通过内核的 <code>migrate_pages()</code> 系统调用实现, 在
+<code>plugins/smap/src/tiering/smap_migrate_wrapper.c</code> 中通过 kprobes 进行封装。
+<code>plugins/smap/src/user/strategy/separate_strategy.c</code> 中的策略引擎按访问频率
+(硬件 ACTC 计数器或软件 AF 位扫描) 对页面排序, 选择冷的本地页进行降级, 热的远端页进行提升。</p>
+
+<p><code>manage.h:95-99</code> 中定义的三种迁移方向:</p>
+<pre><code><span class="kw">typedef enum</span> {
+    DEMOTE,    <span class="cm">// 冷页 L1 &rarr; L2</span>
+    PROMOTE,   <span class="cm">// 热页 L2 &rarr; L1</span>
+    SWAP,      <span class="cm">// 双向交换 (冷 L1 &harr; 热 L2)</span>
+} <span class="fn">MigrateDirection</span>;</code></pre>
+
+<h3 id="gap">1.2 缺口: 没有通向持久化存储的路径</h3>
+
+<p>当 L1 和 L2 内存同时面临压力时, SMAP 没有泄压阀。
+<code>ubturbo_smap_urgent_migrate_out()</code> 函数只能在 NUMA 节点之间降级 &mdash; 无法溢出到块设备。
+如果远端 NUMA 也已满, 系统将触发 OOM。</p>
+
+<div class="warn">
+<strong>当前限制:</strong> SMAP 的 <code>MigrateDirection</code> 枚举没有到磁盘的 <code>SWAP_OUT</code> 方向。
+<code>oom_migrate.h:FindPidMigrateSize()</code> 只能为 NUMA 降级寻找候选页, 不支持磁盘 swap。
+整个内核模块 (<code>smap_migrate_pages.c</code>) 完全基于 <code>migrate_pages()</code> 工作 &mdash; 从不发起块 I/O。
+</div>
+
+<h3 id="why-nvme">1.3 为什么需要 NVMe Swap</h3>
+
+<ul>
+<li><strong>内存超分:</strong> 虚拟机密度场景中, 虚拟机内存总量超过物理 DRAM + CXL 容量</li>
+<li><strong>消除冷尾巴:</strong> 在多个扫描窗口中访问频率为零的页面正在占用昂贵的内存</li>
+<li><strong>成本效率:</strong> NVMe 每 GB 成本约为 CXL 内存的 1/10, 约为 DRAM 的 1/50</li>
+<li><strong>优雅降级:</strong> 与其 OOM 杀死虚拟机, 不如以 ~10&ndash;100 &mu;s 的延迟将最冷的页面溢出到 NVMe</li>
+</ul>
+
+<p>带延迟信息的三级层次结构提案:</p>
+<table>
+<tr><th>层级</th><th>介质</th><th>延迟</th><th>SMAP 操作</th></tr>
+<tr><td><span class="badge badge-green">L1</span></td><td>本地 DRAM</td><td>~100 ns</td><td>保留热页</td></tr>
+<tr><td><span class="badge badge-orange">L2</span></td><td>远端 NUMA (CXL)</td><td>~300 ns</td><td>降级温页</td></tr>
+<tr><td><span class="badge badge-red">L3</span></td><td>NVMe SSD</td><td>~10&ndash;100 &mu;s</td><td><strong>换出最冷页面 (新增)</strong></td></tr>
+</table>
+
+
+<!-- ─── 2. 架构 ─── -->
+<h2 id="arch-overview">2. 架构概览</h2>
+
+<h3 id="current-arch">2.1 当前 SMAP 架构</h3>
+
+<div class="svg-wrap">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 420" width="1000" height="420">
+  <defs>
+    <marker id="a1" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <polygon points="0 0, 8 3, 0 6" fill="#3fb950"/>
+    </marker>
+    <marker id="a2" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <polygon points="0 0, 8 3, 0 6" fill="#d29922"/>
+    </marker>
+  </defs>
+  <rect width="1000" height="420" rx="10" fill="#0d1117"/>
+  <text x="500" y="28" text-anchor="middle" fill="#3fb950" font-family="monospace" font-size="14" font-weight="bold">SMAP — 当前架构 (仅内存层级)</text>
+
+  <!-- RMRS / 用户空间 -->
+  <rect x="30" y="50" width="200" height="50" rx="6" fill="#161b22" stroke="#58a6ff"/>
+  <text x="130" y="80" text-anchor="middle" fill="#58a6ff" font-family="monospace" font-size="11">RMRS 插件</text>
+
+  <rect x="260" y="50" width="200" height="50" rx="6" fill="#161b22" stroke="#58a6ff"/>
+  <text x="360" y="73" text-anchor="middle" fill="#e6edf3" font-family="monospace" font-size="10">ubturbo SDK</text>
+  <text x="360" y="88" text-anchor="middle" fill="#8b949e" font-family="monospace" font-size="8">UBTurboRMRSAgent*()</text>
+
+  <line x1="230" y1="75" x2="260" y2="75" stroke="#58a6ff" stroke-width="1.5" marker-end="url(#a1)"/>
+
+  <!-- IPC -->
+  <line x1="360" y1="100" x2="360" y2="130" stroke="#3fb950" stroke-width="1.5" marker-end="url(#a1)"/>
+  <text x="375" y="120" fill="#8b949e" font-family="monospace" font-size="8">IPC (UDS)</text>
+
+  <!-- SMAP 用户空间 -->
+  <rect x="180" y="135" width="360" height="55" rx="6" fill="#161b22" stroke="#3fb950" stroke-width="2"/>
+  <text x="360" y="158" text-anchor="middle" fill="#3fb950" font-family="monospace" font-size="12" font-weight="bold">SMAP 用户空间 (libsmap.so)</text>
+  <text x="360" y="178" text-anchor="middle" fill="#8b949e" font-family="monospace" font-size="9">ProcessManager &bull; 策略引擎 &bull; 冷热追踪</text>
+
+  <!-- 策略细节 -->
+  <rect x="600" y="135" width="370" height="55" rx="6" fill="#161b22" stroke="#bc8cff"/>
+  <text x="785" y="155" text-anchor="middle" fill="#bc8cff" font-family="monospace" font-size="10">策略: separate_strategy.c</text>
+  <text x="785" y="172" text-anchor="middle" fill="#8b949e" font-family="monospace" font-size="8">按频率排序 &rarr; CalLowMigrateNum() &rarr; MigList</text>
+  <text x="785" y="184" text-anchor="middle" fill="#8b949e" font-family="monospace" font-size="8">方向: DEMOTE | PROMOTE | SWAP</text>
+
+  <line x1="540" y1="162" x2="600" y2="162" stroke="#bc8cff" stroke-width="1" stroke-dasharray="3,2"/>
+
+  <!-- ioctl -->
+  <line x1="360" y1="190" x2="360" y2="220" stroke="#3fb950" stroke-width="1.5" marker-end="url(#a1)"/>
+  <text x="375" y="210" fill="#8b949e" font-family="monospace" font-size="8">ioctl(SMAP_MIG_*)</text>
+
+  <!-- SMAP 内核 -->
+  <rect x="130" y="225" width="460" height="55" rx="6" fill="#161b22" stroke="#d29922" stroke-width="2"/>
+  <text x="360" y="248" text-anchor="middle" fill="#d29922" font-family="monospace" font-size="12" font-weight="bold">SMAP 内核模块 (smap_tiering.ko)</text>
+  <text x="360" y="268" text-anchor="middle" fill="#8b949e" font-family="monospace" font-size="9">smap_migrate() &bull; isolate_and_migrate_folios() &bull; 多线程</text>
+
+  <!-- 内核 migrate_pages -->
+  <line x1="360" y1="280" x2="360" y2="310" stroke="#d29922" stroke-width="1.5" marker-end="url(#a2)"/>
+
+  <rect x="200" y="315" width="320" height="40" rx="6" fill="#161b22" stroke="#f85149"/>
+  <text x="360" y="340" text-anchor="middle" fill="#f85149" font-family="monospace" font-size="11">Linux 内核: migrate_pages()</text>
+
+  <!-- 内存层级 -->
+  <rect x="30" y="370" width="180" height="40" rx="6" fill="rgba(63,185,80,0.1)" stroke="#3fb950"/>
+  <text x="120" y="395" text-anchor="middle" fill="#3fb950" font-family="monospace" font-size="11">L1: 本地 DRAM</text>
+
+  <rect x="240" y="370" width="200" height="40" rx="6" fill="rgba(210,153,34,0.1)" stroke="#d29922"/>
+  <text x="340" y="395" text-anchor="middle" fill="#d29922" font-family="monospace" font-size="11">L2: 远端 NUMA (CXL)</text>
+
+  <line x1="210" y1="390" x2="240" y2="390" stroke="#8b949e" stroke-width="1.5" stroke-dasharray="4,2"/>
+  <text x="225" y="384" fill="#8b949e" font-family="monospace" font-size="7">&larr; &rarr;</text>
+
+  <!-- 无 NVMe -->
+  <rect x="480" y="370" width="200" height="40" rx="6" fill="none" stroke="#f85149" stroke-dasharray="4,3"/>
+  <text x="580" y="388" text-anchor="middle" fill="#f85149" font-family="monospace" font-size="10">L3: NVMe</text>
+  <text x="580" y="400" text-anchor="middle" fill="#f85149" font-family="monospace" font-size="8">&cross; 不支持</text>
+
+  <!-- 硬件追踪 -->
+  <rect x="650" y="225" width="320" height="55" rx="6" fill="#161b22" stroke="#39d2c0"/>
+  <text x="810" y="248" text-anchor="middle" fill="#39d2c0" font-family="monospace" font-size="10">冷热检测</text>
+  <text x="810" y="264" text-anchor="middle" fill="#8b949e" font-family="monospace" font-size="8">硬件: ACTC 计数器 (1650 芯片)</text>
+  <text x="810" y="276" text-anchor="middle" fill="#8b949e" font-family="monospace" font-size="8">软件: AF 位页表扫描</text>
+  <line x1="590" y1="252" x2="650" y2="252" stroke="#39d2c0" stroke-width="1" stroke-dasharray="3,2"/>
+</svg>
+</div>
+
+<h3 id="proposed-arch">2.2 新增 NVMe Swap 后的架构</h3>
+
+<div class="svg-wrap">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1060 680" width="1060" height="680">
+  <defs>
+    <marker id="b1" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <polygon points="0 0, 8 3, 0 6" fill="#3fb950"/>
+    </marker>
+    <marker id="b2" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <polygon points="0 0, 8 3, 0 6" fill="#d29922"/>
+    </marker>
+    <marker id="b3" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <polygon points="0 0, 8 3, 0 6" fill="#f85149"/>
+    </marker>
+    <marker id="b4" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <polygon points="0 0, 8 3, 0 6" fill="#bc8cff"/>
+    </marker>
+  </defs>
+  <rect width="1060" height="680" rx="10" fill="#0d1117"/>
+  <text x="530" y="28" text-anchor="middle" fill="#3fb950" font-family="monospace" font-size="14" font-weight="bold">SMAP &mdash; 新增 NVMe Swap (L3 层级) 后的架构</text>
+
+  <!-- 用户空间层 -->
+  <rect x="30" y="50" width="170" height="45" rx="6" fill="#161b22" stroke="#58a6ff"/>
+  <text x="115" y="77" text-anchor="middle" fill="#58a6ff" font-family="monospace" font-size="10">RMRS 插件</text>
+
+  <line x1="200" y1="72" x2="240" y2="72" stroke="#58a6ff" stroke-width="1" marker-end="url(#b1)"/>
+
+  <rect x="240" y="50" width="180" height="45" rx="6" fill="#161b22" stroke="#58a6ff"/>
+  <text x="330" y="70" text-anchor="middle" fill="#e6edf3" font-family="monospace" font-size="10">ubturbo SDK</text>
+  <text x="330" y="85" text-anchor="middle" fill="#8b949e" font-family="monospace" font-size="8">+ SwapOut/SwapIn API</text>
+
+  <!-- SMAP 用户空间 -->
+  <line x1="330" y1="95" x2="330" y2="120" stroke="#3fb950" stroke-width="1.5" marker-end="url(#b1)"/>
+
+  <rect x="100" y="125" width="500" height="55" rx="6" fill="#161b22" stroke="#3fb950" stroke-width="2"/>
+  <text x="350" y="148" text-anchor="middle" fill="#3fb950" font-family="monospace" font-size="12" font-weight="bold">SMAP 用户空间 (libsmap.so)</text>
+  <text x="350" y="168" text-anchor="middle" fill="#8b949e" font-family="monospace" font-size="9">ProcessManager &bull; 三级策略 &bull; Swap 记账</text>
+
+  <!-- 新策略框 -->
+  <rect x="640" y="105" width="390" height="95" rx="6" fill="rgba(248,81,73,0.05)" stroke="#f85149" stroke-width="2"/>
+  <text x="835" y="125" text-anchor="middle" fill="#f85149" font-family="monospace" font-size="11" font-weight="bold">新增: 三级策略引擎</text>
+  <text x="835" y="142" text-anchor="middle" fill="#8b949e" font-family="monospace" font-size="8">1. 按频率排序页面 (已有)</text>
+  <text x="835" y="156" text-anchor="middle" fill="#8b949e" font-family="monospace" font-size="8">2. 冷 L1 &rarr; 降级到 L2 (已有)</text>
+  <text x="835" y="170" text-anchor="middle" fill="#8b949e" font-family="monospace" font-size="8">3. 连续 N 窗口零频率 L2 &rarr; SWAP_OUT 到 L3 (新增)</text>
+  <text x="835" y="184" text-anchor="middle" fill="#8b949e" font-family="monospace" font-size="8">4. 缺页时 &rarr; SWAP_IN 从 L3 取回 (新增)</text>
+  <line x1="600" y1="152" x2="640" y2="152" stroke="#f85149" stroke-width="1" stroke-dasharray="3,2"/>
+
+  <!-- ioctl -->
+  <line x1="350" y1="180" x2="350" y2="215" stroke="#3fb950" stroke-width="1.5" marker-end="url(#b1)"/>
+  <text x="365" y="202" fill="#8b949e" font-family="monospace" font-size="8">ioctl</text>
+
+  <!-- SMAP 内核 - 分为两条路径 -->
+  <rect x="50" y="220" width="600" height="65" rx="6" fill="#161b22" stroke="#d29922" stroke-width="2"/>
+  <text x="350" y="243" text-anchor="middle" fill="#d29922" font-family="monospace" font-size="12" font-weight="bold">SMAP 内核模块 (smap_tiering.ko)</text>
+  <text x="350" y="263" text-anchor="middle" fill="#8b949e" font-family="monospace" font-size="9">smap_migrate() &bull; smap_swap_out() (新增) &bull; smap_swap_in() (新增)</text>
+  <text x="350" y="275" text-anchor="middle" fill="#8b949e" font-family="monospace" font-size="8">多线程 &bull; 按 cgroup 记账 &bull; 异步 I/O</text>
+
+  <!-- 冷热检测 -->
+  <rect x="690" y="220" width="340" height="65" rx="6" fill="#161b22" stroke="#39d2c0"/>
+  <text x="860" y="243" text-anchor="middle" fill="#39d2c0" font-family="monospace" font-size="10">冷热检测</text>
+  <text x="860" y="259" text-anchor="middle" fill="#8b949e" font-family="monospace" font-size="8">硬件 ACTC + 软件 AF 位扫描</text>
+  <text x="860" y="271" text-anchor="middle" fill="#8b949e" font-family="monospace" font-size="8">+ cold_windows 计数器 (新增)</text>
+  <line x1="650" y1="252" x2="690" y2="252" stroke="#39d2c0" stroke-width="1" stroke-dasharray="3,2"/>
+
+  <!-- 分叉: 已有路径 (左) 和新路径 (右) -->
+  <line x1="250" y1="285" x2="250" y2="320" stroke="#d29922" stroke-width="1.5" marker-end="url(#b2)"/>
+  <line x1="450" y1="285" x2="450" y2="320" stroke="#f85149" stroke-width="1.5" marker-end="url(#b3)"/>
+
+  <!-- 已有: migrate_pages -->
+  <rect x="130" y="325" width="240" height="40" rx="6" fill="#161b22" stroke="#d29922"/>
+  <text x="250" y="345" text-anchor="middle" fill="#d29922" font-family="monospace" font-size="10">migrate_pages() [已有]</text>
+  <text x="250" y="358" text-anchor="middle" fill="#8b949e" font-family="monospace" font-size="8">L1 &harr; L2 NUMA 迁移</text>
+
+  <!-- 新增: 块 I/O 路径 -->
+  <rect x="400" y="325" width="280" height="40" rx="6" fill="rgba(248,81,73,0.08)" stroke="#f85149"/>
+  <text x="540" y="345" text-anchor="middle" fill="#f85149" font-family="monospace" font-size="10">smap_swap_bio() [新增]</text>
+  <text x="540" y="358" text-anchor="middle" fill="#8b949e" font-family="monospace" font-size="8">直接块 I/O 到 NVMe</text>
+
+  <!-- 新增: swap map -->
+  <rect x="720" y="325" width="300" height="40" rx="6" fill="rgba(248,81,73,0.08)" stroke="#f85149"/>
+  <text x="870" y="345" text-anchor="middle" fill="#f85149" font-family="monospace" font-size="10">smap_swap_map [新增]</text>
+  <text x="870" y="358" text-anchor="middle" fill="#8b949e" font-family="monospace" font-size="8">NVMe 槽位的位图分配器</text>
+
+  <!-- 指向存储的箭头 -->
+  <line x1="250" y1="365" x2="250" y2="410" stroke="#d29922" stroke-width="1.5" marker-end="url(#b2)"/>
+  <line x1="540" y1="365" x2="540" y2="410" stroke="#f85149" stroke-width="1.5" marker-end="url(#b3)"/>
+
+  <!-- 内存层级 (底部) -->
+  <rect x="30" y="415" width="180" height="50" rx="6" fill="rgba(63,185,80,0.12)" stroke="#3fb950" stroke-width="2"/>
+  <text x="120" y="438" text-anchor="middle" fill="#3fb950" font-family="monospace" font-size="12" font-weight="bold">L1: 本地 DRAM</text>
+  <text x="120" y="455" text-anchor="middle" fill="#8b949e" font-family="monospace" font-size="8">热页</text>
+
+  <rect x="240" y="415" width="200" height="50" rx="6" fill="rgba(210,153,34,0.12)" stroke="#d29922" stroke-width="2"/>
+  <text x="340" y="438" text-anchor="middle" fill="#d29922" font-family="monospace" font-size="12" font-weight="bold">L2: 远端 CXL</text>
+  <text x="340" y="455" text-anchor="middle" fill="#8b949e" font-family="monospace" font-size="8">温/冷页</text>
+
+  <rect x="470" y="415" width="220" height="50" rx="6" fill="rgba(248,81,73,0.12)" stroke="#f85149" stroke-width="2"/>
+  <text x="580" y="438" text-anchor="middle" fill="#f85149" font-family="monospace" font-size="12" font-weight="bold">L3: NVMe SSD</text>
+  <text x="580" y="455" text-anchor="middle" fill="#8b949e" font-family="monospace" font-size="8">最冷页 (新增)</text>
+
+  <!-- 层级间双向箭头 -->
+  <line x1="210" y1="440" x2="240" y2="440" stroke="#8b949e" stroke-width="1.5"/>
+  <text x="225" y="434" fill="#8b949e" font-family="monospace" font-size="7">&harr;</text>
+
+  <line x1="440" y1="440" x2="470" y2="440" stroke="#f85149" stroke-width="1.5"/>
+  <text x="455" y="434" fill="#f85149" font-family="monospace" font-size="7">&harr;</text>
+
+  <!-- Swap-in 路径 (缺页) -->
+  <rect x="720" y="415" width="310" height="50" rx="6" fill="rgba(188,140,255,0.08)" stroke="#bc8cff"/>
+  <text x="875" y="435" text-anchor="middle" fill="#bc8cff" font-family="monospace" font-size="10">Swap-In 路径 (新增)</text>
+  <text x="875" y="452" text-anchor="middle" fill="#8b949e" font-family="monospace" font-size="8">userfaultfd / 缺页 &rarr; 异步读取 &rarr; L1</text>
+
+  <line x1="690" y1="440" x2="720" y2="440" stroke="#bc8cff" stroke-width="1" stroke-dasharray="3,2"/>
+
+  <!-- 图例 -->
+  <rect x="30" y="490" width="1000" height="55" rx="6" fill="none" stroke="#30363d"/>
+  <text x="50" y="510" fill="#8b949e" font-family="monospace" font-size="9">图例:</text>
+  <rect x="110" y="500" width="12" height="12" fill="none" stroke="#3fb950" stroke-width="2"/>
+  <text x="128" y="511" fill="#8b949e" font-family="monospace" font-size="9">已有组件</text>
+  <rect x="280" y="500" width="12" height="12" fill="rgba(248,81,73,0.08)" stroke="#f85149" stroke-width="2"/>
+  <text x="298" y="511" fill="#8b949e" font-family="monospace" font-size="9">新增组件</text>
+  <rect x="430" y="500" width="12" height="12" fill="none" stroke="#39d2c0"/>
+  <text x="448" y="511" fill="#8b949e" font-family="monospace" font-size="9">修改的组件</text>
+
+  <text x="50" y="535" fill="#8b949e" font-family="monospace" font-size="9">数据流: RMRS &rarr; SDK &rarr; SMAP 用户空间 &rarr; ioctl &rarr; SMAP 内核 &rarr; migrate_pages() (L1&harr;L2) 或 smap_swap_bio() (L2&rarr;L3)</text>
+</svg>
+</div>
+
+
+<!-- ─── 3. 详细设计 ─── -->
+<h2 id="design">3. 详细设计</h2>
+
+<h3 id="strategy">3.1 策略层: 三级决策引擎</h3>
+
+<p>当前 <code>separate_strategy.c</code> 中的策略做二元决策: 在 L1 和 L2 之间降级或提升。
+我们将其扩展为三级决策:</p>
+
+<div class="svg-wrap">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 500" width="900" height="500">
+  <defs>
+    <marker id="c1" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <polygon points="0 0, 8 3, 0 6" fill="#3fb950"/>
+    </marker>
+    <marker id="c2" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <polygon points="0 0, 8 3, 0 6" fill="#d29922"/>
+    </marker>
+    <marker id="c3" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <polygon points="0 0, 8 3, 0 6" fill="#f85149"/>
+    </marker>
+  </defs>
+  <rect width="900" height="500" rx="10" fill="#0d1117"/>
+  <text x="450" y="28" text-anchor="middle" fill="#3fb950" font-family="monospace" font-size="13" font-weight="bold">三级决策流程</text>
+
+  <!-- 起点 -->
+  <rect x="320" y="50" width="260" height="36" rx="6" fill="#161b22" stroke="#3fb950" stroke-width="2"/>
+  <text x="450" y="73" text-anchor="middle" fill="#e6edf3" font-family="monospace" font-size="11">ScanMigrateWork() 周期执行</text>
+
+  <line x1="450" y1="86" x2="450" y2="110" stroke="#3fb950" stroke-width="1.5" marker-end="url(#c1)"/>
+
+  <!-- 收集冷热数据 -->
+  <rect x="300" y="115" width="300" height="36" rx="6" fill="#161b22" stroke="#bc8cff"/>
+  <text x="450" y="138" text-anchor="middle" fill="#bc8cff" font-family="monospace" font-size="10">收集每页 ACTC / AF 位数据</text>
+
+  <line x1="450" y1="151" x2="450" y2="175" stroke="#3fb950" stroke-width="1.5" marker-end="url(#c1)"/>
+
+  <!-- 排序 -->
+  <rect x="300" y="180" width="300" height="36" rx="6" fill="#161b22" stroke="#bc8cff"/>
+  <text x="450" y="200" text-anchor="middle" fill="#bc8cff" font-family="monospace" font-size="10">按频率排序 (升序)</text>
+
+  <line x1="450" y1="216" x2="450" y2="240" stroke="#3fb950" stroke-width="1.5" marker-end="url(#c1)"/>
+
+  <!-- 判定菱形 -->
+  <polygon points="450,245 570,285 450,325 330,285" fill="none" stroke="#d29922" stroke-width="1.5"/>
+  <text x="450" y="282" text-anchor="middle" fill="#d29922" font-family="monospace" font-size="9">freq == 0 持续</text>
+  <text x="450" y="295" text-anchor="middle" fill="#d29922" font-family="monospace" font-size="9">N 个窗口?</text>
+
+  <!-- 是: swap out -->
+  <line x1="570" y1="285" x2="650" y2="285" stroke="#f85149" stroke-width="1.5" marker-end="url(#c3)"/>
+  <text x="600" y="278" fill="#3fb950" font-family="monospace" font-size="8">是</text>
+  <rect x="655" y="267" width="220" height="36" rx="6" fill="rgba(248,81,73,0.1)" stroke="#f85149"/>
+  <text x="765" y="290" text-anchor="middle" fill="#f85149" font-family="monospace" font-size="10">SWAP_OUT &rarr; NVMe (L3)</text>
+
+  <!-- 否: 已有决策 -->
+  <line x1="450" y1="325" x2="450" y2="355" stroke="#d29922" stroke-width="1.5" marker-end="url(#c2)"/>
+  <text x="462" y="345" fill="#8b949e" font-family="monospace" font-size="8">否</text>
+
+  <!-- 第二个菱形 -->
+  <polygon points="450,360 560,395 450,430 340,395" fill="none" stroke="#d29922" stroke-width="1.5"/>
+  <text x="450" y="393" text-anchor="middle" fill="#d29922" font-family="monospace" font-size="9">freq &lt; 阈值?</text>
+
+  <!-- 冷本地页 -->
+  <line x1="340" y1="395" x2="230" y2="395" stroke="#d29922" stroke-width="1.5" marker-end="url(#c2)"/>
+  <text x="290" y="388" fill="#3fb950" font-family="monospace" font-size="8">是, L1</text>
+  <rect x="30" y="377" width="200" height="36" rx="6" fill="rgba(210,153,34,0.1)" stroke="#d29922"/>
+  <text x="130" y="400" text-anchor="middle" fill="#d29922" font-family="monospace" font-size="10">降级 L1 &rarr; L2</text>
+
+  <!-- 热远端页 -->
+  <line x1="560" y1="395" x2="650" y2="395" stroke="#3fb950" stroke-width="1.5" marker-end="url(#c1)"/>
+  <text x="600" y="388" fill="#8b949e" font-family="monospace" font-size="8">否, 热 L2</text>
+  <rect x="655" y="377" width="220" height="36" rx="6" fill="rgba(63,185,80,0.1)" stroke="#3fb950"/>
+  <text x="765" y="400" text-anchor="middle" fill="#3fb950" font-family="monospace" font-size="10">提升 L2 &rarr; L1</text>
+
+  <!-- Swap 路径注释 -->
+  <rect x="655" y="315" width="220" height="22" rx="4" fill="rgba(248,81,73,0.05)" stroke="none"/>
+  <text x="765" y="331" text-anchor="middle" fill="#8b949e" font-family="monospace" font-size="8">页面已在 L2 且频率为零</text>
+  <line x1="765" y1="303" x2="765" y2="315" stroke="#f85149" stroke-width="1" stroke-dasharray="3,2"/>
+
+  <!-- 底部说明 -->
+  <rect x="100" y="450" width="700" height="36" rx="6" fill="rgba(88,166,255,0.05)" stroke="#58a6ff" stroke-dasharray="4,2"/>
+  <text x="450" y="468" text-anchor="middle" fill="#58a6ff" font-family="monospace" font-size="9">核心思路: 只有已在 L2 (远端) 且持续零频率的页面才是 swap-out 候选</text>
+  <text x="450" y="480" text-anchor="middle" fill="#8b949e" font-family="monospace" font-size="8">这避免了 LRU 倒置 &mdash; 热页永远不会直接从 L1 换出到 L3</text>
+</svg>
+</div>
+
+<h4>SWAP_OUT 的判定条件</h4>
+<p>L2 (远端 NUMA) 中的页面满足以下条件时可被换出:</p>
+<ol>
+<li><strong>零频率</strong>持续 <code>cold_window_threshold</code> 个连续扫描窗口 (默认: 3)</li>
+<li><strong>不在白名单中</strong> (排除 pinned、reserved 或内核页面)</li>
+<li><strong>L2 使用率</strong>超过 <code>l2_swap_watermark</code> (默认: 80%)</li>
+<li><strong>NVMe swap 空间可用</strong> (通过 swap map 位图检查)</li>
+</ol>
+
+<p>此设计保留了 SMAP 已有的 L1&harr;L2 行为, 仅将 L3 层级作为进一步的兜底。
+页面严格向下流动: L1 &rarr; L2 &rarr; L3, 提升则走 L3 &rarr; L1 (跳过 L2,
+以避免缺页时的额外迁移延迟)。</p>
+
+<h3 id="swap-module">3.2 内核模块: swap_out / swap_in 路径</h3>
+
+<h4>3.2.1 Swap-Out 路径</h4>
+
+<pre><code><span class="cm">/* smap_swap.c 中的新函数 */</span>
+<span class="kw">int</span> <span class="fn">smap_swap_out</span>(<span class="kw">struct</span> folio **folios, <span class="kw">unsigned int</span> nr_folios,
+                   <span class="kw">struct</span> smap_swap_device *sdev)
+{
+    <span class="kw">for</span> (<span class="kw">int</span> i = <span class="num">0</span>; i < nr_folios; i++) {
+        <span class="cm">/* 1. 在 swap map 中分配槽位 */</span>
+        slot = smap_swap_map_alloc(sdev);
+
+        <span class="cm">/* 2. 锁定 folio, 解除 PTE 映射, 替换为 swap 条目 */</span>
+        folio_lock(folios[i]);
+        try_to_unmap(folios[i], TTU_SWAP_OUT);
+        set_smap_swap_pte(folios[i], sdev, slot);
+
+        <span class="cm">/* 3. 提交异步写 bio 到 NVMe */</span>
+        bio = bio_alloc(sdev->bdev, <span class="num">1</span>, REQ_OP_WRITE, GFP_KERNEL);
+        bio->bi_iter.bi_sector = slot_to_sector(slot);
+        bio_add_folio(bio, folios[i], folio_size(folios[i]), <span class="num">0</span>);
+        submit_bio(bio);
+
+        <span class="cm">/* 4. 完成回调中: 释放 folio */</span>
+    }
+}</code></pre>
+
+<h4>3.2.2 Swap-In 路径</h4>
+
+<pre><code><span class="cm">/* 由 swap PTE 上的缺页异常触发 */</span>
+<span class="kw">int</span> <span class="fn">smap_swap_in</span>(<span class="kw">struct</span> vm_fault *vmf,
+                  <span class="kw">struct</span> smap_swap_device *sdev, <span class="kw">unsigned long</span> slot)
+{
+    <span class="cm">/* 1. 在 L1 (本地 DRAM) 上分配新 folio */</span>
+    folio = folio_alloc(GFP_HIGHUSER_MOVABLE | __GFP_THISNODE, <span class="num">0</span>);
+
+    <span class="cm">/* 2. 提交异步读 bio 从 NVMe 读取 */</span>
+    bio = bio_alloc(sdev->bdev, <span class="num">1</span>, REQ_OP_READ, GFP_KERNEL);
+    bio->bi_iter.bi_sector = slot_to_sector(slot);
+    bio_add_folio(bio, folio, folio_size(folio), <span class="num">0</span>);
+    submit_bio_wait(bio); <span class="cm">/* 缺页路径同步等待 */</span>
+
+    <span class="cm">/* 3. 安装新 PTE 指向 L1 folio */</span>
+    set_pte_at(vmf->vma->vm_mm, vmf->address,
+               vmf->pte, mk_pte(&folio->page, vmf->vma->vm_page_prot));
+
+    <span class="cm">/* 4. 释放 swap 槽位 */</span>
+    smap_swap_map_free(sdev, slot);
+}</code></pre>
+
+<div class="note">
+<strong>设计选择: userfaultfd 与内核缺页处理。</strong>
+Swap-in 有两种方案: (a) 在 SMAP 用户空间注册 userfaultfd 处理器来拦截缺页并发起读取;
+或 (b) 通过 SMAP 内核模块挂钩到内核的缺页路径。
+推荐方案 (b) 以获得更低延迟 &mdash; 避免每次缺页的用户态-内核态往返。
+SMAP 模块已有字符设备 (<code>/dev/smap_mig_device</code>) 和 kprobe 基础设施来挂钩内核函数。
+</div>
+
+<h3 id="backing-dev">3.3 后端设备管理</h3>
+
+<h4>Swap Map (位图分配器)</h4>
+<p>一个简单的位图跟踪 NVMe 设备上哪些 4 KiB (或用于大页的 2 MiB) 槽位正在使用:</p>
+
+<pre><code><span class="kw">struct</span> <span class="fn">smap_swap_device</span> {
+    <span class="kw">struct</span> block_device *bdev;      <span class="cm">/* NVMe 块设备 */</span>
+    <span class="kw">unsigned long</span> *bitmap;           <span class="cm">/* 槽位分配位图 */</span>
+    <span class="kw">unsigned long</span> nr_slots;          <span class="cm">/* 总槽位数 */</span>
+    <span class="kw">atomic_long_t</span> nr_used;           <span class="cm">/* 已分配计数 */</span>
+    <span class="kw">spinlock_t</span> lock;                 <span class="cm">/* 保护位图 */</span>
+    sector_t start_sector;           <span class="cm">/* 分区起始扇区 */</span>
+    <span class="kw">unsigned int</span> slot_size;          <span class="cm">/* PAGE_SIZE 或 HPAGE_SIZE */</span>
+};
+
+<span class="cm">/* 槽位分配: 查找第一个零位 */</span>
+<span class="kw">unsigned long</span> <span class="fn">smap_swap_map_alloc</span>(<span class="kw">struct</span> smap_swap_device *sdev) {
+    <span class="kw">unsigned long</span> slot;
+    spin_lock(&sdev->lock);
+    slot = find_first_zero_bit(sdev->bitmap, sdev->nr_slots);
+    <span class="kw">if</span> (slot < sdev->nr_slots) {
+        set_bit(slot, sdev->bitmap);
+        atomic_long_inc(&sdev->nr_used);
+    }
+    spin_unlock(&sdev->lock);
+    <span class="kw">return</span> slot;
+}</code></pre>
+
+<h4>设备配置</h4>
+<p>NVMe 后端设备通过新的 SMAP 配置项进行配置:</p>
+<pre><code><span class="cm"># /opt/ubturbo/conf/smap/swap.config</span>
+swap_device=/dev/nvme0n1p2
+swap_size_mb=65536          <span class="cm"># 64 GB swap 分区</span>
+slot_size=4096              <span class="cm"># 4K 槽位 (或 2097152 用于 2M 大页槽位)</span>
+l2_swap_watermark=80        <span class="cm"># L2 使用超过 80% 时开始换出</span>
+cold_window_threshold=3     <span class="cm"># 页面 freq=0 须持续 3 次连续扫描</span>
+max_swap_out_per_cycle=1024 <span class="cm"># 每个扫描周期最多换出的页面数</span>
+enable_compressed_swap=0    <span class="cm"># 可选: 写入 NVMe 前先压缩</span></code></pre>
+
+<h3 id="accounting">3.4 Swap 记账与限制</h3>
+
+<p>SMAP 需要跟踪每进程的 swap 使用量, 以执行限制并支持回迁:</p>
+
+<pre><code><span class="cm">/* 添加到 ProcessAttribute */</span>
+<span class="kw">struct</span> <span class="fn">SwapAccounting</span> {
+    uint64_t nr_swapped_out;        <span class="cm">/* 当前在 NVMe 上的页面数 */</span>
+    uint64_t nr_swap_in_faults;     <span class="cm">/* 累计 swap-in 次数 */</span>
+    uint64_t swap_limit_pages;      <span class="cm">/* 允许在 NVMe 上的最大页面数 */</span>
+    uint16_t cold_windows[MAX_NODES]; <span class="cm">/* 每节点连续零频率窗口计数 */</span>
+};</code></pre>
+
+<p>记账挂钩到已有的 <code>WalkPage</code> 结构和 <code>StrategyAttribute</code> 中的
+<code>remoteNrPagesAfterMigrate</code> 簿记。</p>
+
+<h3 id="config">3.5 配置与接口</h3>
+
+<h4>新增 smap_interface.h 函数</h4>
+
+<pre><code><span class="cm">/* smap_interface.h 新增 API */</span>
+
+<span class="cm">/** 配置 NVMe swap 后端设备 */</span>
+<span class="kw">int</span> <span class="fn">ubturbo_smap_swap_device_set</span>(<span class="kw">const char</span> *dev_path, uint64_t size_mb,
+                                  uint32_t slot_size);
+
+<span class="cm">/** 手动触发对指定进程最冷页面的换出 */</span>
+<span class="kw">int</span> <span class="fn">ubturbo_smap_swap_out</span>(<span class="kw">struct</span> SwapOutMsg *msg, <span class="kw">int</span> pidType);
+
+<span class="cm">/** 查询 swap 使用统计 */</span>
+<span class="kw">int</span> <span class="fn">ubturbo_smap_swap_stats_query</span>(pid_t pid, <span class="kw">struct</span> SwapStats *stats);
+
+<span class="cm">/** 设置 swap 水位阈值 */</span>
+<span class="kw">int</span> <span class="fn">ubturbo_smap_swap_config_set</span>(<span class="kw">struct</span> SwapConfigMsg *msg);
+
+<span class="cm">/** L1 和 L2 都满时的紧急换出 */</span>
+<span class="kw">void</span> <span class="fn">ubturbo_smap_urgent_swap_out</span>(uint64_t size);</code></pre>
+
+<h4>新增 IOCTL 命令</h4>
+
+<pre><code><span class="cm">/* 在 mig_init.h 中与已有 SMAP_MIG_* ioctl 一起添加 */</span>
+<span class="kw">#define</span> SMAP_SWAP_OUT       _IOW(<span class="num">0xB9</span>, <span class="num">3</span>, <span class="kw">struct</span> smap_swap_msg)
+<span class="kw">#define</span> SMAP_SWAP_IN        _IOW(<span class="num">0xB9</span>, <span class="num">4</span>, <span class="kw">struct</span> smap_swap_msg)
+<span class="kw">#define</span> SMAP_SWAP_DEV_SET   _IOW(<span class="num">0xB9</span>, <span class="num">5</span>, <span class="kw">struct</span> smap_swap_dev_msg)
+<span class="kw">#define</span> SMAP_SWAP_STATS     _IOR(<span class="num">0xB9</span>, <span class="num">6</span>, <span class="kw">struct</span> smap_swap_stats)</code></pre>
+
+<h4>新增 MigrateDirection</h4>
+
+<pre><code><span class="kw">typedef enum</span> {
+    DEMOTE,      <span class="cm">// 冷页 L1 &rarr; L2 (已有)</span>
+    PROMOTE,     <span class="cm">// 热页 L2 &rarr; L1 (已有)</span>
+    SWAP,        <span class="cm">// 双向交换 L1 &harr; L2 (已有)</span>
+    SWAP_OUT,    <span class="cm">// 最冷页 L2 &rarr; L3 NVMe (新增)</span>
+    SWAP_IN,     <span class="cm">// 缺页 L3 &rarr; L1 (新增, 按需调页)</span>
+} <span class="fn">MigrateDirection</span>;</code></pre>
+
+
+<!-- ─── 4. 新增数据结构 ─── -->
+<h2 id="data-structures">4. 新增数据结构</h2>
+
+<pre><code><span class="cm">/* ─── 内核空间 (smap_swap.h) ─── */</span>
+
+<span class="kw">struct</span> <span class="fn">smap_swap_entry</span> {
+    <span class="kw">unsigned long</span> slot;          <span class="cm">/* swap 设备中的位置 */</span>
+    pid_t pid;                   <span class="cm">/* 所属进程 */</span>
+    <span class="kw">unsigned long</span> vaddr;         <span class="cm">/* 原始虚拟地址 */</span>
+    <span class="kw">int</span> src_node;                <span class="cm">/* 页面原所在 NUMA 节点 (L2) */</span>
+    ktime_t swap_time;           <span class="cm">/* 换出时间 */</span>
+};
+
+<span class="kw">struct</span> <span class="fn">smap_swap_device</span> {
+    <span class="kw">struct</span> block_device *bdev;
+    <span class="kw">unsigned long</span> *bitmap;       <span class="cm">/* 槽位分配位图 */</span>
+    <span class="kw">unsigned long</span> nr_slots;
+    atomic_long_t nr_used;
+    spinlock_t lock;
+    sector_t start_sector;
+    <span class="kw">unsigned int</span> slot_size;      <span class="cm">/* PAGE_SIZE 或 HPAGE_PMD_SIZE */</span>
+    <span class="kw">struct</span> xarray entries;       <span class="cm">/* vaddr &rarr; smap_swap_entry 查找表 */</span>
+};
+
+<span class="kw">struct</span> <span class="fn">smap_swap_msg</span> {
+    pid_t pid;
+    <span class="kw">int</span> count;
+    <span class="kw">unsigned long</span> addrs[<span class="num">MAX_MIG_LIST_NR</span>]; <span class="cm">/* 待换出的物理地址 */</span>
+};
+
+<span class="cm">/* ─── 用户空间 (manage.h 新增) ─── */</span>
+
+<span class="kw">struct</span> <span class="fn">SwapConfig</span> {
+    <span class="kw">char</span> dev_path[<span class="num">64</span>];           <span class="cm">/* 例如 "/dev/nvme0n1p2" */</span>
+    uint64_t size_mb;
+    uint32_t slot_size;
+    uint32_t l2_swap_watermark;  <span class="cm">/* 百分比, 0-100 */</span>
+    uint32_t cold_window_threshold;
+    uint32_t max_swap_per_cycle;
+    <span class="kw">bool</span> enable_compressed;
+};
+
+<span class="kw">struct</span> <span class="fn">SwapStats</span> {
+    uint64_t total_slots;
+    uint64_t used_slots;
+    uint64_t swap_out_count;     <span class="cm">/* 累计 */</span>
+    uint64_t swap_in_count;
+    uint64_t swap_out_bytes;
+    uint64_t swap_in_bytes;
+    uint64_t avg_swap_out_us;    <span class="cm">/* 平均延迟 */</span>
+    uint64_t avg_swap_in_us;
+};</code></pre>
+
+
+<!-- ─── 5. 代码变更清单 ─── -->
+<h2 id="code-changes">5. 代码变更清单</h2>
+
+<table>
+<tr><th>文件</th><th>变更内容</th><th>类型</th></tr>
+<tr>
+<td><code>plugins/smap/src/user/manage/manage.h</code></td>
+<td>在 <code>MigrateDirection</code> 中新增 <code>SWAP_OUT</code>、<code>SWAP_IN</code>; 在 <code>ProcessAttribute</code> 中新增 <code>SwapAccounting</code>; 新增 <code>SwapConfig</code></td>
+<td><span class="badge badge-orange">修改</span></td>
+</tr>
+<tr>
+<td><code>plugins/smap/src/user/strategy/separate_strategy.c</code></td>
+<td>在已有降级/提升逻辑之后新增 <code>SwapOutStrategy()</code>; 检查 <code>cold_windows</code> 计数器和 L2 水位</td>
+<td><span class="badge badge-orange">修改</span></td>
+</tr>
+<tr>
+<td><code>plugins/smap/src/user/strategy/strategy.c</code></td>
+<td>扩展 <code>RunStrategy()</code>, 在配置了 swap 设备时调用 <code>SwapOutStrategy()</code></td>
+<td><span class="badge badge-orange">修改</span></td>
+</tr>
+<tr>
+<td><code>plugins/smap/src/user/strategy/migration.h/.c</code></td>
+<td>在 <code>DoMigration()</code> 旁新增 <code>DoSwapOut()</code> 和 <code>DoSwapIn()</code></td>
+<td><span class="badge badge-orange">修改</span></td>
+</tr>
+<tr>
+<td><code>plugins/smap/src/user/manage/oom_migrate.h/.c</code></td>
+<td>扩展 <code>FindPidMigrateSize()</code>, 在 L2 已满时将 swap-out 作为兜底</td>
+<td><span class="badge badge-orange">修改</span></td>
+</tr>
+<tr>
+<td><code>plugins/smap/src/tiering/smap_swap.c</code></td>
+<td>新增文件: <code>smap_swap_out()</code>、<code>smap_swap_in()</code>、<code>smap_swap_bio()</code>、swap map 分配器</td>
+<td><span class="badge badge-red">新增</span></td>
+</tr>
+<tr>
+<td><code>plugins/smap/src/tiering/smap_swap.h</code></td>
+<td>新增文件: <code>smap_swap_device</code>、<code>smap_swap_entry</code>、<code>smap_swap_msg</code> 结构体</td>
+<td><span class="badge badge-red">新增</span></td>
+</tr>
+<tr>
+<td><code>plugins/smap/src/tiering/mig_init.h</code></td>
+<td>新增 <code>SMAP_SWAP_OUT</code>、<code>SMAP_SWAP_IN</code>、<code>SMAP_SWAP_DEV_SET</code>、<code>SMAP_SWAP_STATS</code> ioctl</td>
+<td><span class="badge badge-orange">修改</span></td>
+</tr>
+<tr>
+<td><code>plugins/smap/src/drivers/accessed_bit.h/.c</code></td>
+<td>在追踪信息中新增 <code>cold_windows</code> 计数器; 扫描窗口中 freq=0 时递增</td>
+<td><span class="badge badge-orange">修改</span></td>
+</tr>
+<tr>
+<td><code>plugins/smap/src/user/manage/smap_config.h</code></td>
+<td>在 <code>/dev/shm/smap_config</code> 的配置二进制格式中新增 <code>SwapPayload</code></td>
+<td><span class="badge badge-orange">修改</span></td>
+</tr>
+<tr>
+<td><code>src/smap/smap_interface.h</code></td>
+<td>新增 <code>ubturbo_smap_swap_*</code> API、<code>SwapOutMsg</code>、<code>SwapStats</code>、<code>SwapConfigMsg</code></td>
+<td><span class="badge badge-orange">修改</span></td>
+</tr>
+<tr>
+<td><code>src/smap/smap_handler_msg.h/.cpp</code></td>
+<td>新增 swap 消息的编解码类</td>
+<td><span class="badge badge-orange">修改</span></td>
+</tr>
+<tr>
+<td><code>plugins/rmrs/src/ubturbo_plugin/common/rmrs_smap_helper.h/.cpp</code></td>
+<td>新增 <code>SwapColdDataToNvme()</code> 封装函数, 调用新的 SMAP swap API</td>
+<td><span class="badge badge-orange">修改</span></td>
+</tr>
+<tr>
+<td><code>conf/smap/swap.config</code></td>
+<td>新增配置文件, 包含 swap 设备、水位、阈值等</td>
+<td><span class="badge badge-red">新增</span></td>
+</tr>
+</table>
+
+
+<!-- ─── 6. 运行流程 ─── -->
+<h2 id="flow">6. 运行流程</h2>
+
+<div class="svg-wrap">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 540" width="1000" height="540">
+  <defs>
+    <marker id="d1" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <polygon points="0 0, 8 3, 0 6" fill="#3fb950"/>
+    </marker>
+    <marker id="d2" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <polygon points="0 0, 8 3, 0 6" fill="#f85149"/>
+    </marker>
+    <marker id="d3" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <polygon points="0 0, 8 3, 0 6" fill="#bc8cff"/>
+    </marker>
+  </defs>
+  <rect width="1000" height="540" rx="10" fill="#0d1117"/>
+
+  <!-- 标题 -->
+  <text x="500" y="25" text-anchor="middle" fill="#f85149" font-family="monospace" font-size="13" font-weight="bold">换出流程 (L2 &rarr; L3)</text>
+
+  <!-- 步骤 1 -->
+  <rect x="30" y="50" width="280" height="40" rx="5" fill="#161b22" stroke="#3fb950"/>
+  <text x="170" y="67" text-anchor="middle" fill="#e6edf3" font-family="monospace" font-size="9">1. 周期扫描: ScanMigrateWork()</text>
+  <text x="170" y="82" text-anchor="middle" fill="#8b949e" font-family="monospace" font-size="8">每 SCAN_MIGRATE_PERIOD ms</text>
+
+  <line x1="310" y1="70" x2="350" y2="70" stroke="#3fb950" stroke-width="1.5" marker-end="url(#d1)"/>
+
+  <!-- 步骤 2 -->
+  <rect x="355" y="50" width="290" height="40" rx="5" fill="#161b22" stroke="#3fb950"/>
+  <text x="500" y="67" text-anchor="middle" fill="#e6edf3" font-family="monospace" font-size="9">2. 收集每个 L2 页面的 AF 数据</text>
+  <text x="500" y="82" text-anchor="middle" fill="#8b949e" font-family="monospace" font-size="8">freq == 0 时 cold_windows++</text>
+
+  <line x1="645" y1="70" x2="685" y2="70" stroke="#3fb950" stroke-width="1.5" marker-end="url(#d1)"/>
+
+  <!-- 步骤 3 -->
+  <rect x="690" y="50" width="280" height="40" rx="5" fill="#161b22" stroke="#d29922"/>
+  <text x="830" y="67" text-anchor="middle" fill="#d29922" font-family="monospace" font-size="9">3. 检查: cold_windows &ge; 阈值</text>
+  <text x="830" y="82" text-anchor="middle" fill="#d29922" font-family="monospace" font-size="8">&amp;&amp; L2 使用率 &gt; 水位</text>
+
+  <line x1="830" y1="90" x2="830" y2="120" stroke="#f85149" stroke-width="1.5" marker-end="url(#d2)"/>
+
+  <!-- 步骤 4 -->
+  <rect x="660" y="125" width="340" height="40" rx="5" fill="rgba(248,81,73,0.08)" stroke="#f85149"/>
+  <text x="830" y="142" text-anchor="middle" fill="#f85149" font-family="monospace" font-size="9">4. 构建换出列表 (每周期最多 N 页)</text>
+  <text x="830" y="157" text-anchor="middle" fill="#8b949e" font-family="monospace" font-size="8">按频率选择最冷 L2 页面 &rarr; MigList</text>
+
+  <line x1="660" y1="145" x2="580" y2="145" stroke="#f85149" stroke-width="1.5" marker-end="url(#d2)"/>
+
+  <!-- 步骤 5 -->
+  <rect x="280" y="125" width="300" height="40" rx="5" fill="rgba(248,81,73,0.08)" stroke="#f85149"/>
+  <text x="430" y="142" text-anchor="middle" fill="#f85149" font-family="monospace" font-size="9">5. ioctl(SMAP_SWAP_OUT, swap_msg)</text>
+  <text x="430" y="157" text-anchor="middle" fill="#8b949e" font-family="monospace" font-size="8">用户空间 &rarr; 内核模块</text>
+
+  <line x1="430" y1="165" x2="430" y2="195" stroke="#f85149" stroke-width="1.5" marker-end="url(#d2)"/>
+
+  <!-- 步骤 6 -->
+  <rect x="230" y="200" width="400" height="55" rx="5" fill="rgba(248,81,73,0.08)" stroke="#f85149"/>
+  <text x="430" y="220" text-anchor="middle" fill="#f85149" font-family="monospace" font-size="9">6. 内核中执行 smap_swap_out()</text>
+  <text x="430" y="235" text-anchor="middle" fill="#8b949e" font-family="monospace" font-size="8">a) smap_swap_map_alloc() &rarr; 获取 NVMe 槽位</text>
+  <text x="430" y="248" text-anchor="middle" fill="#8b949e" font-family="monospace" font-size="8">b) 解除 PTE 映射, 设置 swap 条目 &bull; c) bio_submit(WRITE) &bull; d) 释放 folio</text>
+
+  <line x1="430" y1="255" x2="430" y2="290" stroke="#f85149" stroke-width="1.5" marker-end="url(#d2)"/>
+
+  <!-- NVMe -->
+  <rect x="300" y="295" width="260" height="40" rx="5" fill="rgba(248,81,73,0.12)" stroke="#f85149" stroke-width="2"/>
+  <text x="430" y="320" text-anchor="middle" fill="#f85149" font-family="monospace" font-size="11" font-weight="bold">NVMe SSD (/dev/nvme0n1p2)</text>
+
+  <!-- ═══ Swap-In 路径 ═══ -->
+  <text x="500" y="370" text-anchor="middle" fill="#bc8cff" font-family="monospace" font-size="13" font-weight="bold">换入流程 (L3 &rarr; L1)</text>
+
+  <rect x="30" y="390" width="200" height="40" rx="5" fill="#161b22" stroke="#bc8cff"/>
+  <text x="130" y="407" text-anchor="middle" fill="#bc8cff" font-family="monospace" font-size="9">1. swap PTE 上的缺页</text>
+  <text x="130" y="420" text-anchor="middle" fill="#8b949e" font-family="monospace" font-size="8">进程访问已换出的页面</text>
+
+  <line x1="230" y1="410" x2="270" y2="410" stroke="#bc8cff" stroke-width="1.5" marker-end="url(#d3)"/>
+
+  <rect x="275" y="390" width="220" height="40" rx="5" fill="#161b22" stroke="#bc8cff"/>
+  <text x="385" y="407" text-anchor="middle" fill="#bc8cff" font-family="monospace" font-size="9">2. 解码 swap 条目</text>
+  <text x="385" y="420" text-anchor="middle" fill="#8b949e" font-family="monospace" font-size="8">&rarr; smap_swap_device + slot</text>
+
+  <line x1="495" y1="410" x2="535" y2="410" stroke="#bc8cff" stroke-width="1.5" marker-end="url(#d3)"/>
+
+  <rect x="540" y="390" width="200" height="40" rx="5" fill="#161b22" stroke="#bc8cff"/>
+  <text x="640" y="407" text-anchor="middle" fill="#bc8cff" font-family="monospace" font-size="9">3. 分配 L1 folio</text>
+  <text x="640" y="420" text-anchor="middle" fill="#8b949e" font-family="monospace" font-size="8">GFP_HIGHUSER_MOVABLE</text>
+
+  <line x1="740" y1="410" x2="780" y2="410" stroke="#bc8cff" stroke-width="1.5" marker-end="url(#d3)"/>
+
+  <rect x="785" y="390" width="185" height="40" rx="5" fill="#161b22" stroke="#bc8cff"/>
+  <text x="878" y="407" text-anchor="middle" fill="#bc8cff" font-family="monospace" font-size="9">4. 从 NVMe 发起 bio READ</text>
+  <text x="878" y="420" text-anchor="middle" fill="#8b949e" font-family="monospace" font-size="8">缺页同步等待</text>
+
+  <!-- 步骤 5-6 -->
+  <line x1="878" y1="430" x2="878" y2="460" stroke="#bc8cff" stroke-width="1.5" marker-end="url(#d3)"/>
+
+  <rect x="540" y="465" width="200" height="40" rx="5" fill="#161b22" stroke="#3fb950"/>
+  <text x="640" y="482" text-anchor="middle" fill="#3fb950" font-family="monospace" font-size="9">5. 安装 PTE &rarr; L1 DRAM</text>
+  <text x="640" y="497" text-anchor="middle" fill="#8b949e" font-family="monospace" font-size="8">页面重新变为热页</text>
+
+  <line x1="740" y1="485" x2="785" y2="485" stroke="#3fb950" stroke-width="1" stroke-dasharray="3,2"/>
+
+  <rect x="785" y="465" width="185" height="40" rx="5" fill="#161b22" stroke="#3fb950"/>
+  <text x="878" y="482" text-anchor="middle" fill="#3fb950" font-family="monospace" font-size="9">6. 释放 swap 槽位</text>
+  <text x="878" y="497" text-anchor="middle" fill="#8b949e" font-family="monospace" font-size="8">smap_swap_map_free()</text>
+
+  <line x1="540" y1="485" x2="500" y2="485" stroke="#bc8cff" stroke-width="1" stroke-dasharray="3,2"/>
+
+  <!-- 说明: 跳过 L2 -->
+  <rect x="30" y="465" width="460" height="40" rx="5" fill="rgba(88,166,255,0.05)" stroke="#58a6ff" stroke-dasharray="3,2"/>
+  <text x="260" y="482" text-anchor="middle" fill="#58a6ff" font-family="monospace" font-size="9">关键: swap-in 直接到 L1 (跳过 L2), 以最小化缺页延迟</text>
+  <text x="260" y="497" text-anchor="middle" fill="#8b949e" font-family="monospace" font-size="8">若页面再次变冷, 正常降级路径将其 L1 &rarr; L2 &rarr; L3</text>
+</svg>
+</div>
+
+
+<!-- ─── 7. 内核集成 ─── -->
+<h2 id="integration">7. 与内核 Swap 子系统的集成</h2>
+
+<h3>方案 A: 自定义 Swap (推荐)</h3>
+<p>SMAP 管理自己的 swap map 和块 I/O, 完全绕过内核的
+<code>swap_info_struct</code> / <code>swap_cache</code>。这可以完全控制:</p>
+<ul>
+<li>槽位分配策略 (顺序 vs. 分散, 用于 NVMe 磨损均衡)</li>
+<li>压缩 swap (可选 LZ4/zstd 压缩后再写入)</li>
+<li>每进程 swap 限制 (内核 swap 不提供此功能)</li>
+<li>大页感知的槽位大小 (VM 工作负载使用 2 MiB 槽位)</li>
+</ul>
+
+<p>代价: 必须小心处理 PTE 操作并挂钩到缺页路径。
+SMAP 已经使用 kprobes 进行 <code>migrate_pages()</code> 解析, 因此扩展此机制来挂钩
+<code>do_swap_page()</code> 或注册自定义 <code>swap_ops</code> 是可行的。</p>
+
+<h3>方案 B: 内核 swapon 集成</h3>
+<p>替代方案: 通过 <code>swapon /dev/nvme0n1p2</code> 将 NVMe 设备配置为标准 Linux swap 分区,
+让 SMAP 对冷页触发 <code>madvise(MADV_PAGEOUT)</code>, 通过内核的标准 swap 路径推送它们。</p>
+
+<table>
+<tr><th>方面</th><th>方案 A: 自定义 Swap</th><th>方案 B: 内核 swapon</th></tr>
+<tr><td>实现工作量</td><td>高 (bio, PTE, 缺页钩子)</td><td>低 (madvise + swapon)</td></tr>
+<tr><td>每进程记账</td><td>完全控制</td><td>有限 (仅 cgroup)</td></tr>
+<tr><td>大页支持</td><td>原生 2M 槽位</td><td>swap 时拆分为 4K</td></tr>
+<tr><td>压缩 swap</td><td>自定义 LZ4/zstd</td><td>使用 zswap 作为前端</td></tr>
+<tr><td>Swap-in 延迟</td><td>优化 (直接 bio)</td><td>标准 (经过 VFS)</td></tr>
+<tr><td>维护负担</td><td>须跟踪内核 ABI 变更</td><td>内核维护</td></tr>
+</table>
+
+<div class="note">
+<strong>建议:</strong> 先用方案 B (内核 swapon + madvise) 做快速原型,
+然后评估延迟和大页限制是否足以证明迁移到方案 A 的必要性。
+方案 B 可以完全在 SMAP 用户空间实现, 无需修改内核模块。
+</div>
+
+<h3>方案 B 实现草案</h3>
+<pre><code><span class="cm">/* 在 SwapOutStrategy() 中 &mdash; 仅用户空间, 无内核变更 */</span>
+<span class="kw">static int</span> <span class="fn">SwapOutViaMadvise</span>(ProcessAttr *process, ActcData *coldPages,
+                             uint64_t count)
+{
+    <span class="kw">for</span> (uint64_t i = <span class="num">0</span>; i < count; i++) {
+        <span class="kw">void</span> *vaddr = phys_to_virt_for_pid(process->pid, coldPages[i].addr);
+        <span class="cm">/* MADV_PAGEOUT 告知内核立即回收该页面 */</span>
+        process_madvise(pidfd, &iov, <span class="num">1</span>, MADV_PAGEOUT, <span class="num">0</span>);
+    }
+    process->swapAccounting.nr_swapped_out += count;
+}</code></pre>
+
+<p>这使用了 <code>process_madvise(2)</code> (Linux 5.10+), 它允许一个进程对另一个进程的内存提出建议
+&mdash; 这正是 SMAP 用户空间所需要的。结合对 NVMe 分区的标准 <code>swapon</code>, 内核会自动处理所有
+I/O、PTE 操作和 swap-in 缺页处理。</p>
+
+
+<!-- ─── 8. 设计权衡 ─── -->
+<h2 id="tradeoffs">8. 设计权衡与替代方案</h2>
+
+<h3>8.1 何时换出 vs. 何时压缩</h3>
+<p>SMAP 可以选择在写入 NVMe 之前压缩页面 (使用我们配套文档中记录的 zram/zswap
+压缩基础设施)。这会增加 ~1&ndash;10 &mu;s 的 CPU 时间, 但可以将有效 NVMe 容量翻倍。</p>
+
+<table>
+<tr><th>方式</th><th>延迟 (写入)</th><th>NVMe 容量</th><th>CPU 开销</th></tr>
+<tr><td>直接 swap (未压缩)</td><td>~10&ndash;50 &mu;s</td><td>1&times;</td><td>极小</td></tr>
+<tr><td>压缩 swap (LZ4)</td><td>~15&ndash;55 &mu;s</td><td>~2&ndash;3&times;</td><td>适中</td></tr>
+<tr><td>压缩 swap (zstd)</td><td>~30&ndash;100 &mu;s</td><td>~3&ndash;4&times;</td><td>较高</td></tr>
+</table>
+
+<h3>8.2 LRU 倒置风险</h3>
+<p>一个已知问题 (由 Chris Down / Meta 在 zswap/zram 中记录): 如果 SMAP 将一个页面换出到
+NVMe, 然后它被缺页取回到 L1, 但一个"更温"的页面仍停留在 L2, 内存层次就发生了倒置。
+我们的设计通过以下方式缓解此问题:</p>
+<ul>
+<li>仅换出在多个扫描窗口中<strong>持续零频率</strong>的页面</li>
+<li>仅从 L2 换出 (永不直接从 L1 到 L3)</li>
+<li>缺页时直接换入到 L1 (该页被访问, 说明它现在是热的)</li>
+<li>跟踪每进程的 <code>swap_in_faults</code> &mdash; 如果 swap-in 频率过高, 则降低换出激进程度</li>
+</ul>
+
+<h3>8.3 大页处理</h3>
+<p>SMAP 主要针对 VM 工作负载处理 2M 大页。换出 2M 页面有不同的权衡:</p>
+<ul>
+<li><strong>方案 A (自定义):</strong> 2M NVMe 槽位 &mdash; 如果页面大部分为零则浪费空间, 但避免 THP 拆分</li>
+<li><strong>方案 B (内核):</strong> 内核在 swap 前将 THP 拆分为 4K &mdash; swap-in 后丢失大页</li>
+<li><strong>混合方案:</strong> 压缩 2M 页面; 如果压缩比 &gt; 50%, 压缩后写入 NVMe; 否则拆分为 4K</li>
+</ul>
+
+<h3>8.4 磨损均衡</h3>
+<p>顺序槽位分配会在 NVMe 上造成热点。缓解措施:</p>
+<ul>
+<li>每个分配纪元使用随机起始偏移</li>
+<li>依赖 NVMe FTL 的内部磨损均衡 (现代驱动器处理得很好)</li>
+<li>监控 <code>/sys/block/nvmeXnY/device/wear_leveling_count</code>, 接近寿命终点时告警</li>
+</ul>
+
+
+<!-- ─── 9. 参考资料 ─── -->
+<h2 id="references">9. 参考资料</h2>
+
+<ol>
+<li>ubturbo 源码: <a href="https://gitcode.com/openeuler/ubturbo">gitcode.com/openeuler/ubturbo</a></li>
+<li>SMAP 插件: <code>plugins/smap/README.md</code>、<code>plugins/smap/src/</code></li>
+<li>Linux <code>process_madvise(2)</code>: <code>man 2 process_madvise</code> &mdash; 跨进程内存建议 (5.10+)</li>
+<li>Linux <code>MADV_PAGEOUT</code>: 强制页面回收, 若配置了 swap 则推送到 swap</li>
+<li>Chris Down / Meta: zswap/zram 中的 LRU 倒置分析 (LWN.net, 2026)</li>
+<li>zram writeback: <code>Documentation/admin-guide/blockdev/zram.rst</code> &mdash; 压缩回写到后端设备</li>
+<li>配套文档: <a href="linux_zram_zswap.html">Linux zram 与 zswap 架构深入解析</a></li>
+<li>SMAP 内核接口: <code>src/smap/smap_interface.h</code> (第 138&ndash;293 行)</li>
+<li>SMAP 策略引擎: <code>plugins/smap/src/user/strategy/separate_strategy.c</code></li>
+<li>SMAP 迁移封装: <code>plugins/smap/src/tiering/smap_migrate_wrapper.c</code></li>
+</ol>
+
+<hr>
+<p style="color:var(--muted); font-size:0.85em; margin-top:30px;">
+生成于 2026 年 4 月 &mdash; 基于 ubturbo 提交树分析 + Linux 内核 7.1-rc1 swap 子系统知识。
+</p>
+
+</body>
+</html>

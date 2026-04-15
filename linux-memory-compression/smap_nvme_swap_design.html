@@ -1,0 +1,985 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>SMAP NVMe Swap — Design Proposal for Cold Page Swapout</title>
+<style>
+:root { --bg: #0d1117; --surface: #161b22; --border: #30363d; --text: #e6edf3; --muted: #8b949e;
+  --green: #3fb950; --blue: #58a6ff; --purple: #bc8cff; --orange: #d29922; --red: #f85149; --cyan: #39d2c0; }
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { background: var(--bg); color: var(--text); font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', monospace;
+  line-height: 1.7; padding: 40px 60px; max-width: 1200px; margin: 0 auto; }
+h1 { color: var(--green); font-size: 2em; margin-bottom: 8px; }
+h2 { color: var(--blue); font-size: 1.4em; margin: 40px 0 16px; border-left: 3px solid var(--blue); padding-left: 12px; }
+h3 { color: var(--purple); font-size: 1.15em; margin: 28px 0 12px; }
+h4 { color: var(--orange); font-size: 1em; margin: 20px 0 8px; }
+hr { border: none; border-top: 2px solid var(--blue); margin: 20px 0 30px; }
+p { margin: 10px 0; }
+a { color: var(--blue); text-decoration: none; }
+code { background: var(--surface); padding: 2px 6px; border-radius: 4px; font-size: 0.92em; color: var(--cyan); }
+pre { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 16px 20px;
+  overflow-x: auto; margin: 12px 0; font-size: 0.88em; line-height: 1.6; }
+pre code { background: none; padding: 0; color: var(--text); }
+table { border-collapse: collapse; width: 100%; margin: 16px 0; }
+th, td { border: 1px solid var(--border); padding: 10px 14px; text-align: left; }
+th { background: var(--surface); color: var(--blue); }
+td { color: var(--text); }
+tr:nth-child(even) td { background: rgba(22,27,34,0.5); }
+.subtitle { color: var(--muted); font-size: 0.95em; margin-bottom: 6px; }
+.badge { display: inline-block; padding: 2px 10px; border-radius: 12px; font-size: 0.8em; font-weight: bold; margin-right: 6px; }
+.badge-green { background: rgba(63,185,80,0.15); color: var(--green); border: 1px solid var(--green); }
+.badge-orange { background: rgba(210,153,34,0.15); color: var(--orange); border: 1px solid var(--orange); }
+.badge-red { background: rgba(248,81,73,0.15); color: var(--red); border: 1px solid var(--red); }
+.badge-purple { background: rgba(188,140,255,0.15); color: var(--purple); border: 1px solid var(--purple); }
+.note { background: rgba(88,166,255,0.08); border-left: 3px solid var(--blue); padding: 12px 16px; margin: 16px 0; border-radius: 0 6px 6px 0; }
+.warn { background: rgba(210,153,34,0.08); border-left: 3px solid var(--orange); padding: 12px 16px; margin: 16px 0; border-radius: 0 6px 6px 0; }
+.svg-wrap { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 20px; margin: 20px 0; overflow-x: auto; }
+ul, ol { margin: 8px 0 8px 24px; }
+li { margin: 4px 0; }
+.toc { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 20px 28px; margin: 20px 0; }
+.toc ul { list-style: none; margin: 0; padding: 0; }
+.toc li { margin: 4px 0; }
+.toc li ul { padding-left: 20px; }
+.toc a { color: var(--muted); }
+.toc a:hover { color: var(--blue); }
+.kw { color: var(--purple); } .fn { color: var(--blue); } .cm { color: var(--muted); font-style: italic; }
+.str { color: var(--green); } .num { color: var(--orange); }
+</style>
+</head>
+<body>
+
+<h1>SMAP NVMe Swap: Adding Cold Page Swapout to Memory Tiering</h1>
+<p class="subtitle">Design Proposal &mdash; ubturbo/SMAP (openEuler) &mdash; April 2026</p>
+<p class="subtitle">Source: <code>plugins/smap/</code> + <code>src/smap/</code> in ubturbo repo</p>
+<hr>
+
+<!-- ─── TABLE OF CONTENTS ─── -->
+<div class="toc">
+<strong style="color:var(--green)">Contents</strong>
+<ul>
+<li>1. <a href="#background">Background &amp; Problem Statement</a>
+  <ul>
+    <li>1.1 <a href="#smap-today">SMAP Today: Memory-Tier-Only Migration</a></li>
+    <li>1.2 <a href="#gap">The Gap: No Path to Persistent Storage</a></li>
+    <li>1.3 <a href="#why-nvme">Why NVMe Swap Matters</a></li>
+  </ul>
+</li>
+<li>2. <a href="#arch-overview">Architecture Overview</a>
+  <ul>
+    <li>2.1 <a href="#current-arch">Current SMAP Architecture</a></li>
+    <li>2.2 <a href="#proposed-arch">Proposed Architecture with NVMe Swap</a></li>
+  </ul>
+</li>
+<li>3. <a href="#design">Detailed Design</a>
+  <ul>
+    <li>3.1 <a href="#strategy">Strategy Layer: Three-Tier Decision Engine</a></li>
+    <li>3.2 <a href="#swap-module">Kernel Module: swap_out / swap_in Paths</a></li>
+    <li>3.3 <a href="#backing-dev">Backing Device Management</a></li>
+    <li>3.4 <a href="#accounting">Swap Accounting &amp; Limits</a></li>
+    <li>3.5 <a href="#config">Configuration &amp; Interfaces</a></li>
+  </ul>
+</li>
+<li>4. <a href="#data-structures">New Data Structures</a></li>
+<li>5. <a href="#code-changes">Code Change Map</a></li>
+<li>6. <a href="#flow">Operational Flow</a></li>
+<li>7. <a href="#integration">Integration with Kernel Swap Subsystem</a></li>
+<li>8. <a href="#tradeoffs">Design Tradeoffs &amp; Alternatives</a></li>
+<li>9. <a href="#references">References</a></li>
+</ul>
+</div>
+
+<!-- ─── 1. BACKGROUND ─── -->
+<h2 id="background">1. Background &amp; Problem Statement</h2>
+
+<h3 id="smap-today">1.1 SMAP Today: Memory-Tier-Only Migration</h3>
+
+<p>SMAP (Smart Memory Adaptive Platform) in ubturbo manages a two-level memory hierarchy:</p>
+
+<table>
+<tr><th>Level</th><th>Medium</th><th>Latency</th><th>Capacity</th><th>SMAP Role</th></tr>
+<tr><td><span class="badge badge-green">L1</span> Local NUMA</td><td>DRAM (DDR5)</td><td>~80&ndash;120 ns</td><td>Base capacity</td><td>Hot pages reside here</td></tr>
+<tr><td><span class="badge badge-orange">L2</span> Remote NUMA</td><td>CXL / PMEM / UB interconnect</td><td>~200&ndash;500 ns</td><td>Extended pool</td><td>Cold pages demoted here</td></tr>
+</table>
+
+<p>Migration is performed by the kernel&rsquo;s <code>migrate_pages()</code> syscall, wrapped via kprobes in
+<code>plugins/smap/src/tiering/smap_migrate_wrapper.c</code>. The strategy engine in
+<code>plugins/smap/src/user/strategy/separate_strategy.c</code> sorts pages by access frequency
+(hardware ACTC counters or software AF-bit scanning) and selects cold local pages for
+demotion and hot remote pages for promotion.</p>
+
+<p>The three migration directions defined in <code>manage.h:95-99</code>:</p>
+<pre><code><span class="kw">typedef enum</span> {
+    DEMOTE,    <span class="cm">// Cold L1 &rarr; L2</span>
+    PROMOTE,   <span class="cm">// Hot L2 &rarr; L1</span>
+    SWAP,      <span class="cm">// Bidirectional exchange (cold L1 &harr; hot L2)</span>
+} <span class="fn">MigrateDirection</span>;</code></pre>
+
+<h3 id="gap">1.2 The Gap: No Path to Persistent Storage</h3>
+
+<p>When both L1 and L2 memory are under pressure, SMAP has no escape valve.
+The <code>ubturbo_smap_urgent_migrate_out()</code> function only demotes within NUMA &mdash; it cannot
+spill to a block device. If remote NUMA is also full, the system hits OOM.</p>
+
+<div class="warn">
+<strong>Current limitation:</strong> SMAP&rsquo;s <code>MigrateDirection</code> enum has no <code>SWAP_OUT</code> to disk.
+The <code>oom_migrate.h:FindPidMigrateSize()</code> only finds candidates for NUMA demotion,
+not for disk swap. The entire kernel module (<code>smap_migrate_pages.c</code>) works exclusively
+with <code>migrate_pages()</code> &mdash; it never issues block I/O.
+</div>
+
+<h3 id="why-nvme">1.3 Why NVMe Swap Matters</h3>
+
+<ul>
+<li><strong>Memory overcommit:</strong> VM density scenarios where aggregate VM memory exceeds physical DRAM + CXL capacity</li>
+<li><strong>Cold tail elimination:</strong> Pages with zero access frequency across multiple scan windows are occupying expensive memory</li>
+<li><strong>Cost efficiency:</strong> NVMe is ~10&times; cheaper per GB than CXL memory, ~50&times; cheaper than DRAM</li>
+<li><strong>Graceful degradation:</strong> Instead of OOM-killing VMs, spill coldest pages to NVMe at ~10&ndash;100 &mu;s latency</li>
+</ul>
+
+<p>The proposed three-tier hierarchy with latency profile:</p>
+<table>
+<tr><th>Tier</th><th>Medium</th><th>Latency</th><th>SMAP Action</th></tr>
+<tr><td><span class="badge badge-green">L1</span></td><td>Local DRAM</td><td>~100 ns</td><td>Keep hot pages</td></tr>
+<tr><td><span class="badge badge-orange">L2</span></td><td>Remote NUMA (CXL)</td><td>~300 ns</td><td>Demote warm pages</td></tr>
+<tr><td><span class="badge badge-red">L3</span></td><td>NVMe SSD</td><td>~10&ndash;100 &mu;s</td><td><strong>Swap out coldest pages (NEW)</strong></td></tr>
+</table>
+
+
+<!-- ─── 2. ARCHITECTURE ─── -->
+<h2 id="arch-overview">2. Architecture Overview</h2>
+
+<h3 id="current-arch">2.1 Current SMAP Architecture</h3>
+
+<div class="svg-wrap">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 420" width="1000" height="420">
+  <defs>
+    <marker id="a1" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <polygon points="0 0, 8 3, 0 6" fill="#3fb950"/>
+    </marker>
+    <marker id="a2" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <polygon points="0 0, 8 3, 0 6" fill="#d29922"/>
+    </marker>
+  </defs>
+  <rect width="1000" height="420" rx="10" fill="#0d1117"/>
+  <text x="500" y="28" text-anchor="middle" fill="#3fb950" font-family="monospace" font-size="14" font-weight="bold">SMAP — Current Architecture (Memory Tiers Only)</text>
+
+  <!-- RMRS / User-space -->
+  <rect x="30" y="50" width="200" height="50" rx="6" fill="#161b22" stroke="#58a6ff"/>
+  <text x="130" y="80" text-anchor="middle" fill="#58a6ff" font-family="monospace" font-size="11">RMRS Plugin</text>
+
+  <rect x="260" y="50" width="200" height="50" rx="6" fill="#161b22" stroke="#58a6ff"/>
+  <text x="360" y="73" text-anchor="middle" fill="#e6edf3" font-family="monospace" font-size="10">ubturbo SDK</text>
+  <text x="360" y="88" text-anchor="middle" fill="#8b949e" font-family="monospace" font-size="8">UBTurboRMRSAgent*()</text>
+
+  <line x1="230" y1="75" x2="260" y2="75" stroke="#58a6ff" stroke-width="1.5" marker-end="url(#a1)"/>
+
+  <!-- IPC -->
+  <line x1="360" y1="100" x2="360" y2="130" stroke="#3fb950" stroke-width="1.5" marker-end="url(#a1)"/>
+  <text x="375" y="120" fill="#8b949e" font-family="monospace" font-size="8">IPC (UDS)</text>
+
+  <!-- SMAP user-space -->
+  <rect x="180" y="135" width="360" height="55" rx="6" fill="#161b22" stroke="#3fb950" stroke-width="2"/>
+  <text x="360" y="158" text-anchor="middle" fill="#3fb950" font-family="monospace" font-size="12" font-weight="bold">SMAP User-Space (libsmap.so)</text>
+  <text x="360" y="178" text-anchor="middle" fill="#8b949e" font-family="monospace" font-size="9">ProcessManager &bull; Strategy Engine &bull; Hotness Tracking</text>
+
+  <!-- Strategy detail -->
+  <rect x="600" y="135" width="370" height="55" rx="6" fill="#161b22" stroke="#bc8cff"/>
+  <text x="785" y="155" text-anchor="middle" fill="#bc8cff" font-family="monospace" font-size="10">Strategy: separate_strategy.c</text>
+  <text x="785" y="172" text-anchor="middle" fill="#8b949e" font-family="monospace" font-size="8">Sort by freq &rarr; CalLowMigrateNum() &rarr; MigList</text>
+  <text x="785" y="184" text-anchor="middle" fill="#8b949e" font-family="monospace" font-size="8">Directions: DEMOTE | PROMOTE | SWAP</text>
+
+  <line x1="540" y1="162" x2="600" y2="162" stroke="#bc8cff" stroke-width="1" stroke-dasharray="3,2"/>
+
+  <!-- ioctl -->
+  <line x1="360" y1="190" x2="360" y2="220" stroke="#3fb950" stroke-width="1.5" marker-end="url(#a1)"/>
+  <text x="375" y="210" fill="#8b949e" font-family="monospace" font-size="8">ioctl(SMAP_MIG_*)</text>
+
+  <!-- SMAP kernel -->
+  <rect x="130" y="225" width="460" height="55" rx="6" fill="#161b22" stroke="#d29922" stroke-width="2"/>
+  <text x="360" y="248" text-anchor="middle" fill="#d29922" font-family="monospace" font-size="12" font-weight="bold">SMAP Kernel Module (smap_tiering.ko)</text>
+  <text x="360" y="268" text-anchor="middle" fill="#8b949e" font-family="monospace" font-size="9">smap_migrate() &bull; isolate_and_migrate_folios() &bull; multi-threaded</text>
+
+  <!-- kernel migrate_pages -->
+  <line x1="360" y1="280" x2="360" y2="310" stroke="#d29922" stroke-width="1.5" marker-end="url(#a2)"/>
+
+  <rect x="200" y="315" width="320" height="40" rx="6" fill="#161b22" stroke="#f85149"/>
+  <text x="360" y="340" text-anchor="middle" fill="#f85149" font-family="monospace" font-size="11">Linux kernel: migrate_pages()</text>
+
+  <!-- Memory tiers -->
+  <rect x="30" y="370" width="180" height="40" rx="6" fill="rgba(63,185,80,0.1)" stroke="#3fb950"/>
+  <text x="120" y="395" text-anchor="middle" fill="#3fb950" font-family="monospace" font-size="11">L1: Local DRAM</text>
+
+  <rect x="240" y="370" width="200" height="40" rx="6" fill="rgba(210,153,34,0.1)" stroke="#d29922"/>
+  <text x="340" y="395" text-anchor="middle" fill="#d29922" font-family="monospace" font-size="11">L2: Remote NUMA (CXL)</text>
+
+  <line x1="210" y1="390" x2="240" y2="390" stroke="#8b949e" stroke-width="1.5" stroke-dasharray="4,2"/>
+  <text x="225" y="384" fill="#8b949e" font-family="monospace" font-size="7">&larr; &rarr;</text>
+
+  <!-- No NVMe -->
+  <rect x="480" y="370" width="200" height="40" rx="6" fill="none" stroke="#f85149" stroke-dasharray="4,3"/>
+  <text x="580" y="388" text-anchor="middle" fill="#f85149" font-family="monospace" font-size="10">L3: NVMe</text>
+  <text x="580" y="400" text-anchor="middle" fill="#f85149" font-family="monospace" font-size="8">&cross; NOT SUPPORTED</text>
+
+  <!-- HW tracking -->
+  <rect x="650" y="225" width="320" height="55" rx="6" fill="#161b22" stroke="#39d2c0"/>
+  <text x="810" y="248" text-anchor="middle" fill="#39d2c0" font-family="monospace" font-size="10">Hotness Detection</text>
+  <text x="810" y="264" text-anchor="middle" fill="#8b949e" font-family="monospace" font-size="8">HW: ACTC counters (1650 chip)</text>
+  <text x="810" y="276" text-anchor="middle" fill="#8b949e" font-family="monospace" font-size="8">SW: AF-bit page table scan</text>
+  <line x1="590" y1="252" x2="650" y2="252" stroke="#39d2c0" stroke-width="1" stroke-dasharray="3,2"/>
+</svg>
+</div>
+
+<h3 id="proposed-arch">2.2 Proposed Architecture with NVMe Swap</h3>
+
+<div class="svg-wrap">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1060 680" width="1060" height="680">
+  <defs>
+    <marker id="b1" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <polygon points="0 0, 8 3, 0 6" fill="#3fb950"/>
+    </marker>
+    <marker id="b2" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <polygon points="0 0, 8 3, 0 6" fill="#d29922"/>
+    </marker>
+    <marker id="b3" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <polygon points="0 0, 8 3, 0 6" fill="#f85149"/>
+    </marker>
+    <marker id="b4" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <polygon points="0 0, 8 3, 0 6" fill="#bc8cff"/>
+    </marker>
+  </defs>
+  <rect width="1060" height="680" rx="10" fill="#0d1117"/>
+  <text x="530" y="28" text-anchor="middle" fill="#3fb950" font-family="monospace" font-size="14" font-weight="bold">SMAP &mdash; Proposed Architecture with NVMe Swap (L3 Tier)</text>
+
+  <!-- User-space layer -->
+  <rect x="30" y="50" width="170" height="45" rx="6" fill="#161b22" stroke="#58a6ff"/>
+  <text x="115" y="77" text-anchor="middle" fill="#58a6ff" font-family="monospace" font-size="10">RMRS Plugin</text>
+
+  <line x1="200" y1="72" x2="240" y2="72" stroke="#58a6ff" stroke-width="1" marker-end="url(#b1)"/>
+
+  <rect x="240" y="50" width="180" height="45" rx="6" fill="#161b22" stroke="#58a6ff"/>
+  <text x="330" y="70" text-anchor="middle" fill="#e6edf3" font-family="monospace" font-size="10">ubturbo SDK</text>
+  <text x="330" y="85" text-anchor="middle" fill="#8b949e" font-family="monospace" font-size="8">+ SwapOut/SwapIn APIs</text>
+
+  <!-- SMAP user-space -->
+  <line x1="330" y1="95" x2="330" y2="120" stroke="#3fb950" stroke-width="1.5" marker-end="url(#b1)"/>
+
+  <rect x="100" y="125" width="500" height="55" rx="6" fill="#161b22" stroke="#3fb950" stroke-width="2"/>
+  <text x="350" y="148" text-anchor="middle" fill="#3fb950" font-family="monospace" font-size="12" font-weight="bold">SMAP User-Space (libsmap.so)</text>
+  <text x="350" y="168" text-anchor="middle" fill="#8b949e" font-family="monospace" font-size="9">ProcessManager &bull; Three-Tier Strategy &bull; Swap Accounting</text>
+
+  <!-- NEW strategy box -->
+  <rect x="640" y="105" width="390" height="95" rx="6" fill="rgba(248,81,73,0.05)" stroke="#f85149" stroke-width="2"/>
+  <text x="835" y="125" text-anchor="middle" fill="#f85149" font-family="monospace" font-size="11" font-weight="bold">NEW: Three-Tier Strategy Engine</text>
+  <text x="835" y="142" text-anchor="middle" fill="#8b949e" font-family="monospace" font-size="8">1. Sort pages by freq (existing)</text>
+  <text x="835" y="156" text-anchor="middle" fill="#8b949e" font-family="monospace" font-size="8">2. Cold L1 &rarr; DEMOTE to L2 (existing)</text>
+  <text x="835" y="170" text-anchor="middle" fill="#8b949e" font-family="monospace" font-size="8">3. Zero-freq L2 for N windows &rarr; SWAP_OUT to L3 (NEW)</text>
+  <text x="835" y="184" text-anchor="middle" fill="#8b949e" font-family="monospace" font-size="8">4. On fault &rarr; SWAP_IN from L3 (NEW)</text>
+  <line x1="600" y1="152" x2="640" y2="152" stroke="#f85149" stroke-width="1" stroke-dasharray="3,2"/>
+
+  <!-- ioctl -->
+  <line x1="350" y1="180" x2="350" y2="215" stroke="#3fb950" stroke-width="1.5" marker-end="url(#b1)"/>
+  <text x="365" y="202" fill="#8b949e" font-family="monospace" font-size="8">ioctl</text>
+
+  <!-- SMAP kernel - split into two paths -->
+  <rect x="50" y="220" width="600" height="65" rx="6" fill="#161b22" stroke="#d29922" stroke-width="2"/>
+  <text x="350" y="243" text-anchor="middle" fill="#d29922" font-family="monospace" font-size="12" font-weight="bold">SMAP Kernel Module (smap_tiering.ko)</text>
+  <text x="350" y="263" text-anchor="middle" fill="#8b949e" font-family="monospace" font-size="9">smap_migrate() &bull; smap_swap_out() (NEW) &bull; smap_swap_in() (NEW)</text>
+  <text x="350" y="275" text-anchor="middle" fill="#8b949e" font-family="monospace" font-size="8">Multi-threaded &bull; per-cgroup accounting &bull; async I/O</text>
+
+  <!-- Hotness -->
+  <rect x="690" y="220" width="340" height="65" rx="6" fill="#161b22" stroke="#39d2c0"/>
+  <text x="860" y="243" text-anchor="middle" fill="#39d2c0" font-family="monospace" font-size="10">Hotness Detection</text>
+  <text x="860" y="259" text-anchor="middle" fill="#8b949e" font-family="monospace" font-size="8">HW ACTC + SW AF-bit scan</text>
+  <text x="860" y="271" text-anchor="middle" fill="#8b949e" font-family="monospace" font-size="8">+ cold_windows counter (NEW)</text>
+  <line x1="650" y1="252" x2="690" y2="252" stroke="#39d2c0" stroke-width="1" stroke-dasharray="3,2"/>
+
+  <!-- Split: existing path (left) and new path (right) -->
+  <line x1="250" y1="285" x2="250" y2="320" stroke="#d29922" stroke-width="1.5" marker-end="url(#b2)"/>
+  <line x1="450" y1="285" x2="450" y2="320" stroke="#f85149" stroke-width="1.5" marker-end="url(#b3)"/>
+
+  <!-- Existing: migrate_pages -->
+  <rect x="130" y="325" width="240" height="40" rx="6" fill="#161b22" stroke="#d29922"/>
+  <text x="250" y="345" text-anchor="middle" fill="#d29922" font-family="monospace" font-size="10">migrate_pages() [existing]</text>
+  <text x="250" y="358" text-anchor="middle" fill="#8b949e" font-family="monospace" font-size="8">L1 &harr; L2 NUMA migration</text>
+
+  <!-- NEW: block I/O path -->
+  <rect x="400" y="325" width="280" height="40" rx="6" fill="rgba(248,81,73,0.08)" stroke="#f85149"/>
+  <text x="540" y="345" text-anchor="middle" fill="#f85149" font-family="monospace" font-size="10">smap_swap_bio() [NEW]</text>
+  <text x="540" y="358" text-anchor="middle" fill="#8b949e" font-family="monospace" font-size="8">Direct block I/O to NVMe</text>
+
+  <!-- NEW: swap map -->
+  <rect x="720" y="325" width="300" height="40" rx="6" fill="rgba(248,81,73,0.08)" stroke="#f85149"/>
+  <text x="870" y="345" text-anchor="middle" fill="#f85149" font-family="monospace" font-size="10">smap_swap_map [NEW]</text>
+  <text x="870" y="358" text-anchor="middle" fill="#8b949e" font-family="monospace" font-size="8">Bitmap allocator for NVMe slots</text>
+
+  <!-- Arrows to storage -->
+  <line x1="250" y1="365" x2="250" y2="410" stroke="#d29922" stroke-width="1.5" marker-end="url(#b2)"/>
+  <line x1="540" y1="365" x2="540" y2="410" stroke="#f85149" stroke-width="1.5" marker-end="url(#b3)"/>
+
+  <!-- Memory tiers (bottom) -->
+  <rect x="30" y="415" width="180" height="50" rx="6" fill="rgba(63,185,80,0.12)" stroke="#3fb950" stroke-width="2"/>
+  <text x="120" y="438" text-anchor="middle" fill="#3fb950" font-family="monospace" font-size="12" font-weight="bold">L1: Local DRAM</text>
+  <text x="120" y="455" text-anchor="middle" fill="#8b949e" font-family="monospace" font-size="8">Hot pages</text>
+
+  <rect x="240" y="415" width="200" height="50" rx="6" fill="rgba(210,153,34,0.12)" stroke="#d29922" stroke-width="2"/>
+  <text x="340" y="438" text-anchor="middle" fill="#d29922" font-family="monospace" font-size="12" font-weight="bold">L2: Remote CXL</text>
+  <text x="340" y="455" text-anchor="middle" fill="#8b949e" font-family="monospace" font-size="8">Warm/cold pages</text>
+
+  <rect x="470" y="415" width="220" height="50" rx="6" fill="rgba(248,81,73,0.12)" stroke="#f85149" stroke-width="2"/>
+  <text x="580" y="438" text-anchor="middle" fill="#f85149" font-family="monospace" font-size="12" font-weight="bold">L3: NVMe SSD</text>
+  <text x="580" y="455" text-anchor="middle" fill="#8b949e" font-family="monospace" font-size="8">Coldest pages (NEW)</text>
+
+  <!-- Bidirectional arrows between tiers -->
+  <line x1="210" y1="440" x2="240" y2="440" stroke="#8b949e" stroke-width="1.5"/>
+  <text x="225" y="434" fill="#8b949e" font-family="monospace" font-size="7">&harr;</text>
+
+  <line x1="440" y1="440" x2="470" y2="440" stroke="#f85149" stroke-width="1.5"/>
+  <text x="455" y="434" fill="#f85149" font-family="monospace" font-size="7">&harr;</text>
+
+  <!-- Swap-in path (page fault) -->
+  <rect x="720" y="415" width="310" height="50" rx="6" fill="rgba(188,140,255,0.08)" stroke="#bc8cff"/>
+  <text x="875" y="435" text-anchor="middle" fill="#bc8cff" font-family="monospace" font-size="10">Swap-In Path (NEW)</text>
+  <text x="875" y="452" text-anchor="middle" fill="#8b949e" font-family="monospace" font-size="8">userfaultfd / page fault &rarr; async read &rarr; L1</text>
+
+  <line x1="690" y1="440" x2="720" y2="440" stroke="#bc8cff" stroke-width="1" stroke-dasharray="3,2"/>
+
+  <!-- Legend -->
+  <rect x="30" y="490" width="1000" height="55" rx="6" fill="none" stroke="#30363d"/>
+  <text x="50" y="510" fill="#8b949e" font-family="monospace" font-size="9">Legend:</text>
+  <rect x="110" y="500" width="12" height="12" fill="none" stroke="#3fb950" stroke-width="2"/>
+  <text x="128" y="511" fill="#8b949e" font-family="monospace" font-size="9">Existing component</text>
+  <rect x="310" y="500" width="12" height="12" fill="rgba(248,81,73,0.08)" stroke="#f85149" stroke-width="2"/>
+  <text x="328" y="511" fill="#8b949e" font-family="monospace" font-size="9">New component</text>
+  <rect x="480" y="500" width="12" height="12" fill="none" stroke="#39d2c0"/>
+  <text x="498" y="511" fill="#8b949e" font-family="monospace" font-size="9">Modified component</text>
+
+  <text x="50" y="535" fill="#8b949e" font-family="monospace" font-size="9">Data flow: RMRS &rarr; SDK &rarr; SMAP user &rarr; ioctl &rarr; SMAP kernel &rarr; migrate_pages() (L1&harr;L2) OR smap_swap_bio() (L2&rarr;L3)</text>
+</svg>
+</div>
+
+
+<!-- ─── 3. DESIGN ─── -->
+<h2 id="design">3. Detailed Design</h2>
+
+<h3 id="strategy">3.1 Strategy Layer: Three-Tier Decision Engine</h3>
+
+<p>The current strategy in <code>separate_strategy.c</code> makes a binary decision: demote or promote
+between L1 and L2. We extend this to a three-tier decision:</p>
+
+<div class="svg-wrap">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 500" width="900" height="500">
+  <defs>
+    <marker id="c1" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <polygon points="0 0, 8 3, 0 6" fill="#3fb950"/>
+    </marker>
+    <marker id="c2" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <polygon points="0 0, 8 3, 0 6" fill="#d29922"/>
+    </marker>
+    <marker id="c3" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <polygon points="0 0, 8 3, 0 6" fill="#f85149"/>
+    </marker>
+  </defs>
+  <rect width="900" height="500" rx="10" fill="#0d1117"/>
+  <text x="450" y="28" text-anchor="middle" fill="#3fb950" font-family="monospace" font-size="13" font-weight="bold">Three-Tier Decision Flow</text>
+
+  <!-- Start -->
+  <rect x="320" y="50" width="260" height="36" rx="6" fill="#161b22" stroke="#3fb950" stroke-width="2"/>
+  <text x="450" y="73" text-anchor="middle" fill="#e6edf3" font-family="monospace" font-size="11">ScanMigrateWork() periodic</text>
+
+  <line x1="450" y1="86" x2="450" y2="110" stroke="#3fb950" stroke-width="1.5" marker-end="url(#c1)"/>
+
+  <!-- Gather hotness -->
+  <rect x="300" y="115" width="300" height="36" rx="6" fill="#161b22" stroke="#bc8cff"/>
+  <text x="450" y="138" text-anchor="middle" fill="#bc8cff" font-family="monospace" font-size="10">Gather ACTC / AF-bit data per page</text>
+
+  <line x1="450" y1="151" x2="450" y2="175" stroke="#3fb950" stroke-width="1.5" marker-end="url(#c1)"/>
+
+  <!-- Sort -->
+  <rect x="300" y="180" width="300" height="36" rx="6" fill="#161b22" stroke="#bc8cff"/>
+  <text x="450" y="200" text-anchor="middle" fill="#bc8cff" font-family="monospace" font-size="10">Sort by frequency (ascending)</text>
+
+  <line x1="450" y1="216" x2="450" y2="240" stroke="#3fb950" stroke-width="1.5" marker-end="url(#c1)"/>
+
+  <!-- Decision diamond -->
+  <polygon points="450,245 570,285 450,325 330,285" fill="none" stroke="#d29922" stroke-width="1.5"/>
+  <text x="450" y="282" text-anchor="middle" fill="#d29922" font-family="monospace" font-size="9">freq == 0 for</text>
+  <text x="450" y="295" text-anchor="middle" fill="#d29922" font-family="monospace" font-size="9">N windows?</text>
+
+  <!-- YES: swap out -->
+  <line x1="570" y1="285" x2="650" y2="285" stroke="#f85149" stroke-width="1.5" marker-end="url(#c3)"/>
+  <text x="600" y="278" fill="#3fb950" font-family="monospace" font-size="8">yes</text>
+  <rect x="655" y="267" width="220" height="36" rx="6" fill="rgba(248,81,73,0.1)" stroke="#f85149"/>
+  <text x="765" y="290" text-anchor="middle" fill="#f85149" font-family="monospace" font-size="10">SWAP_OUT &rarr; NVMe (L3)</text>
+
+  <!-- NO: existing decision -->
+  <line x1="450" y1="325" x2="450" y2="355" stroke="#d29922" stroke-width="1.5" marker-end="url(#c2)"/>
+  <text x="462" y="345" fill="#8b949e" font-family="monospace" font-size="8">no</text>
+
+  <!-- Second diamond -->
+  <polygon points="450,360 560,395 450,430 340,395" fill="none" stroke="#d29922" stroke-width="1.5"/>
+  <text x="450" y="393" text-anchor="middle" fill="#d29922" font-family="monospace" font-size="9">freq &lt; threshold?</text>
+
+  <!-- Cold local -->
+  <line x1="340" y1="395" x2="230" y2="395" stroke="#d29922" stroke-width="1.5" marker-end="url(#c2)"/>
+  <text x="290" y="388" fill="#3fb950" font-family="monospace" font-size="8">yes, L1</text>
+  <rect x="30" y="377" width="200" height="36" rx="6" fill="rgba(210,153,34,0.1)" stroke="#d29922"/>
+  <text x="130" y="400" text-anchor="middle" fill="#d29922" font-family="monospace" font-size="10">DEMOTE L1 &rarr; L2</text>
+
+  <!-- Hot remote -->
+  <line x1="560" y1="395" x2="650" y2="395" stroke="#3fb950" stroke-width="1.5" marker-end="url(#c1)"/>
+  <text x="600" y="388" fill="#8b949e" font-family="monospace" font-size="8">no, hot L2</text>
+  <rect x="655" y="377" width="220" height="36" rx="6" fill="rgba(63,185,80,0.1)" stroke="#3fb950"/>
+  <text x="765" y="400" text-anchor="middle" fill="#3fb950" font-family="monospace" font-size="10">PROMOTE L2 &rarr; L1</text>
+
+  <!-- Swap path annotations -->
+  <rect x="655" y="315" width="220" height="22" rx="4" fill="rgba(248,81,73,0.05)" stroke="none"/>
+  <text x="765" y="331" text-anchor="middle" fill="#8b949e" font-family="monospace" font-size="8">Page already in L2 with zero freq</text>
+  <line x1="765" y1="303" x2="765" y2="315" stroke="#f85149" stroke-width="1" stroke-dasharray="3,2"/>
+
+  <!-- Bottom note -->
+  <rect x="100" y="450" width="700" height="36" rx="6" fill="rgba(88,166,255,0.05)" stroke="#58a6ff" stroke-dasharray="4,2"/>
+  <text x="450" y="468" text-anchor="middle" fill="#58a6ff" font-family="monospace" font-size="9">Key insight: only pages already in L2 (remote) with sustained zero frequency are swap-out candidates</text>
+  <text x="450" y="480" text-anchor="middle" fill="#8b949e" font-family="monospace" font-size="8">This avoids LRU inversion &mdash; hot pages are never swapped directly from L1 to L3</text>
+</svg>
+</div>
+
+<h4>Decision Criteria for SWAP_OUT</h4>
+<p>A page in L2 (remote NUMA) qualifies for swap-out when:</p>
+<ol>
+<li><strong>Zero frequency</strong> across <code>cold_window_threshold</code> consecutive scan windows (default: 3)</li>
+<li><strong>Not white-listed</strong> (pinned, reserved, or kernel pages excluded)</li>
+<li><strong>L2 utilization</strong> exceeds <code>l2_swap_watermark</code> (default: 80%)</li>
+<li><strong>NVMe swap space available</strong> (checked via swap map bitmap)</li>
+</ol>
+
+<p>This preserves SMAP&rsquo;s existing L1&harr;L2 behavior and only adds the L3 tier as a
+further backstop. Pages flow strictly downhill: L1 &rarr; L2 &rarr; L3, with promotion
+going L3 &rarr; L1 (skipping L2 to avoid extra migration latency on fault).</p>
+
+<h3 id="swap-module">3.2 Kernel Module: swap_out / swap_in Paths</h3>
+
+<h4>3.2.1 Swap-Out Path</h4>
+
+<pre><code><span class="cm">/* New function in smap_swap.c */</span>
+<span class="kw">int</span> <span class="fn">smap_swap_out</span>(<span class="kw">struct</span> folio **folios, <span class="kw">unsigned int</span> nr_folios,
+                   <span class="kw">struct</span> smap_swap_device *sdev)
+{
+    <span class="kw">for</span> (<span class="kw">int</span> i = <span class="num">0</span>; i < nr_folios; i++) {
+        <span class="cm">/* 1. Allocate slot in swap map */</span>
+        slot = smap_swap_map_alloc(sdev);
+
+        <span class="cm">/* 2. Lock folio, unmap PTEs, replace with swap entry */</span>
+        folio_lock(folios[i]);
+        try_to_unmap(folios[i], TTU_SWAP_OUT);
+        set_smap_swap_pte(folios[i], sdev, slot);
+
+        <span class="cm">/* 3. Submit async write bio to NVMe */</span>
+        bio = bio_alloc(sdev->bdev, <span class="num">1</span>, REQ_OP_WRITE, GFP_KERNEL);
+        bio->bi_iter.bi_sector = slot_to_sector(slot);
+        bio_add_folio(bio, folios[i], folio_size(folios[i]), <span class="num">0</span>);
+        submit_bio(bio);
+
+        <span class="cm">/* 4. On completion callback: free the folio */</span>
+    }
+}</code></pre>
+
+<h4>3.2.2 Swap-In Path</h4>
+
+<pre><code><span class="cm">/* Triggered by page fault on swap PTE */</span>
+<span class="kw">int</span> <span class="fn">smap_swap_in</span>(<span class="kw">struct</span> vm_fault *vmf,
+                  <span class="kw">struct</span> smap_swap_device *sdev, <span class="kw">unsigned long</span> slot)
+{
+    <span class="cm">/* 1. Allocate new folio on L1 (local DRAM) */</span>
+    folio = folio_alloc(GFP_HIGHUSER_MOVABLE | __GFP_THISNODE, <span class="num">0</span>);
+
+    <span class="cm">/* 2. Submit async read bio from NVMe */</span>
+    bio = bio_alloc(sdev->bdev, <span class="num">1</span>, REQ_OP_READ, GFP_KERNEL);
+    bio->bi_iter.bi_sector = slot_to_sector(slot);
+    bio_add_folio(bio, folio, folio_size(folio), <span class="num">0</span>);
+    submit_bio_wait(bio); <span class="cm">/* sync for fault path */</span>
+
+    <span class="cm">/* 3. Install new PTE pointing to L1 folio */</span>
+    set_pte_at(vmf->vma->vm_mm, vmf->address,
+               vmf->pte, mk_pte(&folio->page, vmf->vma->vm_page_prot));
+
+    <span class="cm">/* 4. Free swap slot */</span>
+    smap_swap_map_free(sdev, slot);
+}</code></pre>
+
+<div class="note">
+<strong>Design choice: userfaultfd vs kernel page fault.</strong>
+Two approaches for swap-in: (a) register a userfaultfd handler in SMAP user-space that intercepts
+faults and issues reads, or (b) hook into the kernel&rsquo;s fault path via the SMAP kernel module.
+We recommend (b) for lower latency &mdash; avoiding user-kernel round-trip on every fault. The SMAP
+module already has a character device (<code>/dev/smap_mig_device</code>) and kprobe infrastructure to
+hook kernel functions.
+</div>
+
+<h3 id="backing-dev">3.3 Backing Device Management</h3>
+
+<h4>Swap Map (Bitmap Allocator)</h4>
+<p>A simple bitmap tracks which 4 KiB (or 2 MiB for hugepage) slots on the NVMe device are in use:</p>
+
+<pre><code><span class="kw">struct</span> <span class="fn">smap_swap_device</span> {
+    <span class="kw">struct</span> block_device *bdev;      <span class="cm">/* NVMe block device */</span>
+    <span class="kw">unsigned long</span> *bitmap;           <span class="cm">/* slot allocation bitmap */</span>
+    <span class="kw">unsigned long</span> nr_slots;          <span class="cm">/* total slots */</span>
+    <span class="kw">atomic_long_t</span> nr_used;           <span class="cm">/* allocated count */</span>
+    <span class="kw">spinlock_t</span> lock;                 <span class="cm">/* protects bitmap */</span>
+    sector_t start_sector;           <span class="cm">/* partition start */</span>
+    <span class="kw">unsigned int</span> slot_size;          <span class="cm">/* PAGE_SIZE or HPAGE_SIZE */</span>
+};
+
+<span class="cm">/* Slot allocation: find first zero bit */</span>
+<span class="kw">unsigned long</span> <span class="fn">smap_swap_map_alloc</span>(<span class="kw">struct</span> smap_swap_device *sdev) {
+    <span class="kw">unsigned long</span> slot;
+    spin_lock(&sdev->lock);
+    slot = find_first_zero_bit(sdev->bitmap, sdev->nr_slots);
+    <span class="kw">if</span> (slot < sdev->nr_slots) {
+        set_bit(slot, sdev->bitmap);
+        atomic_long_inc(&sdev->nr_used);
+    }
+    spin_unlock(&sdev->lock);
+    <span class="kw">return</span> slot;
+}</code></pre>
+
+<h4>Device Configuration</h4>
+<p>The NVMe backing device is configured via a new SMAP config entry:</p>
+<pre><code><span class="cm"># /opt/ubturbo/conf/smap/swap.config</span>
+swap_device=/dev/nvme0n1p2
+swap_size_mb=65536          <span class="cm"># 64 GB swap partition</span>
+slot_size=4096              <span class="cm"># 4K slots (or 2097152 for 2M hugepage slots)</span>
+l2_swap_watermark=80        <span class="cm"># start swapping when L2 > 80% used</span>
+cold_window_threshold=3     <span class="cm"># pages must be freq=0 for 3 consecutive scans</span>
+max_swap_out_per_cycle=1024 <span class="cm"># max pages to swap per scan period</span>
+enable_compressed_swap=0    <span class="cm"># optional: compress before writing to NVMe</span></code></pre>
+
+<h3 id="accounting">3.4 Swap Accounting &amp; Limits</h3>
+
+<p>SMAP needs to track per-process swap usage to enforce limits and support migration-back:</p>
+
+<pre><code><span class="cm">/* Added to ProcessAttribute */</span>
+<span class="kw">struct</span> <span class="fn">SwapAccounting</span> {
+    uint64_t nr_swapped_out;        <span class="cm">/* pages currently on NVMe */</span>
+    uint64_t nr_swap_in_faults;     <span class="cm">/* cumulative swap-in count */</span>
+    uint64_t swap_limit_pages;      <span class="cm">/* max pages allowed on NVMe */</span>
+    uint16_t cold_windows[MAX_NODES]; <span class="cm">/* consecutive zero-freq window count per node */</span>
+};</code></pre>
+
+<p>Accounting hooks into the existing <code>WalkPage</code> structure and <code>remoteNrPagesAfterMigrate</code>
+bookkeeping in <code>StrategyAttribute</code>.</p>
+
+<h3 id="config">3.5 Configuration &amp; Interfaces</h3>
+
+<h4>New smap_interface.h Functions</h4>
+
+<pre><code><span class="cm">/* New API additions to smap_interface.h */</span>
+
+<span class="cm">/** Configure NVMe swap backing device */</span>
+<span class="kw">int</span> <span class="fn">ubturbo_smap_swap_device_set</span>(<span class="kw">const char</span> *dev_path, uint64_t size_mb,
+                                  uint32_t slot_size);
+
+<span class="cm">/** Manually trigger swap-out of coldest pages for a process */</span>
+<span class="kw">int</span> <span class="fn">ubturbo_smap_swap_out</span>(<span class="kw">struct</span> SwapOutMsg *msg, <span class="kw">int</span> pidType);
+
+<span class="cm">/** Query swap usage statistics */</span>
+<span class="kw">int</span> <span class="fn">ubturbo_smap_swap_stats_query</span>(pid_t pid, <span class="kw">struct</span> SwapStats *stats);
+
+<span class="cm">/** Set swap watermark thresholds */</span>
+<span class="kw">int</span> <span class="fn">ubturbo_smap_swap_config_set</span>(<span class="kw">struct</span> SwapConfigMsg *msg);
+
+<span class="cm">/** Emergency swap-out when both L1 and L2 are full */</span>
+<span class="kw">void</span> <span class="fn">ubturbo_smap_urgent_swap_out</span>(uint64_t size);</code></pre>
+
+<h4>New IOCTL Commands</h4>
+
+<pre><code><span class="cm">/* Added to mig_init.h alongside existing SMAP_MIG_* ioctls */</span>
+<span class="kw">#define</span> SMAP_SWAP_OUT       _IOW(<span class="num">0xB9</span>, <span class="num">3</span>, <span class="kw">struct</span> smap_swap_msg)
+<span class="kw">#define</span> SMAP_SWAP_IN        _IOW(<span class="num">0xB9</span>, <span class="num">4</span>, <span class="kw">struct</span> smap_swap_msg)
+<span class="kw">#define</span> SMAP_SWAP_DEV_SET   _IOW(<span class="num">0xB9</span>, <span class="num">5</span>, <span class="kw">struct</span> smap_swap_dev_msg)
+<span class="kw">#define</span> SMAP_SWAP_STATS     _IOR(<span class="num">0xB9</span>, <span class="num">6</span>, <span class="kw">struct</span> smap_swap_stats)</code></pre>
+
+<h4>New MigrateDirection</h4>
+
+<pre><code><span class="kw">typedef enum</span> {
+    DEMOTE,      <span class="cm">// Cold L1 &rarr; L2 (existing)</span>
+    PROMOTE,     <span class="cm">// Hot L2 &rarr; L1 (existing)</span>
+    SWAP,        <span class="cm">// Bidirectional L1 &harr; L2 (existing)</span>
+    SWAP_OUT,    <span class="cm">// Coldest L2 &rarr; L3 NVMe (NEW)</span>
+    SWAP_IN,     <span class="cm">// Fault L3 &rarr; L1 (NEW, demand-paged)</span>
+} <span class="fn">MigrateDirection</span>;</code></pre>
+
+
+<!-- ─── 4. DATA STRUCTURES ─── -->
+<h2 id="data-structures">4. New Data Structures</h2>
+
+<pre><code><span class="cm">/* ─── Kernel-space (smap_swap.h) ─── */</span>
+
+<span class="kw">struct</span> <span class="fn">smap_swap_entry</span> {
+    <span class="kw">unsigned long</span> slot;          <span class="cm">/* position in swap device */</span>
+    pid_t pid;                   <span class="cm">/* owning process */</span>
+    <span class="kw">unsigned long</span> vaddr;         <span class="cm">/* original virtual address */</span>
+    <span class="kw">int</span> src_node;                <span class="cm">/* NUMA node page was on (L2) */</span>
+    ktime_t swap_time;           <span class="cm">/* when swapped out */</span>
+};
+
+<span class="kw">struct</span> <span class="fn">smap_swap_device</span> {
+    <span class="kw">struct</span> block_device *bdev;
+    <span class="kw">unsigned long</span> *bitmap;       <span class="cm">/* slot allocation bitmap */</span>
+    <span class="kw">unsigned long</span> nr_slots;
+    atomic_long_t nr_used;
+    spinlock_t lock;
+    sector_t start_sector;
+    <span class="kw">unsigned int</span> slot_size;      <span class="cm">/* PAGE_SIZE or HPAGE_PMD_SIZE */</span>
+    <span class="kw">struct</span> xarray entries;       <span class="cm">/* vaddr &rarr; smap_swap_entry lookup */</span>
+};
+
+<span class="kw">struct</span> <span class="fn">smap_swap_msg</span> {
+    pid_t pid;
+    <span class="kw">int</span> count;
+    <span class="kw">unsigned long</span> addrs[<span class="num">MAX_MIG_LIST_NR</span>]; <span class="cm">/* physical addresses to swap */</span>
+};
+
+<span class="cm">/* ─── User-space (manage.h additions) ─── */</span>
+
+<span class="kw">struct</span> <span class="fn">SwapConfig</span> {
+    <span class="kw">char</span> dev_path[<span class="num">64</span>];           <span class="cm">/* e.g. "/dev/nvme0n1p2" */</span>
+    uint64_t size_mb;
+    uint32_t slot_size;
+    uint32_t l2_swap_watermark;  <span class="cm">/* percent, 0-100 */</span>
+    uint32_t cold_window_threshold;
+    uint32_t max_swap_per_cycle;
+    <span class="kw">bool</span> enable_compressed;
+};
+
+<span class="kw">struct</span> <span class="fn">SwapStats</span> {
+    uint64_t total_slots;
+    uint64_t used_slots;
+    uint64_t swap_out_count;     <span class="cm">/* cumulative */</span>
+    uint64_t swap_in_count;
+    uint64_t swap_out_bytes;
+    uint64_t swap_in_bytes;
+    uint64_t avg_swap_out_us;    <span class="cm">/* avg latency */</span>
+    uint64_t avg_swap_in_us;
+};</code></pre>
+
+
+<!-- ─── 5. CODE CHANGES ─── -->
+<h2 id="code-changes">5. Code Change Map</h2>
+
+<table>
+<tr><th>File</th><th>Change</th><th>Type</th></tr>
+<tr>
+<td><code>plugins/smap/src/user/manage/manage.h</code></td>
+<td>Add <code>SWAP_OUT</code>, <code>SWAP_IN</code> to <code>MigrateDirection</code>; add <code>SwapAccounting</code> to <code>ProcessAttribute</code>; add <code>SwapConfig</code></td>
+<td><span class="badge badge-orange">modify</span></td>
+</tr>
+<tr>
+<td><code>plugins/smap/src/user/strategy/separate_strategy.c</code></td>
+<td>Add <code>SwapOutStrategy()</code> after existing demote/promote logic; check <code>cold_windows</code> counter and L2 watermark</td>
+<td><span class="badge badge-orange">modify</span></td>
+</tr>
+<tr>
+<td><code>plugins/smap/src/user/strategy/strategy.c</code></td>
+<td>Extend <code>RunStrategy()</code> to call <code>SwapOutStrategy()</code> when swap device is configured</td>
+<td><span class="badge badge-orange">modify</span></td>
+</tr>
+<tr>
+<td><code>plugins/smap/src/user/strategy/migration.h/.c</code></td>
+<td>Add <code>DoSwapOut()</code> and <code>DoSwapIn()</code> alongside <code>DoMigration()</code></td>
+<td><span class="badge badge-orange">modify</span></td>
+</tr>
+<tr>
+<td><code>plugins/smap/src/user/manage/oom_migrate.h/.c</code></td>
+<td>Extend <code>FindPidMigrateSize()</code> to consider swap-out as fallback when L2 is full</td>
+<td><span class="badge badge-orange">modify</span></td>
+</tr>
+<tr>
+<td><code>plugins/smap/src/tiering/smap_swap.c</code></td>
+<td>New file: <code>smap_swap_out()</code>, <code>smap_swap_in()</code>, <code>smap_swap_bio()</code>, swap map allocator</td>
+<td><span class="badge badge-red">new</span></td>
+</tr>
+<tr>
+<td><code>plugins/smap/src/tiering/smap_swap.h</code></td>
+<td>New file: <code>smap_swap_device</code>, <code>smap_swap_entry</code>, <code>smap_swap_msg</code> structs</td>
+<td><span class="badge badge-red">new</span></td>
+</tr>
+<tr>
+<td><code>plugins/smap/src/tiering/mig_init.h</code></td>
+<td>Add <code>SMAP_SWAP_OUT</code>, <code>SMAP_SWAP_IN</code>, <code>SMAP_SWAP_DEV_SET</code>, <code>SMAP_SWAP_STATS</code> ioctls</td>
+<td><span class="badge badge-orange">modify</span></td>
+</tr>
+<tr>
+<td><code>plugins/smap/src/drivers/accessed_bit.h/.c</code></td>
+<td>Add <code>cold_windows</code> counter in tracking info; increment when page freq=0 in scan window</td>
+<td><span class="badge badge-orange">modify</span></td>
+</tr>
+<tr>
+<td><code>plugins/smap/src/user/manage/smap_config.h</code></td>
+<td>Add <code>SwapPayload</code> to config binary format in <code>/dev/shm/smap_config</code></td>
+<td><span class="badge badge-orange">modify</span></td>
+</tr>
+<tr>
+<td><code>src/smap/smap_interface.h</code></td>
+<td>Add <code>ubturbo_smap_swap_*</code> APIs, <code>SwapOutMsg</code>, <code>SwapStats</code>, <code>SwapConfigMsg</code></td>
+<td><span class="badge badge-orange">modify</span></td>
+</tr>
+<tr>
+<td><code>src/smap/smap_handler_msg.h/.cpp</code></td>
+<td>Add codec classes for swap messages</td>
+<td><span class="badge badge-orange">modify</span></td>
+</tr>
+<tr>
+<td><code>plugins/rmrs/src/ubturbo_plugin/common/rmrs_smap_helper.h/.cpp</code></td>
+<td>Add <code>SwapColdDataToNvme()</code> wrapper calling new SMAP swap APIs</td>
+<td><span class="badge badge-orange">modify</span></td>
+</tr>
+<tr>
+<td><code>conf/smap/swap.config</code></td>
+<td>New config file for swap device, watermarks, thresholds</td>
+<td><span class="badge badge-red">new</span></td>
+</tr>
+</table>
+
+
+<!-- ─── 6. FLOW ─── -->
+<h2 id="flow">6. Operational Flow</h2>
+
+<div class="svg-wrap">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 540" width="1000" height="540">
+  <defs>
+    <marker id="d1" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <polygon points="0 0, 8 3, 0 6" fill="#3fb950"/>
+    </marker>
+    <marker id="d2" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <polygon points="0 0, 8 3, 0 6" fill="#f85149"/>
+    </marker>
+    <marker id="d3" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <polygon points="0 0, 8 3, 0 6" fill="#bc8cff"/>
+    </marker>
+  </defs>
+  <rect width="1000" height="540" rx="10" fill="#0d1117"/>
+
+  <!-- Title -->
+  <text x="500" y="25" text-anchor="middle" fill="#f85149" font-family="monospace" font-size="13" font-weight="bold">Swap-Out Flow (L2 &rarr; L3)</text>
+
+  <!-- Step 1 -->
+  <rect x="30" y="50" width="280" height="40" rx="5" fill="#161b22" stroke="#3fb950"/>
+  <text x="170" y="67" text-anchor="middle" fill="#e6edf3" font-family="monospace" font-size="9">1. Periodic scan: ScanMigrateWork()</text>
+  <text x="170" y="82" text-anchor="middle" fill="#8b949e" font-family="monospace" font-size="8">every SCAN_MIGRATE_PERIOD ms</text>
+
+  <line x1="310" y1="70" x2="350" y2="70" stroke="#3fb950" stroke-width="1.5" marker-end="url(#d1)"/>
+
+  <!-- Step 2 -->
+  <rect x="355" y="50" width="290" height="40" rx="5" fill="#161b22" stroke="#3fb950"/>
+  <text x="500" y="67" text-anchor="middle" fill="#e6edf3" font-family="monospace" font-size="9">2. Gather AF data per L2 page</text>
+  <text x="500" y="82" text-anchor="middle" fill="#8b949e" font-family="monospace" font-size="8">cold_windows++ if freq == 0</text>
+
+  <line x1="645" y1="70" x2="685" y2="70" stroke="#3fb950" stroke-width="1.5" marker-end="url(#d1)"/>
+
+  <!-- Step 3 -->
+  <rect x="690" y="50" width="280" height="40" rx="5" fill="#161b22" stroke="#d29922"/>
+  <text x="830" y="67" text-anchor="middle" fill="#d29922" font-family="monospace" font-size="9">3. Check: cold_windows &ge; threshold</text>
+  <text x="830" y="82" text-anchor="middle" fill="#d29922" font-family="monospace" font-size="8">&amp;&amp; L2 usage &gt; watermark</text>
+
+  <line x1="830" y1="90" x2="830" y2="120" stroke="#f85149" stroke-width="1.5" marker-end="url(#d2)"/>
+
+  <!-- Step 4 -->
+  <rect x="660" y="125" width="340" height="40" rx="5" fill="rgba(248,81,73,0.08)" stroke="#f85149"/>
+  <text x="830" y="142" text-anchor="middle" fill="#f85149" font-family="monospace" font-size="9">4. Build swap-out list (max N pages/cycle)</text>
+  <text x="830" y="157" text-anchor="middle" fill="#8b949e" font-family="monospace" font-size="8">Select coldest L2 pages by freq &rarr; MigList</text>
+
+  <line x1="660" y1="145" x2="580" y2="145" stroke="#f85149" stroke-width="1.5" marker-end="url(#d2)"/>
+
+  <!-- Step 5 -->
+  <rect x="280" y="125" width="300" height="40" rx="5" fill="rgba(248,81,73,0.08)" stroke="#f85149"/>
+  <text x="430" y="142" text-anchor="middle" fill="#f85149" font-family="monospace" font-size="9">5. ioctl(SMAP_SWAP_OUT, swap_msg)</text>
+  <text x="430" y="157" text-anchor="middle" fill="#8b949e" font-family="monospace" font-size="8">user-space &rarr; kernel module</text>
+
+  <line x1="430" y1="165" x2="430" y2="195" stroke="#f85149" stroke-width="1.5" marker-end="url(#d2)"/>
+
+  <!-- Step 6 -->
+  <rect x="230" y="200" width="400" height="55" rx="5" fill="rgba(248,81,73,0.08)" stroke="#f85149"/>
+  <text x="430" y="220" text-anchor="middle" fill="#f85149" font-family="monospace" font-size="9">6. smap_swap_out() in kernel</text>
+  <text x="430" y="235" text-anchor="middle" fill="#8b949e" font-family="monospace" font-size="8">a) smap_swap_map_alloc() &rarr; get NVMe slot</text>
+  <text x="430" y="248" text-anchor="middle" fill="#8b949e" font-family="monospace" font-size="8">b) unmap PTE, set swap entry &bull; c) bio_submit(WRITE) &bull; d) free folio</text>
+
+  <line x1="430" y1="255" x2="430" y2="290" stroke="#f85149" stroke-width="1.5" marker-end="url(#d2)"/>
+
+  <!-- NVMe -->
+  <rect x="300" y="295" width="260" height="40" rx="5" fill="rgba(248,81,73,0.12)" stroke="#f85149" stroke-width="2"/>
+  <text x="430" y="320" text-anchor="middle" fill="#f85149" font-family="monospace" font-size="11" font-weight="bold">NVMe SSD (/dev/nvme0n1p2)</text>
+
+  <!-- ═══ Swap-In Path ═══ -->
+  <text x="500" y="370" text-anchor="middle" fill="#bc8cff" font-family="monospace" font-size="13" font-weight="bold">Swap-In Flow (L3 &rarr; L1)</text>
+
+  <rect x="30" y="390" width="200" height="40" rx="5" fill="#161b22" stroke="#bc8cff"/>
+  <text x="130" y="407" text-anchor="middle" fill="#bc8cff" font-family="monospace" font-size="9">1. Page fault on swap PTE</text>
+  <text x="130" y="420" text-anchor="middle" fill="#8b949e" font-family="monospace" font-size="8">process accesses swapped page</text>
+
+  <line x1="230" y1="410" x2="270" y2="410" stroke="#bc8cff" stroke-width="1.5" marker-end="url(#d3)"/>
+
+  <rect x="275" y="390" width="220" height="40" rx="5" fill="#161b22" stroke="#bc8cff"/>
+  <text x="385" y="407" text-anchor="middle" fill="#bc8cff" font-family="monospace" font-size="9">2. Decode swap entry</text>
+  <text x="385" y="420" text-anchor="middle" fill="#8b949e" font-family="monospace" font-size="8">&rarr; smap_swap_device + slot</text>
+
+  <line x1="495" y1="410" x2="535" y2="410" stroke="#bc8cff" stroke-width="1.5" marker-end="url(#d3)"/>
+
+  <rect x="540" y="390" width="200" height="40" rx="5" fill="#161b22" stroke="#bc8cff"/>
+  <text x="640" y="407" text-anchor="middle" fill="#bc8cff" font-family="monospace" font-size="9">3. Alloc L1 folio</text>
+  <text x="640" y="420" text-anchor="middle" fill="#8b949e" font-family="monospace" font-size="8">GFP_HIGHUSER_MOVABLE</text>
+
+  <line x1="740" y1="410" x2="780" y2="410" stroke="#bc8cff" stroke-width="1.5" marker-end="url(#d3)"/>
+
+  <rect x="785" y="390" width="185" height="40" rx="5" fill="#161b22" stroke="#bc8cff"/>
+  <text x="878" y="407" text-anchor="middle" fill="#bc8cff" font-family="monospace" font-size="9">4. bio READ from NVMe</text>
+  <text x="878" y="420" text-anchor="middle" fill="#8b949e" font-family="monospace" font-size="8">sync wait for fault</text>
+
+  <!-- Step 5-6 -->
+  <line x1="878" y1="430" x2="878" y2="460" stroke="#bc8cff" stroke-width="1.5" marker-end="url(#d3)"/>
+
+  <rect x="540" y="465" width="200" height="40" rx="5" fill="#161b22" stroke="#3fb950"/>
+  <text x="640" y="482" text-anchor="middle" fill="#3fb950" font-family="monospace" font-size="9">5. Install PTE &rarr; L1 DRAM</text>
+  <text x="640" y="497" text-anchor="middle" fill="#8b949e" font-family="monospace" font-size="8">page now hot again</text>
+
+  <line x1="740" y1="485" x2="785" y2="485" stroke="#3fb950" stroke-width="1" stroke-dasharray="3,2"/>
+
+  <rect x="785" y="465" width="185" height="40" rx="5" fill="#161b22" stroke="#3fb950"/>
+  <text x="878" y="482" text-anchor="middle" fill="#3fb950" font-family="monospace" font-size="9">6. Free swap slot</text>
+  <text x="878" y="497" text-anchor="middle" fill="#8b949e" font-family="monospace" font-size="8">smap_swap_map_free()</text>
+
+  <line x1="540" y1="485" x2="500" y2="485" stroke="#bc8cff" stroke-width="1" stroke-dasharray="3,2"/>
+
+  <!-- Note: skip L2 -->
+  <rect x="30" y="465" width="460" height="40" rx="5" fill="rgba(88,166,255,0.05)" stroke="#58a6ff" stroke-dasharray="3,2"/>
+  <text x="260" y="482" text-anchor="middle" fill="#58a6ff" font-family="monospace" font-size="9">Key: swap-in goes directly to L1 (skip L2) for minimum fault latency</text>
+  <text x="260" y="497" text-anchor="middle" fill="#8b949e" font-family="monospace" font-size="8">If page cools again, normal demote path moves it L1 &rarr; L2 &rarr; L3</text>
+</svg>
+</div>
+
+
+<!-- ─── 7. KERNEL INTEGRATION ─── -->
+<h2 id="integration">7. Integration with Kernel Swap Subsystem</h2>
+
+<h3>Option A: Custom Swap (Recommended)</h3>
+<p>SMAP manages its own swap map and block I/O, bypassing the kernel&rsquo;s
+<code>swap_info_struct</code> / <code>swap_cache</code> entirely. This gives full control over:</p>
+<ul>
+<li>Slot allocation strategy (sequential vs. scattered for NVMe wear leveling)</li>
+<li>Compressed swap (optional LZ4/zstd compression before write)</li>
+<li>Per-process swap limits (not available in kernel swap)</li>
+<li>Hugepage-aware slot sizing (2 MiB slots for VM workloads)</li>
+</ul>
+
+<p>Trade-off: must handle PTE manipulation carefully and hook into the fault path.
+SMAP already uses kprobes for <code>migrate_pages()</code> resolution, so extending this to hook
+<code>do_swap_page()</code> or register a custom <code>swap_ops</code> is feasible.</p>
+
+<h3>Option B: Kernel swapon Integration</h3>
+<p>Alternative: configure the NVMe device as a standard Linux swap partition via
+<code>swapon /dev/nvme0n1p2</code> and let SMAP trigger <code>madvise(MADV_PAGEOUT)</code> on cold pages
+to push them through the kernel&rsquo;s standard swap path.</p>
+
+<table>
+<tr><th>Aspect</th><th>Option A: Custom Swap</th><th>Option B: Kernel swapon</th></tr>
+<tr><td>Implementation effort</td><td>High (bio, PTE, fault hook)</td><td>Low (madvise + swapon)</td></tr>
+<tr><td>Per-process accounting</td><td>Full control</td><td>Limited (cgroup only)</td></tr>
+<tr><td>Hugepage support</td><td>Native 2M slots</td><td>Split to 4K on swap</td></tr>
+<tr><td>Compressed swap</td><td>Custom LZ4/zstd</td><td>Use zswap as frontend</td></tr>
+<tr><td>Swap-in latency</td><td>Optimized (direct bio)</td><td>Standard (through VFS)</td></tr>
+<tr><td>Maintenance burden</td><td>Must track kernel ABI changes</td><td>Kernel-maintained</td></tr>
+</table>
+
+<div class="note">
+<strong>Recommendation:</strong> Start with Option B (kernel swapon + madvise) for a quick prototype,
+then evaluate whether the latency and hugepage limitations justify moving to Option A.
+Option B can be implemented entirely in SMAP user-space with no kernel module changes.
+</div>
+
+<h3>Option B Implementation Sketch</h3>
+<pre><code><span class="cm">/* In SwapOutStrategy() &mdash; user-space only, no kernel changes */</span>
+<span class="kw">static int</span> <span class="fn">SwapOutViaMadvise</span>(ProcessAttr *process, ActcData *coldPages,
+                             uint64_t count)
+{
+    <span class="kw">for</span> (uint64_t i = <span class="num">0</span>; i < count; i++) {
+        <span class="kw">void</span> *vaddr = phys_to_virt_for_pid(process->pid, coldPages[i].addr);
+        <span class="cm">/* MADV_PAGEOUT tells kernel to reclaim this page immediately */</span>
+        process_madvise(pidfd, &iov, <span class="num">1</span>, MADV_PAGEOUT, <span class="num">0</span>);
+    }
+    process->swapAccounting.nr_swapped_out += count;
+}</code></pre>
+
+<p>This uses <code>process_madvise(2)</code> (Linux 5.10+) which allows one process to advise
+another&rsquo;s memory &mdash; exactly what SMAP user-space needs. Combined with a standard
+<code>swapon</code> on the NVMe partition, the kernel handles all the I/O, PTE manipulation,
+and swap-in fault handling automatically.</p>
+
+
+<!-- ─── 8. TRADEOFFS ─── -->
+<h2 id="tradeoffs">8. Design Tradeoffs &amp; Alternatives</h2>
+
+<h3>8.1 When to Swap vs. When to Compress</h3>
+<p>SMAP could optionally compress pages before writing to NVMe (using the zram/zswap
+compression infrastructure documented in our companion document). This adds ~1&ndash;10 &mu;s
+CPU time but can double effective NVMe capacity.</p>
+
+<table>
+<tr><th>Approach</th><th>Latency (write)</th><th>NVMe Capacity</th><th>CPU Cost</th></tr>
+<tr><td>Direct swap (uncompressed)</td><td>~10&ndash;50 &mu;s</td><td>1&times;</td><td>Minimal</td></tr>
+<tr><td>Compressed swap (LZ4)</td><td>~15&ndash;55 &mu;s</td><td>~2&ndash;3&times;</td><td>Moderate</td></tr>
+<tr><td>Compressed swap (zstd)</td><td>~30&ndash;100 &mu;s</td><td>~3&ndash;4&times;</td><td>High</td></tr>
+</table>
+
+<h3>8.2 LRU Inversion Risk</h3>
+<p>A known problem (documented by Chris Down / Meta for zswap): if SMAP swaps a page to
+NVMe and it gets faulted back to L1, but a &ldquo;warmer&rdquo; page is still sitting in L2, the
+memory hierarchy is inverted. Our design mitigates this by:</p>
+<ul>
+<li>Only swapping pages with <strong>sustained zero frequency</strong> across multiple scan windows</li>
+<li>Swapping from L2 only (never directly from L1 to L3)</li>
+<li>Faulting directly to L1 (the page was accessed, so it&rsquo;s now hot)</li>
+<li>Tracking <code>swap_in_faults</code> per process &mdash; if swap-in rate is high, reduce swap-out aggressiveness</li>
+</ul>
+
+<h3>8.3 Hugepage Handling</h3>
+<p>SMAP primarily works with 2M hugepages for VM workloads. Swapping 2M pages has different
+tradeoffs:</p>
+<ul>
+<li><strong>Option A (custom):</strong> 2M NVMe slots &mdash; wastes space if page is mostly zero, but avoids THP splitting</li>
+<li><strong>Option B (kernel):</strong> Kernel splits THP to 4K before swapping &mdash; loses hugepage on swap-in</li>
+<li><strong>Hybrid:</strong> Compress the 2M page; if compression ratio &gt; 50%, write compressed to NVMe; else split to 4K</li>
+</ul>
+
+<h3>8.4 Wear Leveling</h3>
+<p>Sequential slot allocation causes hot spots on NVMe. Mitigations:</p>
+<ul>
+<li>Randomized starting offset per allocation epoch</li>
+<li>Rely on NVMe FTL&rsquo;s internal wear leveling (modern drives handle this well)</li>
+<li>Monitor <code>/sys/block/nvmeXnY/device/wear_leveling_count</code> and alert if approaching end-of-life</li>
+</ul>
+
+
+<!-- ─── 9. REFERENCES ─── -->
+<h2 id="references">9. References</h2>
+
+<ol>
+<li>ubturbo source: <a href="https://gitcode.com/openeuler/ubturbo">gitcode.com/openeuler/ubturbo</a></li>
+<li>SMAP plugin: <code>plugins/smap/README.md</code>, <code>plugins/smap/src/</code></li>
+<li>Linux <code>process_madvise(2)</code>: <code>man 2 process_madvise</code> &mdash; cross-process memory advice (5.10+)</li>
+<li>Linux <code>MADV_PAGEOUT</code>: forces page reclaim, pushing to swap if configured</li>
+<li>Chris Down / Meta: LRU inversion analysis in zswap/zram (LWN.net, 2026)</li>
+<li>zram writeback: <code>Documentation/admin-guide/blockdev/zram.rst</code> &mdash; compressed writeback to backing device</li>
+<li>Companion document: <a href="linux_zram_zswap.html">Linux zram &amp; zswap Architecture Deep Dive</a></li>
+<li>SMAP kernel interfaces: <code>src/smap/smap_interface.h</code> (lines 138&ndash;293)</li>
+<li>SMAP strategy engine: <code>plugins/smap/src/user/strategy/separate_strategy.c</code></li>
+<li>SMAP migration wrapper: <code>plugins/smap/src/tiering/smap_migrate_wrapper.c</code></li>
+</ol>
+
+<hr>
+<p style="color:var(--muted); font-size:0.85em; margin-top:30px;">
+Generated April 2026 &mdash; Based on ubturbo commit tree analysis + Linux kernel 7.1-rc1 swap subsystem knowledge.
+</p>
+
+</body>
+</html>

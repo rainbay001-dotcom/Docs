@@ -1,0 +1,1628 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Linux 压缩交换：zram 与 zswap — 架构深度剖析</title>
+<style>
+  :root {
+    --bg: #0d1117; --surface: #161b22; --border: #30363d;
+    --text: #e6edf3; --text2: #8b949e; --accent: #58a6ff;
+    --green: #3fb950; --orange: #d29922; --red: #f85149;
+    --purple: #bc8cff; --pink: #f778ba; --cyan: #39d2c0;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: 'SF Mono', 'Cascadia Code', 'Fira Code', 'JetBrains Mono', monospace;
+    background: var(--bg); color: var(--text); line-height: 1.7;
+    max-width: 1200px; margin: 0 auto; padding: 2rem;
+  }
+  h1 { font-size: 2rem; color: var(--accent); border-bottom: 2px solid var(--accent); padding-bottom: 0.5rem; margin-bottom: 1.5rem; }
+  h2 { font-size: 1.5rem; color: var(--green); margin: 2.5rem 0 1rem; border-left: 4px solid var(--green); padding-left: 0.8rem; }
+  h3 { font-size: 1.15rem; color: var(--purple); margin: 1.8rem 0 0.8rem; }
+  h4 { font-size: 1rem; color: var(--orange); margin: 1.2rem 0 0.5rem; }
+  p, li { color: var(--text); margin-bottom: 0.6rem; font-size: 0.92rem; }
+  ul, ol { padding-left: 1.5rem; }
+  a { color: var(--accent); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  code {
+    background: var(--surface); border: 1px solid var(--border);
+    padding: 0.15rem 0.4rem; border-radius: 4px; font-size: 0.88rem; color: var(--cyan);
+  }
+  pre {
+    background: var(--surface); border: 1px solid var(--border);
+    padding: 1rem; border-radius: 8px; overflow-x: auto;
+    font-size: 0.85rem; line-height: 1.5; margin: 0.8rem 0 1.2rem;
+  }
+  pre code { border: none; padding: 0; background: none; }
+  .svg-container {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 12px; padding: 1.5rem; margin: 1.5rem 0;
+    overflow-x: auto;
+  }
+  .svg-container svg { display: block; margin: 0 auto; }
+  table {
+    width: 100%; border-collapse: collapse; margin: 1rem 0 1.5rem;
+    font-size: 0.88rem;
+  }
+  th { background: var(--surface); color: var(--accent); text-align: left; padding: 0.6rem 0.8rem; border: 1px solid var(--border); }
+  td { padding: 0.5rem 0.8rem; border: 1px solid var(--border); }
+  tr:nth-child(even) td { background: rgba(22,27,34,0.5); }
+  .note {
+    background: rgba(88,166,255,0.08); border-left: 3px solid var(--accent);
+    padding: 0.8rem 1rem; margin: 1rem 0; border-radius: 0 6px 6px 0;
+    font-size: 0.88rem;
+  }
+  .warn {
+    background: rgba(210,153,34,0.08); border-left: 3px solid var(--orange);
+    padding: 0.8rem 1rem; margin: 1rem 0; border-radius: 0 6px 6px 0;
+    font-size: 0.88rem;
+  }
+  .toc { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 1.2rem 1.5rem; margin: 1.5rem 0; }
+  .toc a { display: block; padding: 0.2rem 0; color: var(--text2); }
+  .toc a:hover { color: var(--accent); }
+  .toc .l2 { padding-left: 1.2rem; }
+  .tag {
+    display: inline-block; font-size: 0.75rem; padding: 0.1rem 0.5rem;
+    border-radius: 10px; margin-right: 0.3rem;
+  }
+  .tag-zram { background: rgba(63,185,80,0.15); color: var(--green); border: 1px solid rgba(63,185,80,0.3); }
+  .tag-zswap { background: rgba(88,166,255,0.15); color: var(--accent); border: 1px solid rgba(88,166,255,0.3); }
+  .tag-shared { background: rgba(188,140,255,0.15); color: var(--purple); border: 1px solid rgba(188,140,255,0.3); }
+  .columns { display: grid; grid-template-columns: 1fr 1fr; gap: 1.5rem; }
+  @media (max-width: 800px) { .columns { grid-template-columns: 1fr; } }
+  .ref { font-size: 0.82rem; color: var(--text2); }
+  .ref-num { color: var(--accent); font-weight: bold; }
+  footer { margin-top: 3rem; padding-top: 1rem; border-top: 1px solid var(--border); color: var(--text2); font-size: 0.82rem; }
+</style>
+</head>
+<body>
+
+<h1>Linux 压缩交换：zram 与 zswap</h1>
+<p style="color:var(--text2); margin-bottom: 0.3rem;">架构深度剖析 &mdash; Linux 7.1-rc1 (torvalds/linux, 2025年4月)</p>
+<p style="color:var(--text2); font-size:0.82rem;">
+  源码: <code>drivers/block/zram/</code> (4,683 行) &bull;
+  <code>mm/zswap.c</code> (1,851 行) &bull;
+  <code>mm/zsmalloc.c</code> (~1,500 行)
+</p>
+
+<!-- ═══════════════════════  目录  ═══════════════════════ -->
+<div class="toc">
+  <strong style="color:var(--accent);">目录</strong>
+  <a href="#overview">1. 概述与动机</a>
+  <a href="#arch" class="l2">1.1 整体架构</a>
+  <a href="#history" class="l2">1.2 历史与演进</a>
+  <a href="#zram">2. zram — 压缩RAM块设备</a>
+  <a href="#zram-arch" class="l2">2.1 架构</a>
+  <a href="#zram-data" class="l2">2.2 数据结构</a>
+  <a href="#zram-write" class="l2">2.3 写入路径</a>
+  <a href="#zram-read" class="l2">2.4 读取路径</a>
+  <a href="#zram-wb" class="l2">2.5 回写到后端设备</a>
+  <a href="#zram-recomp" class="l2">2.6 空闲页面重压缩</a>
+  <a href="#zram-zcomp" class="l2">2.7 压缩框架 (zcomp)</a>
+  <a href="#zram-sysfs" class="l2">2.8 Sysfs 接口</a>
+  <a href="#zswap">3. zswap — 压缩交换缓存</a>
+  <a href="#zswap-arch" class="l2">3.1 架构</a>
+  <a href="#zswap-data" class="l2">3.2 数据结构</a>
+  <a href="#zswap-store" class="l2">3.3 存储路径</a>
+  <a href="#zswap-load" class="l2">3.4 加载路径</a>
+  <a href="#zswap-evict" class="l2">3.5 淘汰与回写</a>
+  <a href="#zswap-cgroup" class="l2">3.6 Cgroup 集成</a>
+  <a href="#zswap-config" class="l2">3.7 配置</a>
+  <a href="#zsmalloc">4. zsmalloc — 共享内存分配器</a>
+  <a href="#compression">5. 压缩算法</a>
+  <a href="#compare">6. zram 与 zswap — 如何选择</a>
+  <a href="#nvme-backing" class="l2">6.1 NVMe 作为后端存储 — 分层内存</a>
+  <a href="#deployments">7. 实际部署案例</a>
+  <a href="#academic">8. 学术背景与文献</a>
+  <a href="#refs">9. 参考文献</a>
+</div>
+
+<!-- ═══════════════════════  1. 概述  ═══════════════════════ -->
+<h2 id="overview">1. 概述与动机</h2>
+
+<p>当 Linux 可用内存不足时，内核的回收路径会淘汰页面。匿名页面（堆、栈、mmap）无法被丢弃，必须被<em>换出</em>到持久化存储。传统交换将未压缩的 4 KiB 页面写入 HDD 或 SSD &mdash; 产生毫秒级 I/O 延迟并磨损闪存芯片。</p>
+
+<p><strong>压缩交换</strong>利用了一个关键洞察：大多数内存页面可以压缩到原始大小的 40&ndash;60%。通过花费几微秒的 CPU 时间进行压缩，内核可以在 RAM 中存储 2&ndash;3 倍以上的淘汰页面（或大幅减少磁盘 I/O）。Linux 提供了两种互补的机制：</p>
+
+<table>
+<tr><th></th><th><span class="tag tag-zram">zram</span> 压缩RAM块设备</th><th><span class="tag tag-zswap">zswap</span> 压缩交换缓存</th></tr>
+<tr><td><strong>层次</strong></td><td>块设备驱动 (<code>drivers/block/zram/</code>)</td><td>内存管理子系统钩子 (<code>mm/zswap.c</code>)</td></tr>
+<tr><td><strong>机制</strong></td><td>创建 <code>/dev/zramN</code> &mdash; 完全由压缩RAM支持的虚拟块设备</td><td>位于真实交换设备前的透明缓存；在页面写入磁盘前拦截</td></tr>
+<tr><td><strong>是否需要真实交换？</strong></td><td>否 &mdash; 本身就是交换设备</td><td>是 &mdash; 位于真实交换分区/文件前端</td></tr>
+<tr><td><strong>淘汰机制</strong></td><td>可选的回写到后端块设备</td><td>自动 LRU 回写到底层交换设备</td></tr>
+<tr><td><strong>引入版本</strong></td><td>2.6.33 (staging), 3.14 (主线)</td><td>3.11 (2013)</td></tr>
+<tr><td><strong>维护者</strong></td><td>Sergey Senozhatsky</td><td>Johannes Weiner (Meta), Nhat Pham</td></tr>
+</table>
+
+<!-- ═══════════════════════  1.1 整体架构 SVG  ═══════════════════════ -->
+<h3 id="arch">1.1 整体架构</h3>
+
+<div class="svg-container">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1100 720" width="1100" height="720">
+  <defs>
+    <marker id="arrow" markerWidth="10" markerHeight="7" refX="10" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#58a6ff"/>
+    </marker>
+    <marker id="arrow-g" markerWidth="10" markerHeight="7" refX="10" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#3fb950"/>
+    </marker>
+    <marker id="arrow-o" markerWidth="10" markerHeight="7" refX="10" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#d29922"/>
+    </marker>
+    <marker id="arrow-r" markerWidth="10" markerHeight="7" refX="10" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#f85149"/>
+    </marker>
+    <marker id="arrow-p" markerWidth="10" markerHeight="7" refX="10" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#bc8cff"/>
+    </marker>
+
+    <linearGradient id="grad-user" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#1a2332"/><stop offset="100%" stop-color="#0d1117"/>
+    </linearGradient>
+  </defs>
+
+  <!-- 背景 -->
+  <rect width="1100" height="720" rx="12" fill="#0d1117"/>
+
+  <!-- 标题 -->
+  <text x="550" y="35" text-anchor="middle" fill="#58a6ff" font-family="monospace" font-size="16" font-weight="bold">Linux 压缩交换 — 整体架构</text>
+
+  <!-- ── 用户空间 ── -->
+  <rect x="30" y="55" width="1040" height="60" rx="8" fill="none" stroke="#30363d" stroke-dasharray="6,3"/>
+  <text x="50" y="75" fill="#8b949e" font-family="monospace" font-size="11">用户空间</text>
+  <rect x="200" y="65" width="160" height="38" rx="6" fill="#161b22" stroke="#8b949e"/>
+  <text x="280" y="89" text-anchor="middle" fill="#e6edf3" font-family="monospace" font-size="12">应用程序</text>
+  <rect x="420" y="65" width="160" height="38" rx="6" fill="#161b22" stroke="#8b949e"/>
+  <text x="500" y="89" text-anchor="middle" fill="#e6edf3" font-family="monospace" font-size="12">malloc / mmap</text>
+  <rect x="640" y="65" width="200" height="38" rx="6" fill="#161b22" stroke="#8b949e"/>
+  <text x="740" y="89" text-anchor="middle" fill="#e6edf3" font-family="monospace" font-size="12">swapon /dev/zramN</text>
+
+  <!-- 从用户空间向下的箭头 -->
+  <line x1="500" y1="103" x2="500" y2="135" stroke="#58a6ff" stroke-width="1.5" marker-end="url(#arrow)"/>
+
+  <!-- ── 内存管理核心 ── -->
+  <rect x="30" y="140" width="1040" height="100" rx="8" fill="none" stroke="#58a6ff" stroke-width="1.5"/>
+  <text x="50" y="160" fill="#58a6ff" font-family="monospace" font-size="12" font-weight="bold">mm/ — 内存管理核心</text>
+
+  <rect x="60" y="170" width="180" height="50" rx="6" fill="#161b22" stroke="#58a6ff"/>
+  <text x="150" y="192" text-anchor="middle" fill="#e6edf3" font-family="monospace" font-size="11">页面回收</text>
+  <text x="150" y="208" text-anchor="middle" fill="#8b949e" font-family="monospace" font-size="9">vmscan.c (kswapd)</text>
+
+  <rect x="280" y="170" width="200" height="50" rx="6" fill="#161b22" stroke="#58a6ff"/>
+  <text x="380" y="192" text-anchor="middle" fill="#e6edf3" font-family="monospace" font-size="11">交换子系统</text>
+  <text x="380" y="208" text-anchor="middle" fill="#8b949e" font-family="monospace" font-size="9">swap_state.c, page_io.c</text>
+
+  <rect x="520" y="170" width="180" height="50" rx="6" fill="#161b22" stroke="#58a6ff"/>
+  <text x="610" y="192" text-anchor="middle" fill="#e6edf3" font-family="monospace" font-size="11">Folio / 缺页异常</text>
+  <text x="610" y="208" text-anchor="middle" fill="#8b949e" font-family="monospace" font-size="9">memory.c, swap.c</text>
+
+  <rect x="740" y="170" width="180" height="50" rx="6" fill="#161b22" stroke="#58a6ff"/>
+  <text x="830" y="192" text-anchor="middle" fill="#e6edf3" font-family="monospace" font-size="11">块层</text>
+  <text x="830" y="208" text-anchor="middle" fill="#8b949e" font-family="monospace" font-size="9">bio, submit_bio()</text>
+
+  <!-- MM 内部箭头 -->
+  <line x1="240" y1="195" x2="278" y2="195" stroke="#58a6ff" stroke-width="1" marker-end="url(#arrow)"/>
+  <line x1="480" y1="195" x2="518" y2="195" stroke="#58a6ff" stroke-width="1" marker-end="url(#arrow)"/>
+
+  <!-- ── 分叉：zswap 路径（左）和 zram 路径（右） ── -->
+
+  <!-- zswap 拦截箭头 -->
+  <line x1="340" y1="220" x2="340" y2="275" stroke="#58a6ff" stroke-width="2" marker-end="url(#arrow)"/>
+  <text x="295" y="253" fill="#58a6ff" font-family="monospace" font-size="9">拦截</text>
+
+  <!-- zram bio 箭头 -->
+  <line x1="830" y1="220" x2="830" y2="275" stroke="#3fb950" stroke-width="2" marker-end="url(#arrow-g)"/>
+  <text x="843" y="253" fill="#3fb950" font-family="monospace" font-size="9">bio 提交</text>
+
+  <!-- ═══  ZSWAP 框  ═══ -->
+  <rect x="30" y="280" width="480" height="310" rx="10" fill="none" stroke="#58a6ff" stroke-width="2"/>
+  <rect x="30" y="280" width="480" height="28" rx="10" fill="rgba(88,166,255,0.12)"/>
+  <rect x="30" y="298" width="480" height="10" fill="rgba(88,166,255,0.12)"/>
+  <text x="270" y="300" text-anchor="middle" fill="#58a6ff" font-family="monospace" font-size="13" font-weight="bold">zswap — 压缩交换缓存</text>
+  <text x="270" y="318" text-anchor="middle" fill="#8b949e" font-family="monospace" font-size="9">mm/zswap.c (1,851 行)</text>
+
+  <!-- zswap 内部 -->
+  <rect x="55" y="335" width="190" height="42" rx="5" fill="#161b22" stroke="#58a6ff"/>
+  <text x="150" y="353" text-anchor="middle" fill="#e6edf3" font-family="monospace" font-size="10">Xarray 查找树</text>
+  <text x="150" y="368" text-anchor="middle" fill="#8b949e" font-family="monospace" font-size="8">每交换类型, 64M 粒度</text>
+
+  <rect x="275" y="335" width="210" height="42" rx="5" fill="#161b22" stroke="#58a6ff"/>
+  <text x="380" y="353" text-anchor="middle" fill="#e6edf3" font-family="monospace" font-size="10">crypto_acomp (每CPU)</text>
+  <text x="380" y="368" text-anchor="middle" fill="#8b949e" font-family="monospace" font-size="8">deflate / lz4 / lzo / zstd</text>
+
+  <rect x="55" y="392" width="190" height="42" rx="5" fill="#161b22" stroke="#58a6ff"/>
+  <text x="150" y="410" text-anchor="middle" fill="#e6edf3" font-family="monospace" font-size="10">zswap_pool</text>
+  <text x="150" y="425" text-anchor="middle" fill="#8b949e" font-family="monospace" font-size="8">percpu_ref, RCU安全切换</text>
+
+  <rect x="275" y="392" width="210" height="42" rx="5" fill="#161b22" stroke="#58a6ff"/>
+  <text x="380" y="410" text-anchor="middle" fill="#e6edf3" font-family="monospace" font-size="10">LRU + Shrinker</text>
+  <text x="380" y="425" text-anchor="middle" fill="#8b949e" font-family="monospace" font-size="8">二次机会, memcg感知</text>
+
+  <rect x="55" y="449" width="190" height="42" rx="5" fill="#161b22" stroke="#bc8cff"/>
+  <text x="150" y="467" text-anchor="middle" fill="#e6edf3" font-family="monospace" font-size="10">zswap_entry</text>
+  <text x="150" y="482" text-anchor="middle" fill="#8b949e" font-family="monospace" font-size="8">handle, length, objcg, lru</text>
+
+  <rect x="275" y="449" width="210" height="42" rx="5" fill="#161b22" stroke="#bc8cff"/>
+  <text x="380" y="467" text-anchor="middle" fill="#e6edf3" font-family="monospace" font-size="10">memcg 集成</text>
+  <text x="380" y="482" text-anchor="middle" fill="#8b949e" font-family="monospace" font-size="8">zswap.max, 回写控制</text>
+
+  <!-- zswap 淘汰箭头到真实交换 -->
+  <line x1="270" y1="555" x2="270" y2="615" stroke="#d29922" stroke-width="2" marker-end="url(#arrow-o)"/>
+  <text x="195" y="590" fill="#d29922" font-family="monospace" font-size="9">LRU 淘汰</text>
+
+  <!-- zswap 回写标签 -->
+  <rect x="55" y="505" width="430" height="38" rx="5" fill="rgba(210,153,34,0.08)" stroke="#d29922" stroke-dasharray="4,2"/>
+  <text x="270" y="522" text-anchor="middle" fill="#d29922" font-family="monospace" font-size="10">回写: 解压缩 → __swap_writepage() → 真实交换</text>
+  <text x="270" y="536" text-anchor="middle" fill="#8b949e" font-family="monospace" font-size="8">由 shrinker / shrink_worker 在池满时触发</text>
+
+  <!-- ═══  ZRAM 框  ═══ -->
+  <rect x="590" y="280" width="480" height="310" rx="10" fill="none" stroke="#3fb950" stroke-width="2"/>
+  <rect x="590" y="280" width="480" height="28" rx="10" fill="rgba(63,185,80,0.12)"/>
+  <rect x="590" y="298" width="480" height="10" fill="rgba(63,185,80,0.12)"/>
+  <text x="830" y="300" text-anchor="middle" fill="#3fb950" font-family="monospace" font-size="13" font-weight="bold">zram — 压缩RAM块设备</text>
+  <text x="830" y="318" text-anchor="middle" fill="#8b949e" font-family="monospace" font-size="9">drivers/block/zram/ (4,683 行)</text>
+
+  <!-- zram 内部 -->
+  <rect x="615" y="335" width="200" height="42" rx="5" fill="#161b22" stroke="#3fb950"/>
+  <text x="715" y="353" text-anchor="middle" fill="#e6edf3" font-family="monospace" font-size="10">zram_table_entry[]</text>
+  <text x="715" y="368" text-anchor="middle" fill="#8b949e" font-family="monospace" font-size="8">handle + flags + size (每页)</text>
+
+  <rect x="845" y="335" width="200" height="42" rx="5" fill="#161b22" stroke="#3fb950"/>
+  <text x="945" y="353" text-anchor="middle" fill="#e6edf3" font-family="monospace" font-size="10">zcomp (每CPU)</text>
+  <text x="945" y="368" text-anchor="middle" fill="#8b949e" font-family="monospace" font-size="8">lzo-rle / lz4 / zstd / deflate</text>
+
+  <rect x="615" y="392" width="200" height="42" rx="5" fill="#161b22" stroke="#3fb950"/>
+  <text x="715" y="410" text-anchor="middle" fill="#e6edf3" font-family="monospace" font-size="10">zs_pool (zsmalloc)</text>
+  <text x="715" y="425" text-anchor="middle" fill="#8b949e" font-family="monospace" font-size="8">255 个大小类, zspage</text>
+
+  <rect x="845" y="392" width="200" height="42" rx="5" fill="#161b22" stroke="#3fb950"/>
+  <text x="945" y="410" text-anchor="middle" fill="#e6edf3" font-family="monospace" font-size="10">多重压缩 (1+3)</text>
+  <text x="945" y="425" text-anchor="middle" fill="#8b949e" font-family="monospace" font-size="8">重压缩空闲/大页面</text>
+
+  <rect x="615" y="449" width="200" height="42" rx="5" fill="#161b22" stroke="#bc8cff"/>
+  <text x="715" y="467" text-anchor="middle" fill="#e6edf3" font-family="monospace" font-size="10">同值填充检测</text>
+  <text x="715" y="482" text-anchor="middle" fill="#8b949e" font-family="monospace" font-size="8">零页 → 无需分配</text>
+
+  <rect x="845" y="449" width="200" height="42" rx="5" fill="#161b22" stroke="#bc8cff"/>
+  <text x="945" y="467" text-anchor="middle" fill="#e6edf3" font-family="monospace" font-size="10">空闲追踪</text>
+  <text x="945" y="482" text-anchor="middle" fill="#8b949e" font-family="monospace" font-size="8">访问时间, ZRAM_IDLE 标志</text>
+
+  <!-- zram 回写 -->
+  <rect x="615" y="505" width="430" height="38" rx="5" fill="rgba(210,153,34,0.08)" stroke="#d29922" stroke-dasharray="4,2"/>
+  <text x="830" y="522" text-anchor="middle" fill="#d29922" font-family="monospace" font-size="10">可选回写: 空闲/大页面 → 后端块设备</text>
+  <text x="830" y="536" text-anchor="middle" fill="#8b949e" font-family="monospace" font-size="8">CONFIG_ZRAM_WRITEBACK, 用户通过 sysfs 触发</text>
+
+  <line x1="830" y1="555" x2="830" y2="615" stroke="#d29922" stroke-width="2" marker-end="url(#arrow-o)"/>
+  <text x="843" y="590" fill="#d29922" font-family="monospace" font-size="9">回写</text>
+
+  <!-- ═══  ZSMALLOC（共享） ═══ -->
+  <rect x="250" y="558" width="580" height="32" rx="6" fill="rgba(188,140,255,0.08)" stroke="#bc8cff" stroke-width="1.5"/>
+  <text x="540" y="579" text-anchor="middle" fill="#bc8cff" font-family="monospace" font-size="11" font-weight="bold">zsmalloc — 共享压缩对象分配器 (mm/zsmalloc.c)</text>
+
+  <!-- 连接线到 zsmalloc -->
+  <line x1="150" y1="491" x2="150" y2="530" stroke="#bc8cff" stroke-width="1" stroke-dasharray="3,2"/>
+  <line x1="150" y1="530" x2="380" y2="558" stroke="#bc8cff" stroke-width="1" stroke-dasharray="3,2"/>
+  <line x1="715" y1="434" x2="715" y2="558" stroke="#bc8cff" stroke-width="1" stroke-dasharray="3,2"/>
+
+  <!-- ═══  存储层  ═══ -->
+  <rect x="30" y="620" width="1040" height="80" rx="8" fill="none" stroke="#f85149" stroke-width="1.5"/>
+  <text x="50" y="640" fill="#f85149" font-family="monospace" font-size="12" font-weight="bold">持久化存储</text>
+
+  <rect x="120" y="650" width="240" height="36" rx="6" fill="#161b22" stroke="#f85149"/>
+  <text x="240" y="673" text-anchor="middle" fill="#e6edf3" font-family="monospace" font-size="11">真实交换分区/文件</text>
+
+  <rect x="440" y="650" width="240" height="36" rx="6" fill="#161b22" stroke="#f85149"/>
+  <text x="560" y="673" text-anchor="middle" fill="#e6edf3" font-family="monospace" font-size="11">zram 后端设备</text>
+  <text x="560" y="685" text-anchor="middle" fill="#8b949e" font-family="monospace" font-size="8">(可选, 用于回写)</text>
+
+  <rect x="760" y="650" width="240" height="36" rx="6" fill="#161b22" stroke="#30363d"/>
+  <text x="880" y="673" text-anchor="middle" fill="#8b949e" font-family="monospace" font-size="11">NVMe / SSD / HDD</text>
+
+  <!-- 图例 -->
+  <rect x="30" y="710" width="8" height="8" rx="2" fill="#58a6ff"/>
+  <text x="44" y="718" fill="#8b949e" font-family="monospace" font-size="9">zswap 路径</text>
+  <rect x="130" y="710" width="8" height="8" rx="2" fill="#3fb950"/>
+  <text x="144" y="718" fill="#8b949e" font-family="monospace" font-size="9">zram 路径</text>
+  <rect x="220" y="710" width="8" height="8" rx="2" fill="#bc8cff"/>
+  <text x="234" y="718" fill="#8b949e" font-family="monospace" font-size="9">共享 (zsmalloc)</text>
+  <rect x="340" y="710" width="8" height="8" rx="2" fill="#d29922"/>
+  <text x="354" y="718" fill="#8b949e" font-family="monospace" font-size="9">淘汰 / 回写</text>
+</svg>
+</div>
+
+<h3 id="history">1.2 历史与演进</h3>
+
+<p>操作系统中的内存压缩技术有着悠久的历史：</p>
+<ul>
+  <li><strong>1999</strong> &mdash; Paul Wilson 与 Scott Kaplan 发表 <em>&ldquo;Compressed Caching&rdquo;</em>，这是奠基性的学术工作，证明了使用一部分 RAM 作为淘汰页面的压缩缓存，性能优于直接将该部分 RAM 添加到页面缓存。他们在具有良好压缩率的工作负载上展示了 2&ndash;5 倍的有效内存扩展。</li>
+  <li><strong>2009</strong> &mdash; Nitin Gupta 实现了 <strong>compcache/ramzswap</strong>（后更名为 zram），作为树外模块提供用于交换的压缩块设备。</li>
+  <li><strong>2010</strong> &mdash; zram 进入 Linux 2.6.33 的 <code>drivers/staging/zram/</code> 目录。</li>
+  <li><strong>2012</strong> &mdash; Seth Jennings 提出 <strong>zcache/zswap</strong> 作为使用 <em>frontswap</em> API 的透明压缩缓存层 &mdash; 无需用户可见的块设备。</li>
+  <li><strong>2013</strong> &mdash; Apple 在 OS X Mavericks 中推出<strong>压缩内存</strong>，在大规模上验证了此方案。zswap 合入 Linux 3.11。Android 开始默认使用 zram。</li>
+  <li><strong>2014</strong> &mdash; zram 从 staging 移出到 <code>drivers/block/zram/</code> (Linux 3.14)。微软在 Windows 10 中添加内存压缩。</li>
+  <li><strong>2017&ndash;2019</strong> &mdash; ChromeOS 全面采用 zram；Fedora 从 Fedora 33 起默认启用 zram-swap。</li>
+  <li><strong>2023&ndash;2024</strong> &mdash; zswap 经历重大重构：移除 frontswap 依赖（替换为直接 xarray 查找），添加 memcg 感知的 shrinker，采用 folio API。zram 添加多重压缩支持 (CONFIG_ZRAM_MULTI_COMP)。</li>
+  <li><strong>2025</strong> &mdash; zram 添加压缩回写和异步后端设备读取。zswap 获得磁盘换入跟踪以校准 shrinker。两个子系统均显著成熟。</li>
+</ul>
+
+
+<!-- ═══════════════════════  2. ZRAM  ═══════════════════════ -->
+<h2 id="zram">2. zram &mdash; 压缩RAM块设备</h2>
+
+<p>zram 创建虚拟块设备（<code>/dev/zram0</code>、<code>/dev/zram1</code>&hellip;），完全由压缩 RAM 支持。每个设备的行为与普通块设备相同 &mdash; 可以 <code>mkswap</code> + <code>swapon</code>，<code>mkfs</code> + <code>mount</code>，或作为原始块设备使用。最常见的用途是交换。</p>
+
+<h3 id="zram-arch">2.1 架构</h3>
+
+<div class="svg-container">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1060 860" width="1060" height="860">
+  <defs>
+    <marker id="za" markerWidth="10" markerHeight="7" refX="10" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#3fb950"/>
+    </marker>
+    <marker id="za-o" markerWidth="10" markerHeight="7" refX="10" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#d29922"/>
+    </marker>
+    <marker id="za-p" markerWidth="10" markerHeight="7" refX="10" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#bc8cff"/>
+    </marker>
+    <marker id="za-c" markerWidth="10" markerHeight="7" refX="10" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#39d2c0"/>
+    </marker>
+  </defs>
+
+  <rect width="1060" height="860" rx="12" fill="#0d1117"/>
+  <text x="530" y="30" text-anchor="middle" fill="#3fb950" font-family="monospace" font-size="15" font-weight="bold">zram — 内部架构</text>
+
+  <!-- ── Bio 入口 ── -->
+  <rect x="380" y="50" width="300" height="40" rx="6" fill="#161b22" stroke="#3fb950" stroke-width="2"/>
+  <text x="530" y="75" text-anchor="middle" fill="#e6edf3" font-family="monospace" font-size="12">zram_submit_bio(bio)</text>
+
+  <!-- 分叉 -->
+  <line x1="430" y1="90" x2="200" y2="130" stroke="#3fb950" stroke-width="1.5" marker-end="url(#za)"/>
+  <line x1="530" y1="90" x2="530" y2="130" stroke="#3fb950" stroke-width="1.5" marker-end="url(#za)"/>
+  <line x1="630" y1="90" x2="860" y2="130" stroke="#3fb950" stroke-width="1.5" marker-end="url(#za)"/>
+
+  <!-- 三条路径 -->
+  <rect x="100" y="135" width="200" height="36" rx="5" fill="#161b22" stroke="#3fb950"/>
+  <text x="200" y="158" text-anchor="middle" fill="#e6edf3" font-family="monospace" font-size="11">REQ_OP_READ</text>
+
+  <rect x="430" y="135" width="200" height="36" rx="5" fill="#161b22" stroke="#3fb950"/>
+  <text x="530" y="158" text-anchor="middle" fill="#e6edf3" font-family="monospace" font-size="11">REQ_OP_WRITE</text>
+
+  <rect x="760" y="135" width="200" height="36" rx="5" fill="#161b22" stroke="#30363d"/>
+  <text x="860" y="158" text-anchor="middle" fill="#8b949e" font-family="monospace" font-size="11">REQ_OP_DISCARD</text>
+
+  <!-- ── 写入路径（中右） ── -->
+  <line x1="530" y1="171" x2="530" y2="200" stroke="#3fb950" stroke-width="1.5" marker-end="url(#za)"/>
+
+  <rect x="390" y="205" width="280" height="36" rx="5" fill="#161b22" stroke="#3fb950"/>
+  <text x="530" y="228" text-anchor="middle" fill="#e6edf3" font-family="monospace" font-size="11">zram_write_page(page, index)</text>
+
+  <!-- 同值填充检查 -->
+  <line x1="530" y1="241" x2="530" y2="268" stroke="#3fb950" stroke-width="1.5" marker-end="url(#za)"/>
+
+  <rect x="420" y="272" width="220" height="32" rx="15" fill="none" stroke="#d29922"/>
+  <text x="530" y="293" text-anchor="middle" fill="#d29922" font-family="monospace" font-size="10">page_same_filled()?</text>
+
+  <!-- 是分支 -->
+  <line x1="640" y1="288" x2="720" y2="288" stroke="#d29922" stroke-width="1" marker-end="url(#za-o)"/>
+  <text x="672" y="282" fill="#8b949e" font-family="monospace" font-size="8">是</text>
+  <rect x="725" y="272" width="180" height="32" rx="5" fill="rgba(63,185,80,0.1)" stroke="#3fb950" stroke-dasharray="3,2"/>
+  <text x="815" y="293" text-anchor="middle" fill="#3fb950" font-family="monospace" font-size="10">ZRAM_SAME (无需分配!)</text>
+
+  <!-- 否分支 -->
+  <line x1="530" y1="304" x2="530" y2="328" stroke="#3fb950" stroke-width="1.5" marker-end="url(#za)"/>
+  <text x="538" y="318" fill="#8b949e" font-family="monospace" font-size="8">否</text>
+
+  <!-- 压缩 -->
+  <rect x="400" y="332" width="260" height="36" rx="5" fill="#161b22" stroke="#39d2c0"/>
+  <text x="530" y="355" text-anchor="middle" fill="#39d2c0" font-family="monospace" font-size="11">zcomp_compress(每CPU)</text>
+
+  <line x1="530" y1="368" x2="530" y2="392" stroke="#3fb950" stroke-width="1.5" marker-end="url(#za)"/>
+
+  <!-- 大小检查 -->
+  <rect x="400" y="396" width="260" height="32" rx="15" fill="none" stroke="#d29922"/>
+  <text x="530" y="417" text-anchor="middle" fill="#d29922" font-family="monospace" font-size="10">comp_len &ge; huge_class?</text>
+
+  <!-- 大页分支 -->
+  <line x1="660" y1="412" x2="720" y2="412" stroke="#d29922" stroke-width="1" marker-end="url(#za-o)"/>
+  <text x="672" y="406" fill="#8b949e" font-family="monospace" font-size="8">是</text>
+  <rect x="725" y="396" width="180" height="32" rx="5" fill="rgba(248,81,73,0.1)" stroke="#f85149" stroke-dasharray="3,2"/>
+  <text x="815" y="417" text-anchor="middle" fill="#f85149" font-family="monospace" font-size="10">ZRAM_HUGE (PAGE_SIZE)</text>
+
+  <!-- 正常压缩路径 -->
+  <line x1="530" y1="428" x2="530" y2="455" stroke="#3fb950" stroke-width="1.5" marker-end="url(#za)"/>
+
+  <rect x="400" y="460" width="260" height="36" rx="5" fill="#161b22" stroke="#bc8cff"/>
+  <text x="530" y="483" text-anchor="middle" fill="#bc8cff" font-family="monospace" font-size="11">zs_malloc(comp_len)</text>
+
+  <line x1="530" y1="496" x2="530" y2="520" stroke="#3fb950" stroke-width="1.5" marker-end="url(#za)"/>
+
+  <rect x="400" y="525" width="260" height="36" rx="5" fill="#161b22" stroke="#bc8cff"/>
+  <text x="530" y="548" text-anchor="middle" fill="#bc8cff" font-family="monospace" font-size="11">zs_obj_write(handle, data)</text>
+
+  <line x1="530" y1="561" x2="530" y2="575" stroke="#3fb950" stroke-width="1.5" marker-end="url(#za)"/>
+
+  <rect x="380" y="580" width="300" height="36" rx="5" fill="#161b22" stroke="#3fb950"/>
+  <text x="530" y="598" text-anchor="middle" fill="#e6edf3" font-family="monospace" font-size="10">table[index] = {handle, size, flags}</text>
+  <text x="530" y="612" text-anchor="middle" fill="#8b949e" font-family="monospace" font-size="8">slot_lock → 更新 → slot_unlock</text>
+
+  <!-- ── 读取路径（左） ── -->
+  <line x1="200" y1="171" x2="200" y2="205" stroke="#3fb950" stroke-width="1.5" marker-end="url(#za)"/>
+
+  <rect x="70" y="210" width="260" height="36" rx="5" fill="#161b22" stroke="#3fb950"/>
+  <text x="200" y="233" text-anchor="middle" fill="#e6edf3" font-family="monospace" font-size="11">zram_read_page(page, index)</text>
+
+  <line x1="200" y1="246" x2="200" y2="275" stroke="#3fb950" stroke-width="1.5" marker-end="url(#za)"/>
+
+  <!-- 读取判断 -->
+  <rect x="80" y="280" width="240" height="32" rx="15" fill="none" stroke="#d29922"/>
+  <text x="200" y="301" text-anchor="middle" fill="#d29922" font-family="monospace" font-size="10">检查标志</text>
+
+  <!-- SAME -->
+  <line x1="200" y1="312" x2="70" y2="345" stroke="#d29922" stroke-width="1"/>
+  <rect x="5" y="340" width="130" height="28" rx="4" fill="rgba(63,185,80,0.08)" stroke="#3fb950" stroke-dasharray="3,2"/>
+  <text x="70" y="359" text-anchor="middle" fill="#3fb950" font-family="monospace" font-size="9">memset_l()</text>
+  <text x="50" y="335" fill="#8b949e" font-family="monospace" font-size="8">SAME</text>
+
+  <!-- WB -->
+  <line x1="200" y1="312" x2="200" y2="345" stroke="#d29922" stroke-width="1"/>
+  <rect x="150" y="340" width="130" height="28" rx="4" fill="rgba(210,153,34,0.08)" stroke="#d29922" stroke-dasharray="3,2"/>
+  <text x="215" y="359" text-anchor="middle" fill="#d29922" font-family="monospace" font-size="9">read_from_bdev()</text>
+  <text x="195" y="335" fill="#8b949e" font-family="monospace" font-size="8">WB</text>
+
+  <!-- 正常 -->
+  <line x1="260" y1="312" x2="320" y2="345" stroke="#d29922" stroke-width="1"/>
+  <rect x="295" y="340" width="100" height="28" rx="4" fill="#161b22" stroke="#39d2c0"/>
+  <text x="345" y="359" text-anchor="middle" fill="#39d2c0" font-family="monospace" font-size="9">decompress()</text>
+  <text x="312" y="335" fill="#8b949e" font-family="monospace" font-size="8">正常</text>
+
+  <!-- 解压缩细节 -->
+  <line x1="345" y1="368" x2="345" y2="395" stroke="#39d2c0" stroke-width="1" marker-end="url(#za-c)"/>
+
+  <rect x="260" y="400" width="170" height="45" rx="4" fill="#161b22" stroke="#bc8cff"/>
+  <text x="345" y="418" text-anchor="middle" fill="#e6edf3" font-family="monospace" font-size="9">zs_obj_read_begin()</text>
+  <text x="345" y="433" text-anchor="middle" fill="#8b949e" font-family="monospace" font-size="8">→ 解压缩 → 复制</text>
+
+  <!-- ── ZSMALLOC 池（底部） ── -->
+  <rect x="30" y="650" width="1000" height="90" rx="8" fill="none" stroke="#bc8cff" stroke-width="1.5"/>
+  <text x="530" y="670" text-anchor="middle" fill="#bc8cff" font-family="monospace" font-size="12" font-weight="bold">zsmalloc 池 (zs_pool)</text>
+
+  <rect x="55" y="680" width="150" height="45" rx="4" fill="#161b22" stroke="#bc8cff"/>
+  <text x="130" y="700" text-anchor="middle" fill="#e6edf3" font-family="monospace" font-size="9">大小类 0</text>
+  <text x="130" y="715" text-anchor="middle" fill="#8b949e" font-family="monospace" font-size="8">32 字节</text>
+
+  <rect x="220" y="680" width="150" height="45" rx="4" fill="#161b22" stroke="#bc8cff"/>
+  <text x="295" y="700" text-anchor="middle" fill="#e6edf3" font-family="monospace" font-size="9">大小类 1</text>
+  <text x="295" y="715" text-anchor="middle" fill="#8b949e" font-family="monospace" font-size="8">48 字节</text>
+
+  <text x="415" y="707" fill="#8b949e" font-family="monospace" font-size="14">...</text>
+
+  <rect x="460" y="680" width="150" height="45" rx="4" fill="#161b22" stroke="#bc8cff"/>
+  <text x="535" y="700" text-anchor="middle" fill="#e6edf3" font-family="monospace" font-size="9">大小类 N</text>
+  <text x="535" y="715" text-anchor="middle" fill="#8b949e" font-family="monospace" font-size="8">~2 KB (典型)</text>
+
+  <text x="655" y="707" fill="#8b949e" font-family="monospace" font-size="14">...</text>
+
+  <rect x="700" y="680" width="150" height="45" rx="4" fill="#161b22" stroke="#f85149"/>
+  <text x="775" y="700" text-anchor="middle" fill="#e6edf3" font-family="monospace" font-size="9">大页类</text>
+  <text x="775" y="715" text-anchor="middle" fill="#8b949e" font-family="monospace" font-size="8">3264+ 字节</text>
+
+  <rect x="870" y="680" width="140" height="45" rx="4" fill="#161b22" stroke="#30363d"/>
+  <text x="940" y="700" text-anchor="middle" fill="#e6edf3" font-family="monospace" font-size="9">内存整理</text>
+  <text x="940" y="715" text-anchor="middle" fill="#8b949e" font-family="monospace" font-size="8">zs_compact()</text>
+
+  <!-- 连接器: table[index] → zsmalloc 池 -->
+  <line x1="530" y1="616" x2="530" y2="650" stroke="#bc8cff" stroke-width="1" stroke-dasharray="4,2" marker-end="url(#za)"/>
+
+  <!-- zsmalloc 详情 -->
+  <text x="530" y="765" text-anchor="middle" fill="#8b949e" font-family="monospace" font-size="10">255 个类 &bull; 16字节增量 &bull; zspage = N 个物理页 &bull; 对象通过空闲链表紧密排列</text>
+
+  <!-- ── 回写 / 重压缩（右下） ── -->
+  <rect x="590" y="785" width="440" height="55" rx="8" fill="none" stroke="#d29922" stroke-dasharray="4,2"/>
+  <text x="810" y="805" text-anchor="middle" fill="#d29922" font-family="monospace" font-size="11">可选后处理</text>
+  <text x="810" y="825" text-anchor="middle" fill="#8b949e" font-family="monospace" font-size="9">回写空闲/大页 → backing_dev | 使用辅助算法(zstd)重压缩</text>
+
+  <!-- ── Sysfs（左下） ── -->
+  <rect x="30" y="785" width="440" height="55" rx="8" fill="none" stroke="#58a6ff" stroke-dasharray="4,2"/>
+  <text x="250" y="805" text-anchor="middle" fill="#58a6ff" font-family="monospace" font-size="11">/sys/block/zramN/</text>
+  <text x="250" y="825" text-anchor="middle" fill="#8b949e" font-family="monospace" font-size="9">disksize | comp_algorithm | mm_stat | writeback | recompress | idle | compact</text>
+</svg>
+</div>
+
+
+<h3 id="zram-data">2.2 数据结构</h3>
+
+<h4>struct zram（每设备）</h4>
+<pre><code>struct zram {
+    struct zram_table_entry *table;      // 每页元数据数组
+    struct zs_pool *mem_pool;             // zsmalloc 压缩数据池
+    struct zcomp *comps[ZRAM_MAX_COMPS];  // 压缩引擎 (最多4个)
+    struct gendisk *disk;                 // 块设备
+    unsigned long limit_pages;            // 内存配额
+    u64 disksize;                         // 逻辑大小 (字节)
+    s8 num_active_comps;                  // 活跃的压缩引擎数
+
+    // CONFIG_ZRAM_WRITEBACK
+    struct file *backing_dev;             // 后端块设备
+    unsigned long *bitmap;                // 后端设备块位图
+    bool compressed_wb;                   // 是否将压缩数据写入后端
+    u32 wb_batch_size;                    // 最大并发回写操作数
+};</code></pre>
+
+<h4>struct zram_table_entry（每页, ~16 字节）</h4>
+<pre><code>struct zram_table_entry {
+    unsigned long handle;        // zsmalloc 句柄 或 后端设备块索引
+    union {
+        unsigned long __lock;    // 位自旋锁 (ZRAM_ENTRY_LOCK)
+        struct {
+            u32 flags;           // 打包: size (位 0..PAGE_SHIFT) + 状态标志
+            u32 ac_time;         // 访问时间 (CONFIG_ZRAM_TRACK_ENTRY_ACTIME)
+        } attr;
+    };
+};
+
+// 标志位 (PAGE_SHIFT 以上):
+//   ZRAM_SAME          — 页面为同值填充 (全零或重复字)
+//   ZRAM_WB            — 页面已回写到后端设备
+//   ZRAM_HUGE          — 不可压缩, 以未压缩方式存储
+//   ZRAM_IDLE          — 自上次标记空闲以来未被访问
+//   ZRAM_INCOMPRESSIBLE — 无算法能压缩该页面
+//   ZRAM_COMP_PRIORITY — 2位字段: 使用了哪个压缩算法 (0–3)</code></pre>
+
+<div class="note">
+  <strong>设计洞察：</strong>每页元数据仅约 16 字节。对于 16 GB 的 zram 设备（4M 页），元数据表仅占 64 MB &mdash; 约为虚拟大小的 0.4%。压缩后大小编码在 flags 字的低位中，避免了额外的字段。
+</div>
+
+<h3 id="zram-write">2.3 写入路径</h3>
+
+<p>当交换子系统向 <code>/dev/zramN</code> 写入一个页面时：</p>
+
+<pre><code>bio submit → zram_submit_bio()
+  → zram_bio_write()              // 遍历 bio_vecs
+    → zram_bvec_write()
+      → zram_write_page(page, index)
+          1. page_same_filled()?  → ZRAM_SAME 标志, 仅存储元素值 (无需分配!)
+          2. zcomp_stream_get()   → 获取每CPU压缩流 (互斥锁)
+          3. zcomp_compress()     → 压缩到 2×PAGE_SIZE 缓冲区
+          4. comp_len ≥ huge?     → ZRAM_HUGE, 以未压缩方式存储 (PAGE_SIZE 分配)
+          5. zs_malloc(comp_len)  → 从 zsmalloc 池分配
+          6. zram_can_store_page? → 检查 limit_pages 配额
+          7. zs_obj_write()       → 将压缩数据写入 zsmalloc 对象
+          8. slot_lock → 更新 table[index] → slot_unlock
+          9. 更新统计 (pages_stored, compr_data_size)</code></pre>
+
+<p><strong>同值填充页面优化：</strong>在压缩之前，zram 会检查整个页面是否由单个重复的 <code>unsigned long</code> 值填充（常见于零页面）。如果是，则仅存储该填充值 &mdash; 无需压缩，无需分配。这处理了非常常见的零初始化内存情况。</p>
+
+<h3 id="zram-read">2.4 读取路径</h3>
+
+<pre><code>page fault → bio submit → zram_submit_bio()
+  → zram_bio_read()
+    → zram_bvec_read()
+      → zram_read_page(page, index)
+          slot_lock(index)
+          检查标志:
+            ZRAM_SAME → zram_fill_page() (memset_l)
+            ZRAM_WB   → read_from_bdev() (异步 bio 到后端设备)
+            ZRAM_HUGE → zs_obj_read_begin() → copy_page() (无需解压缩)
+            正常      → read_compressed_page():
+                          zcomp_stream_get(comps[priority])
+                          zs_obj_read_begin(handle)  → 获取压缩数据指针
+                          zcomp_decompress()          → 解压缩到页面
+                          zs_obj_read_end(handle)
+          mark_slot_accessed()  → 清除 ZRAM_IDLE 标志</code></pre>
+
+<div class="note">
+  <strong>异步后端设备读取：</strong>当页面已被回写 (<code>ZRAM_WB</code>) 时，zram 向后端设备发起异步 bio。完成回调函数 <code>zram_async_read_endio()</code> 在高优先级工作队列中处理解压缩（如果启用了 <code>compressed_wb</code>）&mdash; 避免在中断上下文中执行解压缩。
+</div>
+
+<h3 id="zram-wb">2.5 回写到后端设备</h3>
+
+<p>启用 <code>CONFIG_ZRAM_WRITEBACK</code> 后，zram 可以将冷页面或不可压缩页面卸载到真实块设备，释放 RAM。这是通过 sysfs <strong>由用户触发</strong>的，而非自动执行：</p>
+
+<pre><code># 设置
+echo /dev/sda2 &gt; /sys/block/zram0/backing_dev
+
+# 触发空闲页面回写
+echo all &gt; /sys/block/zram0/idle            # 标记所有页面为空闲
+# ... 等待一段时间 ...
+echo "type=idle" &gt; /sys/block/zram0/writeback
+
+# 或回写大页（不可压缩）页面
+echo "type=huge" &gt; /sys/block/zram0/writeback</code></pre>
+
+<p>回写管道使用异步 bio 提交，并具有可配置的批处理大小（<code>wb_batch_size</code>，默认 32）。启用 <code>compressed_wb=1</code> 时，压缩数据会直接写入后端设备而无需先解压缩，从而节省 CPU。</p>
+
+<h3 id="zram-recomp">2.6 空闲页面重压缩</h3>
+
+<p>启用 <code>CONFIG_ZRAM_MULTI_COMP</code> 后，zram 支持最多 4 种压缩算法（1 个主要 + 3 个辅助）。最初使用快速算法（如 lzo-rle）压缩的冷页面，可以使用更慢但压缩率更高的算法（如 zstd）进行重压缩：</p>
+
+<pre><code># 配置辅助算法
+echo "algo=zstd priority=1" &gt; /sys/block/zram0/recomp_algorithm
+
+# 标记页面为空闲，然后重压缩
+echo all &gt; /sys/block/zram0/idle
+echo "type=idle algo=zstd max_pages=10000" &gt; /sys/block/zram0/recompress</code></pre>
+
+<p>重压缩逻辑会比较 zsmalloc 的<em>大小类索引</em>（而非原始字节数）来判断重压缩是否真的能节省内存 &mdash; 如果更小的字节数映射到相同的大小类，则不值得执行重压缩。</p>
+
+<h3 id="zram-zcomp">2.7 压缩框架 (zcomp)</h3>
+
+<pre><code>struct zcomp {
+    struct zcomp_strm __percpu *stream;  // 每CPU压缩缓冲区
+    const struct zcomp_ops *ops;         // 后端虚函数表
+};
+
+struct zcomp_strm {
+    struct mutex lock;          // 每CPU序列化
+    void *buffer;               // 2 × PAGE_SIZE 输出缓冲区
+    void *local_copy;           // PAGE_SIZE (用于跨页 zsmalloc 对象)
+    struct zcomp_ctx ctx;       // 后端特定状态
+};</code></pre>
+
+<table>
+<tr><th>后端</th><th>文件</th><th>速度</th><th>压缩率</th><th>说明</th></tr>
+<tr><td><code>lzorle</code></td><td>backend_lzorle.c</td><td>非常快</td><td>2.5&ndash;3&times;</td><td>带 RLE 预处理的 LZO；良好的默认选择</td></tr>
+<tr><td><code>lzo</code></td><td>backend_lzo.c</td><td>非常快</td><td>2.5&ndash;3&times;</td><td>经典 LZO</td></tr>
+<tr><td><code>lz4</code></td><td>backend_lz4.c</td><td>快</td><td>2.2&ndash;2.8&times;</td><td>典型默认值；参数: level</td></tr>
+<tr><td><code>lz4hc</code></td><td>backend_lz4hc.c</td><td>慢</td><td>3&ndash;3.5&times;</td><td>高压缩率 LZ4；参数: level</td></tr>
+<tr><td><code>zstd</code></td><td>backend_zstd.c</td><td>中等</td><td>3.5&ndash;4.5&times;</td><td>最适合重压缩；参数: level</td></tr>
+<tr><td><code>deflate</code></td><td>backend_deflate.c</td><td>中等</td><td>3&ndash;4&times;</td><td>ZLIB/DEFLATE；参数: level, winbits</td></tr>
+<tr><td><code>842</code></td><td>backend_842.c</td><td>硬件加速</td><td>2&ndash;3&times;</td><td>IBM POWER8 硬件压缩</td></tr>
+</table>
+
+<p>每个后端实现一个简单的虚函数表 (<code>struct zcomp_ops</code>)：<code>compress</code>、<code>decompress</code>、<code>create_ctx</code>、<code>destroy_ctx</code>、<code>setup_params</code>、<code>release_params</code>。CPU 热插拔回调确保每 CPU 流被正确分配/释放。</p>
+
+<h3 id="zram-sysfs">2.8 Sysfs 接口</h3>
+
+<div class="columns">
+<div>
+<h4>控制（写入）</h4>
+<pre><code>/sys/block/zramN/
+  disksize          # 设置虚拟大小（只写一次）
+  comp_algorithm    # 设置主压缩算法
+  recomp_algorithm  # 设置辅助算法 + 优先级
+  algorithm_params  # 算法特定参数
+  mem_limit         # 内存池配额
+  backing_dev       # 后端块设备路径
+  idle              # 标记页面为空闲 ("all" 或 age)
+  compact           # 触发 zsmalloc 内存整理
+  writeback         # 触发回写
+  recompress        # 触发重压缩
+  reset             # 销毁并重置设备</code></pre>
+</div>
+<div>
+<h4>统计信息（读取）</h4>
+<pre><code>/sys/block/zramN/
+  mm_stat:
+    orig_data_size      # 未压缩数据大小
+    compr_data_size     # 压缩后数据大小
+    mem_used_total      # zsmalloc 池总用量
+    mem_limit           # 已配置的限制
+    same_pages          # 同值填充页数
+    huge_pages          # 不可压缩页数
+    pages_compacted     # 内存整理结果
+
+  io_stat:
+    failed_reads/writes
+    notify_free
+
+  bd_stat:              # 回写统计
+    bd_count, bd_reads, bd_writes</code></pre>
+</div>
+</div>
+
+
+<!-- ═══════════════════════  3. ZSWAP  ═══════════════════════ -->
+<h2 id="zswap">3. zswap &mdash; 压缩交换缓存</h2>
+
+<p>zswap 是位于交换子系统和实际交换设备之间的<strong>透明压缩缓存</strong>。当内核决定换出一个页面时，zswap 会拦截它，压缩后存储在 RAM 中。只有当 zswap 的内存池满时，才会将最冷的页面淘汰（回写）到真实交换设备。</p>
+
+<p>与 zram 不同，zswap <em>不是</em>块设备 &mdash; 它直接挂接到内存管理层（<code>mm/page_io.c</code>），对用户空间完全透明。仍然需要一个真实的交换设备作为后端存储。</p>
+
+<h3 id="zswap-arch">3.1 架构</h3>
+
+<div class="svg-container">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1060 700" width="1060" height="700">
+  <defs>
+    <marker id="zs" markerWidth="10" markerHeight="7" refX="10" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#58a6ff"/>
+    </marker>
+    <marker id="zs-o" markerWidth="10" markerHeight="7" refX="10" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#d29922"/>
+    </marker>
+    <marker id="zs-r" markerWidth="10" markerHeight="7" refX="10" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#f85149"/>
+    </marker>
+    <marker id="zs-p" markerWidth="10" markerHeight="7" refX="10" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#bc8cff"/>
+    </marker>
+    <marker id="zs-g" markerWidth="10" markerHeight="7" refX="10" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#3fb950"/>
+    </marker>
+  </defs>
+
+  <rect width="1060" height="700" rx="12" fill="#0d1117"/>
+  <text x="530" y="30" text-anchor="middle" fill="#58a6ff" font-family="monospace" font-size="15" font-weight="bold">zswap — 内部架构</text>
+
+  <!-- ── 页面回收入口 ── -->
+  <rect x="350" y="50" width="360" height="40" rx="6" fill="#161b22" stroke="#58a6ff" stroke-width="2"/>
+  <text x="530" y="75" text-anchor="middle" fill="#e6edf3" font-family="monospace" font-size="12">页面回收 → swap_writepage()</text>
+
+  <line x1="530" y1="90" x2="530" y2="120" stroke="#58a6ff" stroke-width="1.5" marker-end="url(#zs)"/>
+
+  <!-- ── zswap_store ── -->
+  <rect x="380" y="125" width="300" height="40" rx="6" fill="#161b22" stroke="#58a6ff" stroke-width="2"/>
+  <text x="530" y="150" text-anchor="middle" fill="#e6edf3" font-family="monospace" font-size="12">zswap_store(folio)</text>
+
+  <line x1="530" y1="165" x2="530" y2="195" stroke="#58a6ff" stroke-width="1.5" marker-end="url(#zs)"/>
+
+  <!-- ── 前置条件检查 ── -->
+  <rect x="350" y="200" width="360" height="70" rx="6" fill="#161b22" stroke="#d29922"/>
+  <text x="530" y="220" text-anchor="middle" fill="#d29922" font-family="monospace" font-size="11">前置条件检查</text>
+  <text x="530" y="238" text-anchor="middle" fill="#8b949e" font-family="monospace" font-size="9">1. zswap 是否启用? (static key 快速路径)</text>
+  <text x="530" y="252" text-anchor="middle" fill="#8b949e" font-family="monospace" font-size="9">2. memcg zswap.max 是否超限?</text>
+  <text x="530" y="266" text-anchor="middle" fill="#8b949e" font-family="monospace" font-size="9">3. 全局池限制是否已达?</text>
+
+  <!-- 拒绝箭头 -->
+  <line x1="710" y1="235" x2="790" y2="235" stroke="#f85149" stroke-width="1.5" marker-end="url(#zs-r)"/>
+  <rect x="795" y="218" width="200" height="34" rx="5" fill="rgba(248,81,73,0.08)" stroke="#f85149" stroke-dasharray="3,2"/>
+  <text x="895" y="240" text-anchor="middle" fill="#f85149" font-family="monospace" font-size="10">→ 回退到磁盘交换</text>
+
+  <line x1="530" y1="270" x2="530" y2="300" stroke="#58a6ff" stroke-width="1.5" marker-end="url(#zs)"/>
+
+  <!-- ── 压缩 ── -->
+  <rect x="340" y="305" width="380" height="75" rx="6" fill="#161b22" stroke="#39d2c0"/>
+  <text x="530" y="325" text-anchor="middle" fill="#39d2c0" font-family="monospace" font-size="11">zswap_compress(page, entry, pool)</text>
+  <text x="530" y="343" text-anchor="middle" fill="#8b949e" font-family="monospace" font-size="9">1. acomp_ctx_get_cpu_lock() → 每CPU上下文</text>
+  <text x="530" y="357" text-anchor="middle" fill="#8b949e" font-family="monospace" font-size="9">2. crypto_acomp_compress() → 异步压缩, 同步等待</text>
+  <text x="530" y="371" text-anchor="middle" fill="#8b949e" font-family="monospace" font-size="9">3. zs_malloc() → zs_obj_write() → 存储压缩数据</text>
+
+  <line x1="530" y1="380" x2="530" y2="410" stroke="#58a6ff" stroke-width="1.5" marker-end="url(#zs)"/>
+
+  <!-- ── Xarray 插入 ── -->
+  <rect x="370" y="415" width="320" height="42" rx="6" fill="#161b22" stroke="#58a6ff"/>
+  <text x="530" y="435" text-anchor="middle" fill="#e6edf3" font-family="monospace" font-size="11">xa_store(zswap_tree, offset, entry)</text>
+  <text x="530" y="450" text-anchor="middle" fill="#8b949e" font-family="monospace" font-size="9">原子插入; 如存在旧条目则释放</text>
+
+  <line x1="530" y1="457" x2="530" y2="487" stroke="#58a6ff" stroke-width="1.5" marker-end="url(#zs)"/>
+
+  <!-- ── LRU + 计费 ── -->
+  <rect x="370" y="492" width="320" height="42" rx="6" fill="#161b22" stroke="#3fb950"/>
+  <text x="530" y="512" text-anchor="middle" fill="#3fb950" font-family="monospace" font-size="11">LRU 添加 + memcg 计费</text>
+  <text x="530" y="527" text-anchor="middle" fill="#8b949e" font-family="monospace" font-size="9">list_lru_add() + obj_cgroup_charge_zswap()</text>
+
+  <!-- ═══ 加载路径（左侧） ═══ -->
+  <rect x="30" y="125" width="280" height="40" rx="6" fill="#161b22" stroke="#3fb950" stroke-width="2"/>
+  <text x="170" y="150" text-anchor="middle" fill="#e6edf3" font-family="monospace" font-size="12">zswap_load(folio)</text>
+  <text x="170" y="112" fill="#3fb950" font-family="monospace" font-size="10">缺页异常 (换入) ↓</text>
+
+  <line x1="170" y1="165" x2="170" y2="200" stroke="#3fb950" stroke-width="1.5" marker-end="url(#zs-g)"/>
+
+  <rect x="50" y="205" width="240" height="36" rx="5" fill="#161b22" stroke="#3fb950"/>
+  <text x="170" y="228" text-anchor="middle" fill="#e6edf3" font-family="monospace" font-size="10">xa_load(tree, offset)</text>
+
+  <line x1="170" y1="241" x2="170" y2="268" stroke="#3fb950" stroke-width="1.5" marker-end="url(#zs-g)"/>
+
+  <rect x="30" y="273" width="280" height="55" rx="5" fill="#161b22" stroke="#39d2c0"/>
+  <text x="170" y="295" text-anchor="middle" fill="#39d2c0" font-family="monospace" font-size="10">zswap_decompress(entry, folio)</text>
+  <text x="170" y="313" text-anchor="middle" fill="#8b949e" font-family="monospace" font-size="8">如 length==PAGE_SIZE: memcpy (未压缩)</text>
+  <text x="170" y="325" text-anchor="middle" fill="#8b949e" font-family="monospace" font-size="8">否则: crypto_acomp_decompress()</text>
+
+  <line x1="170" y1="328" x2="170" y2="358" stroke="#3fb950" stroke-width="1.5" marker-end="url(#zs-g)"/>
+
+  <rect x="50" y="363" width="240" height="42" rx="5" fill="rgba(63,185,80,0.08)" stroke="#3fb950"/>
+  <text x="170" y="383" text-anchor="middle" fill="#3fb950" font-family="monospace" font-size="10">标记 folio 为最新</text>
+  <text x="170" y="398" text-anchor="middle" fill="#8b949e" font-family="monospace" font-size="8">xa_erase + 释放条目 (swapcache)</text>
+
+  <!-- ═══ 淘汰路径（底部） ═══ -->
+  <rect x="30" y="555" width="1000" height="130" rx="8" fill="none" stroke="#d29922" stroke-width="1.5"/>
+  <text x="530" y="575" text-anchor="middle" fill="#d29922" font-family="monospace" font-size="12" font-weight="bold">淘汰 / 回写管道</text>
+
+  <rect x="55" y="590" width="200" height="40" rx="5" fill="#161b22" stroke="#d29922"/>
+  <text x="155" y="607" text-anchor="middle" fill="#e6edf3" font-family="monospace" font-size="10">Shrinker / shrink_worker</text>
+  <text x="155" y="622" text-anchor="middle" fill="#8b949e" font-family="monospace" font-size="8">池满 → queue_work()</text>
+
+  <line x1="255" y1="610" x2="290" y2="610" stroke="#d29922" stroke-width="1.5" marker-end="url(#zs-o)"/>
+
+  <rect x="295" y="590" width="200" height="40" rx="5" fill="#161b22" stroke="#d29922"/>
+  <text x="395" y="607" text-anchor="middle" fill="#e6edf3" font-family="monospace" font-size="10">shrink_memcg_cb()</text>
+  <text x="395" y="622" text-anchor="middle" fill="#8b949e" font-family="monospace" font-size="8">二次机会 LRU 遍历</text>
+
+  <line x1="495" y1="610" x2="530" y2="610" stroke="#d29922" stroke-width="1.5" marker-end="url(#zs-o)"/>
+
+  <rect x="535" y="590" width="240" height="40" rx="5" fill="#161b22" stroke="#d29922"/>
+  <text x="655" y="607" text-anchor="middle" fill="#e6edf3" font-family="monospace" font-size="10">zswap_writeback_entry()</text>
+  <text x="655" y="622" text-anchor="middle" fill="#8b949e" font-family="monospace" font-size="8">解压缩 → swap_cache_alloc</text>
+
+  <line x1="775" y1="610" x2="810" y2="610" stroke="#d29922" stroke-width="1.5" marker-end="url(#zs-o)"/>
+
+  <rect x="815" y="590" width="195" height="40" rx="5" fill="#161b22" stroke="#f85149"/>
+  <text x="913" y="607" text-anchor="middle" fill="#f85149" font-family="monospace" font-size="10">__swap_writepage()</text>
+  <text x="913" y="622" text-anchor="middle" fill="#8b949e" font-family="monospace" font-size="8">写入真实交换设备</text>
+
+  <!-- 二次机会细节 -->
+  <rect x="55" y="645" width="970" height="28" rx="4" fill="rgba(210,153,34,0.06)" stroke="none"/>
+  <text x="530" y="664" text-anchor="middle" fill="#8b949e" font-family="monospace" font-size="9">二次机会: 如 entry.referenced → 清除标志, 移到 LRU 尾部, 跳过。如 !referenced → 淘汰到磁盘。</text>
+
+  <!-- 池容量指示 -->
+  <rect x="720" y="480" width="290" height="55" rx="6" fill="none" stroke="#8b949e" stroke-dasharray="4,2"/>
+  <text x="865" y="498" text-anchor="middle" fill="#8b949e" font-family="monospace" font-size="10">池大小控制</text>
+  <text x="865" y="514" text-anchor="middle" fill="#8b949e" font-family="monospace" font-size="9">max_pool_percent (默认 20%)</text>
+  <text x="865" y="528" text-anchor="middle" fill="#8b949e" font-family="monospace" font-size="9">accept_thr = 90% (滞后)</text>
+
+  <!-- 从池满到淘汰的箭头 -->
+  <line x1="865" y1="535" x2="530" y2="555" stroke="#d29922" stroke-width="1" stroke-dasharray="4,2" marker-end="url(#zs-o)"/>
+  <text x="730" y="550" fill="#d29922" font-family="monospace" font-size="8">池满</text>
+</svg>
+</div>
+
+<h3 id="zswap-data">3.2 数据结构</h3>
+
+<h4>struct zswap_entry (~48 字节)</h4>
+<pre><code>struct zswap_entry {
+    swp_entry_t swpentry;           // 交换类型 + 偏移量
+    unsigned int length;            // 压缩后大小 (字节)
+    bool referenced;                // 二次机会 LRU 位
+    struct zswap_pool *pool;        // 所属池 (用于解压缩)
+    unsigned long handle;           // zsmalloc 分配句柄
+    struct obj_cgroup *objcg;       // memcg 计费引用
+    struct list_head lru;           // LRU 链表节点
+};</code></pre>
+
+<h4>struct zswap_pool</h4>
+<pre><code>struct zswap_pool {
+    struct zs_pool *zs_pool;                      // zsmalloc 池
+    struct crypto_acomp_ctx __percpu *acomp_ctx;  // 每CPU压缩上下文
+    struct percpu_ref ref;                         // 带回调的引用计数
+    struct list_head list;                         // 活跃池链表 (RCU)
+    char tfm_name[CRYPTO_MAX_ALG_NAME];           // 算法名称
+};</code></pre>
+
+<h4>查找结构</h4>
+<pre><code>// 每个交换设备的每 64 MB 交换粒度一个 xarray
+static struct xarray *zswap_trees[MAX_SWAPFILES];
+
+// 查找: swap_zswap_tree(swp_entry_t) 返回正确的 xarray
+// 键: 该 64M 窗口内的 swp_offset</code></pre>
+
+<div class="note">
+  <strong>为什么用 xarray 而不是哈希表？</strong>交换偏移量是已知范围内的稠密整数。Xarray 提供 O(log<sub>64</sub> n) 的查找，具有优秀的缓存行为、自动内存管理和 RCU 安全的并发访问 &mdash; 非常适合此用例。64 MB 粒度使单个 xarray 保持较小，同时支持非常大的交换设备。
+</div>
+
+<h3 id="zswap-store">3.3 存储路径</h3>
+
+<pre><code>页面回收 (vmscan.c / kswapd)
+  → swap_writepage() in page_io.c
+    → zswap_store(folio)                   // 在磁盘 I/O 前拦截
+        1. 检查 static key (禁用时的快速路径)
+        2. 检查 memcg zswap.max 限制
+        3. 检查全局池限制 (zswap_check_limits)
+        4. 获取当前池引用 (RCU安全)
+        5. 对 folio 中的每个页面:
+           → zswap_store_page(page, objcg, pool)
+              a. 分配 zswap_entry (kmem_cache, NUMA本地)
+              b. zswap_compress(page, entry, pool)
+                 - acomp_ctx_get_cpu_lock() → 每CPU上下文
+                 - SG 输入来自 page, 输出到缓冲区
+                 - crypto_acomp_compress() + crypto_wait_req()
+                 - 如 comp_len ≥ PAGE_SIZE → 存储未压缩 (如启用WB)
+                 - zs_malloc() → zs_obj_write() → 存入 zsmalloc
+              c. xa_store() → 插入 xarray (如重脏则释放旧条目)
+              d. obj_cgroup_charge_zswap() → memcg 计费
+              e. list_lru_add() → 添加到 LRU
+              f. entry->referenced = true → 二次机会保护
+        6. 计数 ZSWPOUT 事件
+        7. 返回 true → page_io.c 跳过磁盘写入!</code></pre>
+
+<h3 id="zswap-load">3.4 加载路径</h3>
+
+<pre><code>缺页异常 (do_swap_page)
+  → swap_read_folio() in page_io.c
+    → zswap_load(folio)
+        1. xa_load(tree, offset) → 查找条目 (RCU安全, 无锁)
+        2. 如未找到 → 返回 -ENOENT → 回退到磁盘读取
+        3. zswap_decompress(entry, folio)
+           - 获取每CPU acomp 上下文
+           - 如 length == PAGE_SIZE → memcpy (以未压缩方式存储)
+           - 否则 → crypto_acomp_decompress() + 等待
+        4. 标记 folio 为最新
+        5. 如 swapcache → xa_erase + 释放条目 (swapcache 此时为权威)
+        6. 计数 ZSWPIN 事件
+        7. 返回 0 → page_io.c 跳过磁盘读取!</code></pre>
+
+<h3 id="zswap-evict">3.5 淘汰与回写</h3>
+
+<p>当压缩池超过 RAM 的 <code>max_pool_percent</code>（默认 20%）时，zswap 必须将条目淘汰到真实交换设备：</p>
+
+<h4>二次机会 LRU 算法</h4>
+<p>Shrinker 遍历 LRU 链表。每个条目有一个 <code>referenced</code> 位：</p>
+<ul>
+  <li><strong>首次遇到，referenced=true：</strong>清除该位，将条目移到 LRU 尾部。页面在被淘汰前获得"二次机会"。</li>
+  <li><strong>再次遇到，referenced=false：</strong>淘汰 &mdash; 解压缩并写入真实交换。</li>
+</ul>
+
+<p>这防止了最近存储的页面被频繁淘汰（抖动），在不维护访问时间戳开销的情况下近似真正的 LRU 行为。</p>
+
+<h4>回写管道</h4>
+<pre><code>shrink_memcg_cb() [LRU 遍历器]
+  → zswap_writeback_entry(entry, swpentry)
+      1. swap_cache_alloc_folio() → 分配新 folio
+      2. 验证条目仍在 xarray 中 (并发失效检查)
+      3. zswap_decompress(entry, folio) → 解压缩到 folio
+      4. xa_erase() + 释放条目 → 从 zswap 移除
+      5. __swap_writepage(folio) → 写入真实交换设备
+      6. 计数 ZSWPWB 事件</code></pre>
+
+<h4>Shrinker 校准</h4>
+<p>Shrinker 计数函数包含两个精密的反馈机制：</p>
+<ul>
+  <li><strong>磁盘换入保护：</strong>跟踪每个 lruvec 的 <code>nr_disk_swapins</code>。如果 zswap 过度收缩，换入时页面将从磁盘读取而非从 zswap &mdash; 此计数器检测到这一情况并降低未来的收缩激进程度。</li>
+  <li><strong>压缩率缩放：</strong>如果压缩效果好（后端较小），每释放一个字节需要的淘汰次数更少。如果压缩效果差，则需要更多次淘汰。</li>
+</ul>
+
+<h3 id="zswap-cgroup">3.6 Cgroup 集成</h3>
+
+<p>zswap 与内存控制组 (memcg v2) 深度集成：</p>
+
+<table>
+<tr><th>Cgroup 文件</th><th>用途</th></tr>
+<tr><td><code>memory.zswap.current</code></td><td>该 cgroup 当前的 zswap 使用量（字节）</td></tr>
+<tr><td><code>memory.zswap.max</code></td><td>每 cgroup 的 zswap 限制（默认: max）</td></tr>
+<tr><td><code>memory.zswap.writeback</code></td><td>启用/禁用该 cgroup 的回写</td></tr>
+</table>
+
+<p>对象 cgroup (<code>objcg</code>) 引用按条目跟踪，允许精细化的记账，即使页面在 cgroup 之间迁移。Shrinker 标记为 <code>SHRINKER_MEMCG_AWARE</code>，意味着它可以在回收时针对特定 cgroup。</p>
+
+<h3 id="zswap-config">3.7 配置</h3>
+
+<pre><code># 模块参数 (sysfs: /sys/module/zswap/parameters/)
+enabled=Y                      # 启用/禁用 (static key 用于快速路径)
+compressor=lz4                 # 压缩算法
+max_pool_percent=20            # 池最大值占 RAM 百分比
+accept_threshold_percent=90    # 滞后: 重新接受的最大值百分比
+shrinker_enabled=Y             # 主动后台回写
+
+# Debugfs 统计 (/sys/kernel/debug/zswap/)
+pool_total_size                # 当前池大小 (字节)
+stored_pages                   # 已压缩页面数
+reject_alloc_fail              # zsmalloc 分配失败次数
+reject_compress_poor           # 压缩后过大的页面数
+written_back_pages             # 已淘汰到磁盘的页面数</code></pre>
+
+
+<!-- ═══════════════════════  4. ZSMALLOC  ═══════════════════════ -->
+<h2 id="zsmalloc">4. zsmalloc &mdash; 共享内存分配器</h2>
+
+<p>zram 和 zswap 都使用 <strong>zsmalloc</strong> (<code>mm/zsmalloc.c</code>) 来存储压缩后的页面数据。zsmalloc 是一个专为可变大小压缩对象设计的特化 slab 分配器，以最小的碎片化优化高密度填充。</p>
+
+<div class="svg-container">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1060 420" width="1060" height="420">
+  <rect width="1060" height="420" rx="12" fill="#0d1117"/>
+  <text x="530" y="30" text-anchor="middle" fill="#bc8cff" font-family="monospace" font-size="15" font-weight="bold">zsmalloc — 对象分配器内部结构</text>
+
+  <!-- 大小类数组 -->
+  <rect x="30" y="50" width="1000" height="80" rx="8" fill="none" stroke="#bc8cff"/>
+  <text x="530" y="70" text-anchor="middle" fill="#bc8cff" font-family="monospace" font-size="12" font-weight="bold">255 个大小类 (16字节增量)</text>
+
+  <rect x="50" y="82" width="80" height="36" rx="4" fill="#161b22" stroke="#bc8cff"/>
+  <text x="90" y="105" text-anchor="middle" fill="#e6edf3" font-family="monospace" font-size="9">32 B</text>
+  <rect x="140" y="82" width="80" height="36" rx="4" fill="#161b22" stroke="#bc8cff"/>
+  <text x="180" y="105" text-anchor="middle" fill="#e6edf3" font-family="monospace" font-size="9">48 B</text>
+  <rect x="230" y="82" width="80" height="36" rx="4" fill="#161b22" stroke="#bc8cff"/>
+  <text x="270" y="105" text-anchor="middle" fill="#e6edf3" font-family="monospace" font-size="9">64 B</text>
+  <text x="340" y="105" fill="#8b949e" font-family="monospace" font-size="12">...</text>
+  <rect x="370" y="82" width="100" height="36" rx="4" fill="#161b22" stroke="#39d2c0"/>
+  <text x="420" y="99" text-anchor="middle" fill="#39d2c0" font-family="monospace" font-size="9">~1.6 KB</text>
+  <text x="420" y="112" text-anchor="middle" fill="#8b949e" font-family="monospace" font-size="7">(典型平均)</text>
+  <text x="500" y="105" fill="#8b949e" font-family="monospace" font-size="12">...</text>
+  <rect x="530" y="82" width="100" height="36" rx="4" fill="#161b22" stroke="#d29922"/>
+  <text x="580" y="99" text-anchor="middle" fill="#d29922" font-family="monospace" font-size="9">3264 B</text>
+  <text x="580" y="112" text-anchor="middle" fill="#8b949e" font-family="monospace" font-size="7">(大页阈值)</text>
+  <text x="660" y="105" fill="#8b949e" font-family="monospace" font-size="12">...</text>
+  <rect x="690" y="82" width="100" height="36" rx="4" fill="#161b22" stroke="#f85149"/>
+  <text x="740" y="99" text-anchor="middle" fill="#f85149" font-family="monospace" font-size="9">4096 B</text>
+  <text x="740" y="112" text-anchor="middle" fill="#8b949e" font-family="monospace" font-size="7">(PAGE_SIZE)</text>
+
+  <rect x="830" y="82" width="180" height="36" rx="4" fill="rgba(188,140,255,0.08)" stroke="#bc8cff" stroke-dasharray="3,2"/>
+  <text x="920" y="99" text-anchor="middle" fill="#bc8cff" font-family="monospace" font-size="9">每个类包含:</text>
+  <text x="920" y="112" text-anchor="middle" fill="#8b949e" font-family="monospace" font-size="7">填充度链表, 锁, 统计</text>
+
+  <!-- ZSpage 结构 -->
+  <rect x="30" y="150" width="1000" height="120" rx="8" fill="none" stroke="#bc8cff"/>
+  <text x="530" y="170" text-anchor="middle" fill="#bc8cff" font-family="monospace" font-size="12" font-weight="bold">ZSpage (可变物理页, 同质对象)</text>
+
+  <!-- 物理页面 -->
+  <rect x="50" y="185" width="180" height="65" rx="4" fill="#161b22" stroke="#58a6ff"/>
+  <text x="140" y="203" text-anchor="middle" fill="#58a6ff" font-family="monospace" font-size="9">物理页 0</text>
+  <rect x="60" y="210" width="40" height="25" rx="2" fill="rgba(63,185,80,0.15)" stroke="#3fb950"/>
+  <text x="80" y="227" text-anchor="middle" fill="#3fb950" font-family="monospace" font-size="7">obj0</text>
+  <rect x="105" y="210" width="40" height="25" rx="2" fill="rgba(63,185,80,0.15)" stroke="#3fb950"/>
+  <text x="125" y="227" text-anchor="middle" fill="#3fb950" font-family="monospace" font-size="7">obj1</text>
+  <rect x="150" y="210" width="40" height="25" rx="2" fill="rgba(210,153,34,0.15)" stroke="#d29922"/>
+  <text x="170" y="227" text-anchor="middle" fill="#d29922" font-family="monospace" font-size="7">obj2↗</text>
+
+  <rect x="250" y="185" width="180" height="65" rx="4" fill="#161b22" stroke="#58a6ff"/>
+  <text x="340" y="203" text-anchor="middle" fill="#58a6ff" font-family="monospace" font-size="9">物理页 1</text>
+  <rect x="260" y="210" width="40" height="25" rx="2" fill="rgba(210,153,34,0.15)" stroke="#d29922"/>
+  <text x="280" y="227" text-anchor="middle" fill="#d29922" font-family="monospace" font-size="7">↗obj2</text>
+  <rect x="305" y="210" width="40" height="25" rx="2" fill="rgba(63,185,80,0.15)" stroke="#3fb950"/>
+  <text x="325" y="227" text-anchor="middle" fill="#3fb950" font-family="monospace" font-size="7">obj3</text>
+  <rect x="350" y="210" width="40" height="25" rx="2" fill="rgba(63,185,80,0.15)" stroke="#3fb950"/>
+  <text x="370" y="227" text-anchor="middle" fill="#3fb950" font-family="monospace" font-size="7">obj4</text>
+
+  <text x="460" y="220" fill="#8b949e" font-family="monospace" font-size="12">...</text>
+
+  <rect x="500" y="185" width="180" height="65" rx="4" fill="#161b22" stroke="#58a6ff"/>
+  <text x="590" y="203" text-anchor="middle" fill="#58a6ff" font-family="monospace" font-size="9">物理页 N</text>
+  <rect x="510" y="210" width="40" height="25" rx="2" fill="rgba(63,185,80,0.15)" stroke="#3fb950"/>
+  <text x="530" y="227" text-anchor="middle" fill="#3fb950" font-family="monospace" font-size="7">objK</text>
+  <rect x="555" y="210" width="40" height="25" rx="2" fill="rgba(248,81,73,0.1)" stroke="#f85149" stroke-dasharray="2,2"/>
+  <text x="575" y="227" text-anchor="middle" fill="#f85149" font-family="monospace" font-size="7">空闲</text>
+  <rect x="600" y="210" width="40" height="25" rx="2" fill="rgba(248,81,73,0.1)" stroke="#f85149" stroke-dasharray="2,2"/>
+  <text x="620" y="227" text-anchor="middle" fill="#f85149" font-family="monospace" font-size="7">空闲</text>
+
+  <!-- 跨页说明 -->
+  <rect x="720" y="185" width="290" height="65" rx="6" fill="rgba(210,153,34,0.06)" stroke="#d29922" stroke-dasharray="3,2"/>
+  <text x="865" y="205" text-anchor="middle" fill="#d29922" font-family="monospace" font-size="10">对象可跨越页面边界!</text>
+  <text x="865" y="222" text-anchor="middle" fill="#8b949e" font-family="monospace" font-size="8">obj2 起始于页0, 结束于页1</text>
+  <text x="865" y="238" text-anchor="middle" fill="#8b949e" font-family="monospace" font-size="8">zs_obj_read_begin() 通过 local_copy 处理</text>
+
+  <!-- Handle 编码 -->
+  <rect x="30" y="290" width="490" height="110" rx="8" fill="none" stroke="#bc8cff"/>
+  <text x="275" y="310" text-anchor="middle" fill="#bc8cff" font-family="monospace" font-size="12" font-weight="bold">Handle 编码 (unsigned long)</text>
+
+  <rect x="50" y="325" width="260" height="30" rx="4" fill="rgba(88,166,255,0.1)" stroke="#58a6ff"/>
+  <text x="180" y="345" text-anchor="middle" fill="#58a6ff" font-family="monospace" font-size="10">PFN (~44 位)</text>
+  <rect x="315" y="325" width="180" height="30" rx="4" fill="rgba(63,185,80,0.1)" stroke="#3fb950"/>
+  <text x="405" y="345" text-anchor="middle" fill="#3fb950" font-family="monospace" font-size="10">OBJ_INDEX (~20 位)</text>
+  <text x="275" y="380" text-anchor="middle" fill="#8b949e" font-family="monospace" font-size="9">PFN = zspage 首页 &bull; OBJ_INDEX = zspage 内的对象编号</text>
+
+  <!-- 填充度分组 -->
+  <rect x="550" y="290" width="480" height="110" rx="8" fill="none" stroke="#bc8cff"/>
+  <text x="790" y="310" text-anchor="middle" fill="#bc8cff" font-family="monospace" font-size="12" font-weight="bold">填充度分组 (每大小类)</text>
+
+  <rect x="575" y="325" width="85" height="28" rx="4" fill="rgba(248,81,73,0.1)" stroke="#f85149"/>
+  <text x="618" y="344" text-anchor="middle" fill="#f85149" font-family="monospace" font-size="9">0%</text>
+  <rect x="668" y="325" width="55" height="28" rx="4" fill="rgba(210,153,34,0.1)" stroke="#d29922"/>
+  <text x="696" y="344" text-anchor="middle" fill="#d29922" font-family="monospace" font-size="9">25%</text>
+  <rect x="731" y="325" width="55" height="28" rx="4" fill="rgba(210,153,34,0.1)" stroke="#d29922"/>
+  <text x="759" y="344" text-anchor="middle" fill="#d29922" font-family="monospace" font-size="9">50%</text>
+  <rect x="794" y="325" width="55" height="28" rx="4" fill="rgba(63,185,80,0.1)" stroke="#3fb950"/>
+  <text x="822" y="344" text-anchor="middle" fill="#3fb950" font-family="monospace" font-size="9">75%</text>
+  <rect x="857" y="325" width="85" height="28" rx="4" fill="rgba(63,185,80,0.15)" stroke="#3fb950"/>
+  <text x="900" y="344" text-anchor="middle" fill="#3fb950" font-family="monospace" font-size="9">100%</text>
+  <text x="775" y="380" text-anchor="middle" fill="#8b949e" font-family="monospace" font-size="9">优先从最满的分配 &bull; zs_compact() 合并部分填充的 zspage</text>
+</svg>
+</div>
+
+<h4>关键属性</h4>
+<ul>
+  <li><strong>255 个大小类</strong>，16 字节粒度，覆盖 32 B 到 PAGE_SIZE</li>
+  <li><strong>ZSpages</strong> 将 1&ndash;N 个物理页面组合在一起；一个 zspage 内的所有对象属于相同大小类</li>
+  <li><strong>对象可跨越页面边界</strong> &mdash; <code>zs_obj_read_begin()</code> 透明地将跨页对象复制到 <code>local_copy</code> 缓冲区</li>
+  <li><strong>Handle 间接寻址</strong> &mdash; handle 编码 PFN + 对象索引，允许 zspage 迁移用于整理而不会使外部引用失效</li>
+  <li><strong>最佳适配分配</strong> &mdash; 优先从最满的 zspage 分配，最小化碎片化</li>
+  <li><strong>内存整理</strong> &mdash; <code>zs_compact()</code> 将部分填充的 zspage 中的对象迁移以整合空闲页面，可由内存压力或 sysfs 触发</li>
+  <li><strong>典型开销</strong> &mdash; 10&ndash;20% 内部碎片（对象向上取整到最近的大小类）</li>
+</ul>
+
+
+<!-- ═══════════════════════  5. 压缩算法  ═══════════════════════ -->
+<h2 id="compression">5. 压缩算法</h2>
+
+<p>压缩算法的选择是 CPU 与内存之间的根本权衡。zram 和 zswap 都独立压缩单个 4 KiB 页面（无跨页上下文），这限制了压缩率但实现了随机访问。</p>
+
+<table>
+<tr>
+  <th>算法</th><th>压缩速度</th><th>解压速度</th><th>压缩率（典型）</th><th>说明</th>
+</tr>
+<tr>
+  <td><code>lzo-rle</code></td><td>~600 MB/s</td><td>~800 MB/s</td><td>2.0&ndash;2.5&times;</td>
+  <td>带 RLE 预处理的 LZO；快速，低 CPU 占用。<strong>zram 默认。</strong></td>
+</tr>
+<tr>
+  <td><code>lz4</code></td><td>~700 MB/s</td><td>~1200 MB/s</td><td>2.0&ndash;2.5&times;</td>
+  <td>最快的解压速度；非常适合延迟敏感的工作负载。</td>
+</tr>
+<tr>
+  <td><code>zstd</code></td><td>~150 MB/s</td><td>~500 MB/s</td><td>2.5&ndash;3.5&times;</td>
+  <td>最佳压缩率/速度平衡；冷页面重压缩的理想选择。</td>
+</tr>
+<tr>
+  <td><code>lz4hc</code></td><td>~50 MB/s</td><td>~1200 MB/s</td><td>2.5&ndash;3.0&times;</td>
+  <td>不对称：慢压缩，快解压。适合一次写入的数据。</td>
+</tr>
+<tr>
+  <td><code>deflate</code></td><td>~100 MB/s</td><td>~400 MB/s</td><td>2.5&ndash;3.5&times;</td>
+  <td>成熟且广为人知。<strong>zswap 默认。</strong>可通过 winbits 调优。</td>
+</tr>
+<tr>
+  <td><code>842</code></td><td>硬件相关</td><td>硬件相关</td><td>2&ndash;3&times;</td>
+  <td>IBM POWER8 硬件加速。在支持的硬件上 CPU 开销几乎可忽略。</td>
+</tr>
+</table>
+
+<div class="note">
+  <strong>逐页压缩上下文：</strong>每个页面独立压缩，无字典或跨页状态。这对于随机访问是必要的，但意味着压缩率低于文件级压缩。内存页面的熵值差异很大 &mdash; 代码页面压缩效果好（3&ndash;4 倍），而加密或已压缩的数据几乎无法压缩。
+</div>
+
+<h4>多重压缩策略 (zram)</h4>
+<p>zram 的 <code>CONFIG_ZRAM_MULTI_COMP</code> 启用分层方案：</p>
+<ol>
+  <li><strong>热路径（写入）：</strong>快速算法（lzo-rle 或 lz4），以最小化延迟影响</li>
+  <li><strong>冷路径（重压缩）：</strong>高密度算法（zstd），在后台应用于空闲页面，从不太可能被立即访问的页面中回收更多内存</li>
+</ol>
+<p>这实现了两全其美：低延迟写入与冷数据的高压缩率。</p>
+
+
+<!-- ═══════════════════════  6. 对比  ═══════════════════════ -->
+<h2 id="compare">6. zram 与 zswap &mdash; 如何选择</h2>
+
+<div class="columns">
+<div>
+<h4><span class="tag tag-zram">zram</span> 最适用于</h4>
+<ul>
+  <li><strong>无可用交换设备</strong>（嵌入式、无盘、仅 tmpfs）</li>
+  <li><strong>Android / ChromeOS</strong>（作为默认方案）</li>
+  <li><strong>完全控制</strong>（sysfs 提供回写、重压缩、空闲追踪旋钮）</li>
+  <li><strong>非交换用途</strong>（压缩 /tmp、ramfs 替代方案）</li>
+  <li><strong>同时使用多种算法</strong>（热: lz4, 冷: zstd）</li>
+  <li><strong>可预测的延迟</strong>（除非启用回写，否则无磁盘 I/O）</li>
+</ul>
+</div>
+<div>
+<h4><span class="tag tag-zswap">zswap</span> 最适用于</h4>
+<ul>
+  <li><strong>有真实交换的服务器</strong>（增强现有交换基础设施）</li>
+  <li><strong>透明部署</strong>（无需用户空间更改，仅启用模块）</li>
+  <li><strong>Cgroup 感知的工作负载</strong>（容器、systemd slices）</li>
+  <li><strong>自动淘汰</strong>（shrinker + LRU，无需手动回写）</li>
+  <li><strong>减少 SSD 磨损</strong>（减少对真实交换的写入）</li>
+  <li><strong>大内存服务器</strong>（20% 的 RAM 作为压缩缓存非常可观）</li>
+</ul>
+</div>
+</div>
+
+<table>
+<tr><th>维度</th><th><span class="tag tag-zram">zram</span></th><th><span class="tag tag-zswap">zswap</span></th></tr>
+<tr><td>可见性</td><td><code>/dev/zramN</code> 块设备</td><td>不可见；内存管理层钩子</td></tr>
+<tr><td>是否需要真实交换</td><td>否</td><td>是</td></tr>
+<tr><td>压缩 API</td><td>自定义 <code>zcomp</code> (直接函数调用)</td><td>内核 crypto API (<code>crypto_acomp</code>)</td></tr>
+<tr><td>池分配器</td><td>zsmalloc (直接)</td><td>zsmalloc (通过 zpool)</td></tr>
+<tr><td>淘汰</td><td>手动 (sysfs 回写) 或 OOM</td><td>自动 (shrinker + LRU)</td></tr>
+<tr><td>Cgroup 支持</td><td>无</td><td>完整 (zswap.max, 回写控制)</td></tr>
+<tr><td>多算法</td><td>是 (1+3, ZRAM_MULTI_COMP)</td><td>否 (每池单一算法)</td></tr>
+<tr><td>同值填充优化</td><td>是 (零页检测)</td><td>否 (依赖压缩)</td></tr>
+<tr><td>页面追踪</td><td>每页标志 + 访问时间</td><td>每条目 LRU + referenced 位</td></tr>
+<tr><td>代码行数</td><td>~4,700</td><td>~1,850</td></tr>
+</table>
+
+<div class="warn">
+  <strong>可以同时使用两者吗？</strong>技术上可以 &mdash; zswap 在真实交换设备前，加上一个单独的 zram 设备。但这种做法不常见，可能导致混乱的内存记账。实际上，请选择其一：无盘/嵌入式用 zram，有交换的服务器用 zswap。
+</div>
+
+<h3>LRU 反转问题</h3>
+
+<p>当 zram 与低优先级磁盘交换设备组合使用时，会出现一个微妙但关键的问题。该问题由 Chris Down（Meta 内核团队，2026 年 3 月）提出：</p>
+
+<div class="svg-container">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1060 300" width="1060" height="300">
+  <rect width="1060" height="300" rx="12" fill="#0d1117"/>
+  <text x="530" y="28" text-anchor="middle" fill="#f85149" font-family="monospace" font-size="14" font-weight="bold">LRU 反转问题 (zram + 磁盘交换)</text>
+
+  <!-- 时间轴 -->
+  <line x1="80" y1="70" x2="980" y2="70" stroke="#30363d" stroke-width="2"/>
+  <text x="530" y="60" text-anchor="middle" fill="#8b949e" font-family="monospace" font-size="10">时间 → (按顺序淘汰的页面)</text>
+
+  <!-- 先淘汰冷页面 -->
+  <rect x="100" y="80" width="120" height="30" rx="4" fill="rgba(88,166,255,0.15)" stroke="#58a6ff"/>
+  <text x="160" y="100" text-anchor="middle" fill="#58a6ff" font-family="monospace" font-size="9">冷页面 A</text>
+  <rect x="240" y="80" width="120" height="30" rx="4" fill="rgba(88,166,255,0.15)" stroke="#58a6ff"/>
+  <text x="300" y="100" text-anchor="middle" fill="#58a6ff" font-family="monospace" font-size="9">冷页面 B</text>
+  <rect x="380" y="80" width="120" height="30" rx="4" fill="rgba(88,166,255,0.15)" stroke="#58a6ff"/>
+  <text x="440" y="100" text-anchor="middle" fill="#58a6ff" font-family="monospace" font-size="9">冷页面 C</text>
+
+  <!-- zram 填满 -->
+  <text x="340" y="130" text-anchor="middle" fill="#3fb950" font-family="monospace" font-size="10">↓ 全部进入 zram (最高优先级) ↓</text>
+  <rect x="100" y="140" width="400" height="30" rx="4" fill="rgba(63,185,80,0.1)" stroke="#3fb950"/>
+  <text x="300" y="160" text-anchor="middle" fill="#3fb950" font-family="monospace" font-size="10">zram: 充满冷页面</text>
+
+  <!-- 后来的热页面 -->
+  <rect x="560" y="80" width="120" height="30" rx="4" fill="rgba(248,81,73,0.15)" stroke="#f85149"/>
+  <text x="620" y="100" text-anchor="middle" fill="#f85149" font-family="monospace" font-size="9">热页面 X</text>
+  <rect x="700" y="80" width="120" height="30" rx="4" fill="rgba(248,81,73,0.15)" stroke="#f85149"/>
+  <text x="760" y="100" text-anchor="middle" fill="#f85149" font-family="monospace" font-size="9">热页面 Y</text>
+  <rect x="840" y="80" width="120" height="30" rx="4" fill="rgba(248,81,73,0.15)" stroke="#f85149"/>
+  <text x="900" y="100" text-anchor="middle" fill="#f85149" font-family="monospace" font-size="9">热页面 Z</text>
+
+  <!-- 磁盘交换 -->
+  <text x="760" y="130" text-anchor="middle" fill="#f85149" font-family="monospace" font-size="10">↓ zram 满, 溢出到慢速磁盘 ↓</text>
+  <rect x="560" y="140" width="400" height="30" rx="4" fill="rgba(248,81,73,0.1)" stroke="#f85149"/>
+  <text x="760" y="160" text-anchor="middle" fill="#f85149" font-family="monospace" font-size="10">磁盘交换: 热页面困在慢速存储上!</text>
+
+  <!-- 结果 -->
+  <rect x="100" y="190" width="860" height="50" rx="6" fill="rgba(248,81,73,0.06)" stroke="#f85149" stroke-dasharray="4,2"/>
+  <text x="530" y="210" text-anchor="middle" fill="#f85149" font-family="monospace" font-size="11">结果: 反转 — 冷数据在快速存储中, 热数据在慢速存储中</text>
+  <text x="530" y="228" text-anchor="middle" fill="#8b949e" font-family="monospace" font-size="9">zswap 避免了此问题: 内核管理分层 — 热页面留在 RAM 池中, 冷页面回写到磁盘</text>
+
+  <!-- zswap 正确行为 -->
+  <rect x="100" y="255" width="860" height="30" rx="6" fill="rgba(63,185,80,0.06)" stroke="#3fb950"/>
+  <text x="530" y="275" text-anchor="middle" fill="#3fb950" font-family="monospace" font-size="10">zswap: 内核管理的 LRU → 冷页面淘汰到磁盘, 热页面保留在压缩 RAM 中</text>
+</svg>
+</div>
+
+<p>zram 的内存使用对 <strong>cgroup 记账也是不可见的</strong> &mdash; 内核无法按 cgroup 追踪或限制 zram 设备消耗多少 RAM，使其不适用于需要内存隔离的容器工作负载。zswap 则按 objcg 追踪每个条目。</p>
+
+
+<!-- ═══════════════════════  6.5 NVMe 后端  ═══════════════════════ -->
+<h3 id="nvme-backing">6.1 NVMe 作为后端存储 — 分层内存层次</h3>
+
+<p>zram 和 zswap 都可以使用 NVMe 设备来存储内存页面，但方式根本不同。这创建了一个<strong>三层内存层次</strong>：DRAM &rarr; 压缩 RAM &rarr; NVMe，其中压缩添加了一个新层级，弥合了 DRAM 与闪存之间的延迟鸿沟。</p>
+
+<div class="svg-container">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1060 520" width="1060" height="520">
+  <defs>
+    <marker id="th" markerWidth="10" markerHeight="7" refX="10" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#58a6ff"/>
+    </marker>
+    <marker id="th-g" markerWidth="10" markerHeight="7" refX="10" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#3fb950"/>
+    </marker>
+    <marker id="th-o" markerWidth="10" markerHeight="7" refX="10" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#d29922"/>
+    </marker>
+  </defs>
+
+  <rect width="1060" height="520" rx="12" fill="#0d1117"/>
+  <text x="530" y="28" text-anchor="middle" fill="#58a6ff" font-family="monospace" font-size="15" font-weight="bold">NVMe 后端的分层内存层次</text>
+
+  <!-- ── 层级标签（左列） ── -->
+  <text x="28" y="88" fill="#8b949e" font-family="monospace" font-size="10" transform="rotate(-90,28,88)">快</text>
+  <text x="28" y="400" fill="#8b949e" font-family="monospace" font-size="10" transform="rotate(-90,28,400)">慢</text>
+  <line x1="38" y1="55" x2="38" y2="460" stroke="#30363d" stroke-width="1" stroke-dasharray="4,3"/>
+  <polygon points="38,55 34,68 42,68" fill="#3fb950"/>
+  <polygon points="38,460 34,447 42,447" fill="#f85149"/>
+
+  <!-- ── 第0层: CPU 缓存 ── -->
+  <rect x="60" y="50" width="960" height="50" rx="8" fill="rgba(63,185,80,0.06)" stroke="#3fb950"/>
+  <text x="90" y="72" fill="#3fb950" font-family="monospace" font-size="11" font-weight="bold">第0层</text>
+  <rect x="170" y="58" width="200" height="32" rx="5" fill="#161b22" stroke="#3fb950"/>
+  <text x="270" y="79" text-anchor="middle" fill="#e6edf3" font-family="monospace" font-size="11">L1 / L2 / LLC</text>
+  <text x="430" y="79" fill="#3fb950" font-family="monospace" font-size="11">~1&ndash;10 ns</text>
+  <text x="600" y="79" fill="#8b949e" font-family="monospace" font-size="10">硬件管理, SRAM</text>
+
+  <!-- ── 第1层: DRAM ── -->
+  <rect x="60" y="115" width="960" height="50" rx="8" fill="rgba(88,166,255,0.06)" stroke="#58a6ff"/>
+  <text x="90" y="137" fill="#58a6ff" font-family="monospace" font-size="11" font-weight="bold">第1层</text>
+  <rect x="170" y="123" width="200" height="32" rx="5" fill="#161b22" stroke="#58a6ff"/>
+  <text x="270" y="144" text-anchor="middle" fill="#e6edf3" font-family="monospace" font-size="11">DRAM (页面缓存)</text>
+  <text x="430" y="144" fill="#58a6ff" font-family="monospace" font-size="11">~80&ndash;120 ns</text>
+  <text x="600" y="144" fill="#8b949e" font-family="monospace" font-size="10">活跃/非活跃 LRU</text>
+
+  <!-- 箭头: 淘汰 -->
+  <line x1="270" y1="155" x2="270" y2="185" stroke="#58a6ff" stroke-width="1.5" marker-end="url(#th)"/>
+  <text x="285" y="175" fill="#8b949e" font-family="monospace" font-size="8">页面回收</text>
+
+  <!-- ── 第2层: 压缩 RAM ── -->
+  <rect x="60" y="190" width="960" height="105" rx="8" fill="rgba(188,140,255,0.06)" stroke="#bc8cff" stroke-width="2"/>
+  <text x="90" y="212" fill="#bc8cff" font-family="monospace" font-size="11" font-weight="bold">第2层</text>
+  <rect x="170" y="198" width="200" height="32" rx="5" fill="#161b22" stroke="#bc8cff"/>
+  <text x="270" y="219" text-anchor="middle" fill="#e6edf3" font-family="monospace" font-size="11">压缩 RAM</text>
+  <text x="430" y="219" fill="#bc8cff" font-family="monospace" font-size="11">~1&ndash;10 &mu;s</text>
+  <text x="600" y="219" fill="#8b949e" font-family="monospace" font-size="10">压缩 + zsmalloc</text>
+
+  <!-- 第2层内的 zswap 和 zram -->
+  <rect x="170" y="240" width="180" height="42" rx="5" fill="#161b22" stroke="#58a6ff"/>
+  <text x="260" y="258" text-anchor="middle" fill="#58a6ff" font-family="monospace" font-size="10">zswap 池</text>
+  <text x="260" y="274" text-anchor="middle" fill="#8b949e" font-family="monospace" font-size="8">自动淘汰 (shrinker/LRU)</text>
+
+  <rect x="390" y="240" width="180" height="42" rx="5" fill="#161b22" stroke="#3fb950"/>
+  <text x="480" y="258" text-anchor="middle" fill="#3fb950" font-family="monospace" font-size="10">zram 设备</text>
+  <text x="480" y="274" text-anchor="middle" fill="#8b949e" font-family="monospace" font-size="8">手动回写 (sysfs)</text>
+
+  <text x="620" y="265" fill="#8b949e" font-family="monospace" font-size="10">2&ndash;3 倍容量</text>
+
+  <!-- 到 NVMe 的箭头 -->
+  <line x1="260" y1="282" x2="260" y2="320" stroke="#d29922" stroke-width="1.5" marker-end="url(#th-o)"/>
+  <text x="160" y="310" fill="#d29922" font-family="monospace" font-size="8">LRU 淘汰 (自动)</text>
+  <line x1="480" y1="282" x2="480" y2="320" stroke="#d29922" stroke-width="1.5" marker-end="url(#th-o)"/>
+  <text x="490" y="310" fill="#d29922" font-family="monospace" font-size="8">回写 (手动)</text>
+
+  <!-- ── 第3层: NVMe ── -->
+  <rect x="60" y="325" width="960" height="75" rx="8" fill="rgba(210,153,34,0.06)" stroke="#d29922"/>
+  <text x="90" y="350" fill="#d29922" font-family="monospace" font-size="11" font-weight="bold">第3层</text>
+  <rect x="170" y="335" width="200" height="32" rx="5" fill="#161b22" stroke="#d29922"/>
+  <text x="270" y="356" text-anchor="middle" fill="#e6edf3" font-family="monospace" font-size="11">NVMe 交换设备</text>
+  <text x="430" y="356" fill="#d29922" font-family="monospace" font-size="11">~10&ndash;100 &mu;s</text>
+  <text x="600" y="356" fill="#8b949e" font-family="monospace" font-size="10">块 I/O, DMA, FTL</text>
+
+  <rect x="170" y="375" width="380" height="16" rx="3" fill="rgba(210,153,34,0.1)" stroke="none"/>
+  <text x="360" y="387" text-anchor="middle" fill="#8b949e" font-family="monospace" font-size="8">zswap: 交换分区/文件 | zram: backing_dev (CONFIG_ZRAM_WRITEBACK)</text>
+
+  <!-- ── 第4层: HDD（可选） ── -->
+  <rect x="60" y="415" width="960" height="45" rx="8" fill="rgba(248,81,73,0.04)" stroke="#f85149" stroke-dasharray="4,2"/>
+  <text x="90" y="443" fill="#f85149" font-family="monospace" font-size="11" font-weight="bold">第4层</text>
+  <rect x="170" y="425" width="200" height="28" rx="5" fill="#161b22" stroke="#f85149" stroke-dasharray="3,2"/>
+  <text x="270" y="444" text-anchor="middle" fill="#8b949e" font-family="monospace" font-size="10">HDD (可选)</text>
+  <text x="430" y="444" fill="#f85149" font-family="monospace" font-size="11">~5&ndash;15 ms</text>
+  <text x="600" y="444" fill="#8b949e" font-family="monospace" font-size="10">寻道 + 旋转延迟</text>
+
+  <!-- 延迟注释 -->
+  <rect x="770" y="325" width="235" height="75" rx="6" fill="rgba(188,140,255,0.04)" stroke="#30363d"/>
+  <text x="888" y="343" text-anchor="middle" fill="#bc8cff" font-family="monospace" font-size="10" font-weight="bold">延迟比率</text>
+  <text x="888" y="360" text-anchor="middle" fill="#8b949e" font-family="monospace" font-size="9">DRAM→压缩: ~10&ndash;50&times;</text>
+  <text x="888" y="375" text-anchor="middle" fill="#8b949e" font-family="monospace" font-size="9">压缩→NVMe:  ~10&ndash;100&times;</text>
+  <text x="888" y="390" text-anchor="middle" fill="#8b949e" font-family="monospace" font-size="9">NVMe→HDD:   ~100&ndash;1000&times;</text>
+
+  <!-- 写入减少说明 -->
+  <rect x="60" y="475" width="960" height="32" rx="6" fill="rgba(63,185,80,0.06)" stroke="#3fb950"/>
+  <text x="530" y="496" text-anchor="middle" fill="#3fb950" font-family="monospace" font-size="11">以 2.5 倍平均压缩率, 第2层吸收 60&ndash;80% 的交换流量 — 仅最冷的页面到达 NVMe</text>
+</svg>
+</div>
+
+<h4>各自如何使用 NVMe</h4>
+
+<div class="columns">
+<div>
+<h4><span class="tag tag-zswap">zswap</span> + NVMe 交换（自动）</h4>
+<p>zswap <strong>需要</strong>真实的交换设备。NVMe 分区或交换文件作为后端存储。内核自动处理一切：</p>
+<pre><code># 设置
+mkswap /dev/nvme0n1p2
+swapon /dev/nvme0n1p2
+echo 1 > /sys/module/zswap/parameters/enabled
+
+# 流程 (完全自动):
+# 页面被淘汰
+#   → 在 RAM 中压缩 (zswap 池)
+#   → 池满? LRU shrinker 淘汰最冷的
+#     → 解压缩 → __swap_writepage()
+#       → 写入 NVMe 交换分区
+#
+# 换入时:
+#   → 先检查 zswap (~1 µs)
+#   → 未命中? 从 NVMe 读取 (~50 µs)</code></pre>
+<p>zswap 将 NVMe 写入量减少 <strong>60&ndash;80%</strong>，并完全消除了仍在压缩池中页面的 NVMe 读取。</p>
+</div>
+<div>
+<h4><span class="tag tag-zram">zram</span> + NVMe 后端（手动）</h4>
+<p>zram 可以<strong>可选地</strong>将冷页面回写到 NVMe 后端设备（<code>CONFIG_ZRAM_WRITEBACK</code>）。这由用户触发：</p>
+<pre><code># 设置
+echo /dev/nvme0n1p3 > /sys/block/zram0/backing_dev
+
+# 触发空闲页面回写
+echo all > /sys/block/zram0/idle
+sleep 3600   # 让页面变冷
+echo "type=idle" > /sys/block/zram0/writeback
+
+# 启用 compressed_wb=1 时, 压缩数据
+# 直接写入 — 无需解压缩周期:
+echo 1 > /sys/block/zram0/compressed_wb
+echo "type=huge" > /sys/block/zram0/writeback</code></pre>
+<p><code>compressed_wb</code> 选项将已压缩的数据写入 NVMe，节省回写路径上的 CPU。读回时，解压缩在高优先级工作队列中异步执行。</p>
+</div>
+</div>
+
+<h4>压缩回写 — 节省 NVMe 路径上的 CPU</h4>
+
+<p>zram 和 zswap 都支持将<strong>已压缩的数据</strong>写入后端设备，避免解压缩&rarr;写入&rarr;重压缩的循环：</p>
+
+<table>
+<tr><th></th><th>普通回写</th><th>压缩回写</th></tr>
+<tr>
+  <td><strong>写入路径</strong></td>
+  <td>解压缩 (CPU) &rarr; 写入 PAGE_SIZE 到 NVMe</td>
+  <td>直接写入 comp_len 到 NVMe (无 CPU 解压缩)</td>
+</tr>
+<tr>
+  <td><strong>读取路径</strong></td>
+  <td>从 NVMe 读取 PAGE_SIZE &rarr; 完成</td>
+  <td>从 NVMe 读取 comp_len &rarr; 解压缩 (CPU)</td>
+</tr>
+<tr>
+  <td><strong>NVMe 带宽</strong></td>
+  <td>每页完整 4 KiB</td>
+  <td>每页 ~1.5&ndash;2 KiB (已压缩)</td>
+</tr>
+<tr>
+  <td><strong>CPU 开销</strong></td>
+  <td>写入时解压缩, 读取时无开销</td>
+  <td>写入时无开销, 读取时解压缩</td>
+</tr>
+<tr>
+  <td><strong>最适用于</strong></td>
+  <td>读密集型工作负载 (快速换入)</td>
+  <td>写密集型 / SSD 寿命敏感 (更少写入字节)</td>
+</tr>
+</table>
+
+<div class="note">
+  <strong>SSD 磨损减少：</strong>使用压缩回写后，每个淘汰的页面仅向 NVMe 写入约 1.5&ndash;2 KiB 而非 4 KiB。结合压缩缓存带来的 60&ndash;80% 流量减少，NVMe 总写入量可减少 <strong>85&ndash;95%</strong> &mdash; 大幅延长 SSD 使用寿命。
+</div>
+
+
+<!-- ═══════════════════════  7. 实际部署  ═══════════════════════ -->
+<h2 id="deployments">7. 实际部署案例</h2>
+
+<h4>Android (zram)</h4>
+<p>Android 自 Android 4.4 (KitKat) 起将 zram 作为主要交换机制。在内存受限的设备（2&ndash;4 GB RAM）上，zram 通常通过压缩提供 1&ndash;2 GB 的有效额外内存。Android 的 <code>lmkd</code>（低内存杀手守护进程）与 zram 协同工作 &mdash; kswapd 将页面推送到 zram，当即使压缩交换也耗尽时 lmkd 杀死应用。</p>
+
+<h4>ChromeOS (zram)</h4>
+<p>ChromeOS 广泛使用 zram。<code>swap_management</code> 服务在启动时使用 LZO 压缩配置 zram。ChromeOS 还将 zram 用于标签页丢弃决策 &mdash; 标签页在被完全丢弃之前先压缩到 zram。</p>
+
+<h4>Fedora / Ubuntu (zram)</h4>
+<p>Fedora 33+ 通过 <code>systemd-zram-generator</code> 默认启用 zram，通常配置 RAM 的 50% 作为 zram 交换，使用 lzo-rle 压缩。Ubuntu 24.10+ 也跟进采用。这取代了默认桌面安装中的传统交换分区。</p>
+
+<h4>Meta / Facebook (zswap)</h4>
+<p>Meta 在其服务器集群中广泛使用 zswap。Johannes Weiner（Meta 工程师）是主要维护者。他们的工作负载受益于 zswap 与其容器基础设施的透明 cgroup 集成。最近的大部分 zswap 工作（memcg 感知 shrinker、改进的淘汰机制）都源于 Meta 的生产经验。</p>
+
+<h4>企业级 Linux（视情况而定）</h4>
+<p>RHEL/CentOS 通常提供两者作为内核模块。默认配置因部署场景而异：容器化工作负载倾向于 zswap；裸机数据库通常禁用两者，转而使用充足的 RAM 且不启用交换。</p>
+
+
+<!-- ═══════════════════════  8. 学术背景  ═══════════════════════ -->
+<h2 id="academic">8. 学术背景与文献</h2>
+
+<h3>奠基性工作</h3>
+
+<h4>[1] Compressed Caching &mdash; Wilson, Kaplan, Smaragdakis (1999)</h4>
+<p class="ref">Paul R. Wilson, Scott F. Kaplan, Yannis Smaragdakis. <em>"The Case for Compressed Caching in
+Virtual Memory Systems."</em> USENIX Annual Technical Conference, 1999.</p>
+<p>该奠基性论文确立了：用于淘汰页面的压缩内存缓存性能优于将相同 RAM 用作未压缩页面缓存。关键洞察：在 2:1 的压缩率下，将 1/8 的 RAM 用于压缩缓存实际上将可用内存翻倍，边际成本仅为 CPU 时间。论文的自适应模型 &mdash; 根据观察到的压缩率和访问模式动态调整压缩缓存大小 &mdash; 直接影响了 zswap 的设计。</p>
+
+<h4>[2] zcache 与 tmem (2010&ndash;2012)</h4>
+<p class="ref">Dan Magenheimer (Oracle). <em>"Transcendent Memory"</em> and <em>"zcache"</em> patches.
+Linux Plumbers Conference, 2010&ndash;2012.</p>
+<p>提出了一种"超越内存"抽象，内核可以机会性地将页面存储在常规页面分配器管理之外的压缩缓存中。zcache 是原型；其经验教训（cleancache/frontswap API 的复杂性、集成的困难）直接塑造了 zswap 的更简单设计。</p>
+
+<h4>[3] macOS 中的内存压缩 (2013)</h4>
+<p class="ref">Apple Inc. <em>"OS X Mavericks Core Technologies Overview."</em> WWDC 2013.</p>
+<p>Apple 的实现在消费级规模上验证了压缩内存。他们的方案使用 WKdm（一种针对内存页面优化的字级字典压缩器），并将压缩集成到 Mach VM 层。与 Linux 的 zram/zswap 分离不同，macOS 使用统一的压缩内存系统。</p>
+
+<h4>[4] Windows 10 中的内存压缩 (2015)</h4>
+<p class="ref">Microsoft. <em>"Memory compression"</em> in Windows 10 Memory Manager.</p>
+<p>Windows 10 引入了由 System 进程管理的"压缩存储"。页面在写入页面文件之前在内存中压缩，概念上类似于 zswap。Windows 实现使用 XPRESS（霍夫曼变体）压缩。</p>
+
+<h3>压缩算法研究</h3>
+
+<h4>[5] LZ4 &mdash; Collet (2011)</h4>
+<p class="ref">Yann Collet. <em>"LZ4: Extremely fast compression algorithm."</em> 2011.</p>
+<p>LZ4 在现代 CPU 上实现 >500 MB/s 的压缩速度和约 1.2 GB/s 的解压速度，使其成为延迟关键的压缩交换的理想选择。其固定开销设计（无霍夫曼表）意味着无论输入熵如何都有一致的性能表现。</p>
+
+<h4>[6] Zstandard &mdash; Collet (2015)</h4>
+<p class="ref">Yann Collet. <em>"Zstandard: Fast real-time compression algorithm."</em> RFC 8478, 2018.
+Facebook Engineering Blog, 2015.</p>
+<p>Zstd 提供接近 DEFLATE 的压缩率和接近 LZ4 的速度。其字典压缩模式对具有重复结构的内存页面特别有效。zram 的多重压缩功能利用 zstd 对冷页面进行后台重压缩。</p>
+
+<h3>系统研究</h3>
+
+<h4>[7] 理解内存压缩的权衡</h4>
+<p class="ref">Various authors. <em>Proceedings of Linux Plumbers Conference</em>, 2019&ndash;2024.</p>
+<p>来自生产部署的关键发现：</p>
+<ul>
+  <li><strong>CPU 开销并非免费：</strong>在 CPU 密集型工作负载上，zram/zswap 压缩可能降低吞吐量 5&ndash;15%。收益取决于工作负载是内存密集还是 CPU 密集。</li>
+  <li><strong>压缩率差异很大：</strong>文本/代码页面可达 3&ndash;4 倍；已压缩或加密数据约为 ~1 倍（不可压缩）。zram 的"大页"检测避免了在不可压缩页面上浪费 CPU。</li>
+  <li><strong>碎片化很重要：</strong>zsmalloc 的 16 字节粒度意味着 10&ndash;20% 的已分配内存浪费在取整上。z3fold 和 zbud 分配器（早期 zswap 版本使用）碎片化更严重但代码更简单。</li>
+</ul>
+
+<h4>[8] Zpool 分配器比较</h4>
+<p class="ref">Seth Jennings. <em>"zbud: A Low-Latency, Low-Overhead Compressed Page Cache"</em> and
+related work on z3fold (Vitaly Wool). 2013&ndash;2016.</p>
+<p>Linux 中使用过三种压缩页面分配器：</p>
+<table>
+<tr><th>分配器</th><th>设计</th><th>每页最大对象数</th><th>碎片化</th><th>状态</th></tr>
+<tr><td><code>zbud</code></td><td>每页 2 个对象（伙伴系统）</td><td>2</td><td>高 (~50%)</td><td>已弃用</td></tr>
+<tr><td><code>z3fold</code></td><td>每页 3 个对象</td><td>3</td><td>中等 (~33%)</td><td>已弃用 (6.1.112)</td></tr>
+<tr><td><code>zsmalloc</code></td><td>每 zspage N 个对象</td><td>多个</td><td>低 (~15%)</td><td><strong>当前标准</strong></td></tr>
+</table>
+<p>zram 和 zswap 现在都专门使用 zsmalloc。zpool 抽象层在内核 6.18（2025 年 12 月）中从 zswap 中移除 &mdash; zswap 现在直接调用 zsmalloc。</p>
+
+<h4>[9] Cgroup 感知的内存压缩</h4>
+<p class="ref">Nhat Pham, Johannes Weiner. <em>"zswap: memcg-aware compressed swap cache."</em>
+LKML patches, 2023&ndash;2024.</p>
+<p>为 zswap shrinker 添加 memcg 感知是由 Meta 的容器工作负载驱动的。如果没有 cgroup 感知的淘汰，单个容器的压缩页面可能垄断 zswap 池，降低所有容器的性能。memcg 感知的 shrinker 实现了每 cgroup 的 zswap 限制和公平淘汰。</p>
+
+<h3>移动端 / Android 研究</h3>
+
+<h4>[10] SWAM &mdash; Samsung Research (MobiCom 2023)</h4>
+<p class="ref">Samsung Research. <em>"SWAM: Revisiting Swap and OOMK for Improving Application
+Responsiveness on Mobile Devices."</em> ACM MobiCom 2023. <a href="https://arxiv.org/abs/2306.08345">arXiv:2306.08345</a></p>
+<p>集成自适应交换（内存或存储）、OOM 清理器和增强的 OOM 杀手。被杀死的应用减少 6.5 倍，启动速度加快 36%，响应速度加快 41%。在 Pixel 6 上使用 Linux 5.10 + AOSP 12 实现（修改 7,250 行代码）。</p>
+
+<h4>[11] Ariadne &mdash; CMU-SAFARI (HPCA 2025)</h4>
+<p class="ref">Yu Liang et al. <em>"Ariadne: A Hotness-Aware and Size-Adaptive Compressed Swap
+Technique for Fast Application Relaunch."</em> IEEE HPCA 2025.
+<a href="https://arxiv.org/abs/2502.12826">arXiv:2502.12826</a>,
+<a href="https://github.com/CMU-SAFARI/Ariadne">GitHub</a></p>
+<p>热度感知的数据组织 + 大小自适应压缩（热数据用小块，冷数据用大块）+ 主动解压缩。在 Pixel 7 上：重启延迟减少 50%，压缩/解压缩 CPU 开销减少 15%。</p>
+
+<h4>[12] ASAP &mdash; SNU-ARC (USENIX ATC 2021)</h4>
+<p class="ref">Sam Son et al. <em>"ASAP: Fast Mobile Application Switch via Adaptive Prepaging."</em>
+USENIX ATC 2021. <a href="https://www.usenix.org/system/files/atc21-son.pdf">PDF</a></p>
+<p>通过为文件缓存页和匿名页结合足迹估算器与高效预分页，解决应用切换时的解压缩延迟问题。切换时间减少 22&ndash;28%。</p>
+
+<h4>[13] oaRAM (ACM TACO 2025)</h4>
+<p class="ref"><em>"Object-Aware Memory Compression for Smartphones."</em> ACM TACO, 2025.
+<a href="https://dl.acm.org/doi/10.1145/3771285">DOI</a></p>
+<p>提出一种对象感知的压缩内存格式，保留引用信息以使 GC 线程能够解读压缩页面 &mdash; 解决了 zram 的 LZ4 格式与托管运行时（Java/Android）中垃圾回收之间的根本不兼容性。</p>
+
+<h3>硬件压缩</h3>
+
+<h4>[14] IBM Memory Expansion Technology (MXT)</h4>
+<p class="ref">Tremaine et al. <em>"IBM Memory Expansion Technology (MXT)."</em> IBM J. Res. Dev. 45(2), 2001.
+<a href="https://ieeexplore.ieee.org/document/5389099/">IEEE</a></p>
+<p>首个商用硬件内存压缩。在处理器总线和压缩主内存之间放置一个大型低延迟缓存，使用专用硬件执行实时压缩/解压缩。实现了 >2 倍的有效内存且性能损失可忽略不计。</p>
+
+<h4>[15] QZRAM (MDPI Applied Sciences 2023)</h4>
+<p class="ref"><em>"QZRAM: A Transparent Kernel Memory Compression System with QAT Accelerator."</em>
+MDPI Applied Sciences 13(18), 2023.</p>
+<p>将 zram 压缩卸载到 Intel QAT 硬件。CPU 使用率降低 49.2%，有效内存比软件 zram 增加 1.66 倍。</p>
+
+<h4>[16] Compresso (MICRO 2018)</h4>
+<p class="ref">Choukse et al. <em>"Compresso: Pragmatic Main Memory Compression."</em> IEEE/ACM MICRO 2018.
+<a href="https://lph.ece.utexas.edu/merez/uploads/MattanErez/micro18_compresso.pdf">PDF</a></p>
+<p>首个在未修改操作系统上运行的主内存压缩架构。平均 1.85 倍压缩，单核加速 24%，多核加速 27%。</p>
+
+<h3>早期 Linux 工作</h3>
+
+<h4>[17] Cervera, Cortes, Becerra (USENIX ATC 1999)</h4>
+<p class="ref"><em>"Improving Application Performance through Swap Compression."</em> USENIX ATC 1999.
+<a href="https://www.usenix.org/legacy/event/usenix99/full_papers/cervera/cervera.pdf">PDF</a></p>
+<p>最早的 Linux 特定压缩交换实现之一。使用约 1 MB 的缓存大小，性能比未压缩交换提升最高 2 倍。</p>
+
+<h4>[18] Tuduce 与 Gross (USENIX ATC 2005)</h4>
+<p class="ref">Irina Chihaia Tuduce, Thomas Gross. <em>"Adaptive Main Memory Compression."</em>
+USENIX ATC 2005. <a href="https://www.usenix.org/legacy/event/usenix05/tech/general/full_papers/tuduce/tuduce.pdf">PDF</a></p>
+<p>动态调整压缩与非压缩内存之间的分配比例，无需用户参与即可管理碎片化。直接影响了现代 zswap 中的自适应池管理。</p>
+
+<h3>未来方向</h3>
+
+<h4>虚拟交换空间 (2026, 进行中)</h4>
+<p>由 Nhat Pham 主导（基于 Yosry Ahmed 的早期提案），虚拟交换空间用单一虚拟交换表替代每设备交换表。这将<strong>解除 zswap 对后端交换设备的依赖</strong>，使其能够像 zram 一样运行（纯内存模式），同时保留所有内核管理的优势（cgroup 感知、LRU、shrinker）。交换表重构已在内核 6.18 中合入。</p>
+
+<h4>硬件加速器的压缩批处理 (2024)</h4>
+<p><code>zswap_batch_compress()</code> API 和 <code>acomp_has_async_batching()</code> crypto 接口使硬件压缩引擎（如 Intel IAA/QAT）能够在单次批处理操作中处理多个页面，在支持的硬件上显著提升吞吐量。</p>
+
+<h4>zpdesc 内存描述符 (2025)</h4>
+<p>新的 <code>zpdesc</code> 类型取代了 zsmalloc 中对原始 <code>struct page</code> 的使用，当前覆盖 <code>struct folio</code>。随着内核逐步摆脱单体的 <code>struct page</code>，这为未来的内存描述符优化奠定了基础。</p>
+
+
+<!-- ═══════════════════════  9. 参考文献  ═══════════════════════ -->
+<h2 id="refs">9. 参考文献</h2>
+
+<ol class="ref">
+  <li><span class="ref-num">[1]</span> Wilson, Kaplan, Smaragdakis. <em>"The Case for Compressed Caching in Virtual Memory Systems."</em> USENIX ATC 1999. <a href="https://www.usenix.org/legacy/event/usenix99/full_papers/wilson/wilson.pdf">PDF</a></li>
+  <li><span class="ref-num">[2]</span> Magenheimer. <em>"Transcendent Memory / zcache."</em> Oracle, Linux Plumbers 2010&ndash;2012. <a href="https://www.linux-kvm.org/images/d/d7/TmemNotVirt-Linuxcon2011-Final.pdf">Slides</a></li>
+  <li><span class="ref-num">[3]</span> Apple. <em>"OS X Mavericks Core Technologies Overview."</em> WWDC 2013. <a href="https://images.apple.com/media/us/osx/2013/docs/OSX_Mavericks_Core_Technology_Overview.pdf">PDF</a></li>
+  <li><span class="ref-num">[4]</span> Microsoft. <em>"Memory Compression in Windows 10."</em> 2015.</li>
+  <li><span class="ref-num">[5]</span> Collet. <em>"LZ4: Extremely fast compression algorithm."</em> 2011. <a href="https://lz4.github.io/lz4/">lz4.github.io</a></li>
+  <li><span class="ref-num">[6]</span> Collet. <em>"Zstandard."</em> RFC 8478, 2018. <a href="https://facebook.github.io/zstd/">facebook.github.io/zstd</a></li>
+  <li><span class="ref-num">[7]</span> Linux Plumbers Conference proceedings. <em>"Memory Management Track."</em> 2019&ndash;2024.</li>
+  <li><span class="ref-num">[8]</span> Jennings / Wool. <em>"zbud / z3fold."</em> LKML 2013&ndash;2016. <a href="http://events17.linuxfoundation.org/sites/events/files/slides/z3fold.pdf">z3fold slides</a></li>
+  <li><span class="ref-num">[9]</span> Pham, Weiner. <em>"zswap memcg-aware shrinker."</em> LKML 2023&ndash;2024.</li>
+  <li><span class="ref-num">[10]</span> Samsung Research. <em>"SWAM: Revisiting Swap and OOMK."</em> MobiCom 2023. <a href="https://arxiv.org/abs/2306.08345">arXiv</a></li>
+  <li><span class="ref-num">[11]</span> Liang et al. <em>"Ariadne: Hotness-Aware Compressed Swap."</em> IEEE HPCA 2025. <a href="https://arxiv.org/abs/2502.12826">arXiv</a></li>
+  <li><span class="ref-num">[12]</span> Son et al. <em>"ASAP: Fast Mobile Application Switch."</em> USENIX ATC 2021. <a href="https://www.usenix.org/system/files/atc21-son.pdf">PDF</a></li>
+  <li><span class="ref-num">[13]</span> <em>"Object-Aware Memory Compression for Smartphones."</em> ACM TACO 2025. <a href="https://dl.acm.org/doi/10.1145/3771285">DOI</a></li>
+  <li><span class="ref-num">[14]</span> Tremaine et al. <em>"IBM Memory Expansion Technology (MXT)."</em> IBM J. Res. Dev. 2001. <a href="https://ieeexplore.ieee.org/document/5389099/">IEEE</a></li>
+  <li><span class="ref-num">[15]</span> <em>"QZRAM: Transparent Kernel Memory Compression with QAT."</em> MDPI Applied Sciences 2023. <a href="https://www.mdpi.com/2076-3417/13/18/10526">DOI</a></li>
+  <li><span class="ref-num">[16]</span> Choukse et al. <em>"Compresso: Pragmatic Main Memory Compression."</em> MICRO 2018. <a href="https://lph.ece.utexas.edu/merez/uploads/MattanErez/micro18_compresso.pdf">PDF</a></li>
+  <li><span class="ref-num">[17]</span> Cervera, Cortes, Becerra. <em>"Improving Application Performance through Swap Compression."</em> USENIX ATC 1999. <a href="https://www.usenix.org/legacy/event/usenix99/full_papers/cervera/cervera.pdf">PDF</a></li>
+  <li><span class="ref-num">[18]</span> Tuduce, Gross. <em>"Adaptive Main Memory Compression."</em> USENIX ATC 2005. <a href="https://www.usenix.org/legacy/event/usenix05/tech/general/full_papers/tuduce/tuduce.pdf">PDF</a></li>
+  <li><span class="ref-num">[19]</span> Gupta. <em>"compcache / ramzswap."</em> 2009. (zram 的前身)</li>
+  <li><span class="ref-num">[20]</span> Down. <em>"Debunking zswap and zram myths."</em> 2026. <a href="https://chrisdown.name/2026/03/24/zswap-vs-zram-when-to-use-what.html">Blog</a>, <a href="https://lwn.net/Articles/1064478/">LWN</a></li>
+  <li><span class="ref-num">[21]</span> Linux kernel source, v7.1-rc1. <code>drivers/block/zram/</code>, <code>mm/zswap.c</code>, <code>mm/zsmalloc.c</code>.</li>
+  <li><span class="ref-num">[22]</span> 内核文档: <a href="https://docs.kernel.org/admin-guide/blockdev/zram.html">zram</a>, <a href="https://docs.kernel.org/admin-guide/mm/zswap.html">zswap</a></li>
+  <li><span class="ref-num">[23]</span> LWN: <a href="https://lwn.net/Articles/545244/">In-kernel memory compression</a> (2013), <a href="https://lwn.net/Articles/537422/">zswap design</a> (2013), <a href="https://lwn.net/Articles/1059201/">Virtual swap spaces</a> (2026)</li>
+</ol>
+
+<footer>
+  生成于 2026-04-15 &mdash; 来源: Linux 7.1-rc1 (torvalds/linux, <code>e997ac58ad0b</code>)<br>
+  zram: <code>drivers/block/zram/</code> (Sergey Senozhatsky) &bull;
+  zswap: <code>mm/zswap.c</code> (Johannes Weiner, Nhat Pham) &bull;
+  zsmalloc: <code>mm/zsmalloc.c</code>
+</footer>
+
+</body>
+</html>
