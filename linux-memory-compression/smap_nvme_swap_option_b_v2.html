@@ -1,0 +1,1153 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>SMAP NVMe Swap — Option B v2: Per-Page Swap via Kernel ioctl + reclaim_pages()</title>
+<style>
+:root { --bg: #0d1117; --surface: #161b22; --border: #30363d; --text: #e6edf3; --muted: #8b949e;
+  --green: #3fb950; --blue: #58a6ff; --purple: #bc8cff; --orange: #d29922; --red: #f85149; --cyan: #39d2c0; }
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { background: var(--bg); color: var(--text); font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', monospace;
+  line-height: 1.7; padding: 40px 60px; max-width: 1200px; margin: 0 auto; }
+h1 { color: var(--green); font-size: 2em; margin-bottom: 8px; }
+h2 { color: var(--blue); font-size: 1.4em; margin: 40px 0 16px; border-left: 3px solid var(--blue); padding-left: 12px; }
+h3 { color: var(--purple); font-size: 1.15em; margin: 28px 0 12px; }
+h4 { color: var(--orange); font-size: 1em; margin: 20px 0 8px; }
+hr { border: none; border-top: 2px solid var(--blue); margin: 20px 0 30px; }
+p { margin: 10px 0; }
+a { color: var(--blue); text-decoration: none; }
+code { background: var(--surface); padding: 2px 6px; border-radius: 4px; font-size: 0.92em; color: var(--cyan); }
+pre { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 16px 20px;
+  overflow-x: auto; margin: 12px 0; font-size: 0.88em; line-height: 1.6; }
+pre code { background: none; padding: 0; color: var(--text); }
+table { border-collapse: collapse; width: 100%; margin: 16px 0; }
+th, td { border: 1px solid var(--border); padding: 10px 14px; text-align: left; }
+th { background: var(--surface); color: var(--blue); }
+td { color: var(--text); }
+tr:nth-child(even) td { background: rgba(22,27,34,0.5); }
+.subtitle { color: var(--muted); font-size: 0.95em; margin-bottom: 6px; }
+.badge { display: inline-block; padding: 2px 10px; border-radius: 12px; font-size: 0.8em; font-weight: bold; margin-right: 6px; }
+.badge-green { background: rgba(63,185,80,0.15); color: var(--green); border: 1px solid var(--green); }
+.badge-orange { background: rgba(210,153,34,0.15); color: var(--orange); border: 1px solid var(--orange); }
+.badge-red { background: rgba(248,81,73,0.15); color: var(--red); border: 1px solid var(--red); }
+.badge-purple { background: rgba(188,140,255,0.15); color: var(--purple); border: 1px solid var(--purple); }
+.badge-new { background: rgba(248,81,73,0.2); color: var(--red); border: 1px solid var(--red); font-size: 0.75em; }
+.note { background: rgba(88,166,255,0.08); border-left: 3px solid var(--blue); padding: 12px 16px; margin: 16px 0; border-radius: 0 6px 6px 0; }
+.warn { background: rgba(210,153,34,0.08); border-left: 3px solid var(--orange); padding: 12px 16px; margin: 16px 0; border-radius: 0 6px 6px 0; }
+.good { background: rgba(63,185,80,0.08); border-left: 3px solid var(--green); padding: 12px 16px; margin: 16px 0; border-radius: 0 6px 6px 0; }
+.svg-wrap { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 20px; margin: 20px 0; overflow-x: auto; }
+ul, ol { margin: 8px 0 8px 24px; }
+li { margin: 4px 0; }
+.toc { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 20px 28px; margin: 20px 0; }
+.toc ul { list-style: none; margin: 0; padding: 0; }
+.toc li { margin: 4px 0; }
+.toc li ul { padding-left: 20px; }
+.toc a { color: var(--muted); }
+.toc a:hover { color: var(--blue); }
+.kw { color: var(--purple); } .fn { color: var(--blue); } .cm { color: var(--muted); font-style: italic; }
+.str { color: var(--green); } .num { color: var(--orange); } .new { color: var(--red); }
+.phase { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 16px 20px; margin: 12px 0; }
+.phase-title { color: var(--green); font-weight: bold; margin-bottom: 8px; }
+</style>
+</head>
+<body>
+
+<h1>SMAP NVMe Swap &mdash; Option B v2</h1>
+<p class="subtitle">Per-Page Swap via Kernel <code>ioctl(SMAP_MIG_SWAP_OUT)</code> + <code>reclaim_pages()</code></p>
+<p class="subtitle">Design Document &mdash; ubturbo/SMAP (openEuler) &mdash; April 2026</p>
+<hr>
+
+<!-- TOC -->
+<div class="toc">
+<strong style="color:var(--green)">Contents</strong>
+<ul>
+<li>1. <a href="#overview">Design Overview &amp; Rationale</a></li>
+<li>2. <a href="#arch">Architecture</a></li>
+<li>3. <a href="#data-flow">Data Flow: Per-Page Swap-Out Path</a></li>
+<li>4. <a href="#actcdata">The actcData.addr Problem</a></li>
+<li>5. <a href="#kernel">Kernel Changes (Minimal)</a>
+  <ul>
+    <li>5.1 <a href="#kprobe">New kprobe: reclaim_pages()</a></li>
+    <li>5.2 <a href="#ioctl">New ioctl: SMAP_MIG_SWAP_OUT</a></li>
+    <li>5.3 <a href="#loc">Lines Changed</a></li>
+  </ul>
+</li>
+<li>6. <a href="#userspace">User-Space Changes</a>
+  <ul>
+    <li>6.1 <a href="#cold-tracker">Cold Tracker</a></li>
+    <li>6.2 <a href="#swap-device">Swap Device Manager</a></li>
+    <li>6.3 <a href="#swap-account">Swap Accounting</a></li>
+    <li>6.4 <a href="#swap-out">DoSwapOut()</a></li>
+    <li>6.5 <a href="#sdk-api">SDK API</a></li>
+    <li>6.6 <a href="#integration">Integration in ScanMigrateWork</a></li>
+  </ul>
+</li>
+<li>7. <a href="#swapin">Swap-In Path</a></li>
+<li>8. <a href="#config">Configuration &amp; Tuning</a></li>
+<li>9. <a href="#changemap">Code Change Map</a></li>
+<li>10. <a href="#comparison">Comparison: B v1 vs B v2 vs Option A</a></li>
+<li>11. <a href="#limitations">Limitations &amp; Mitigations</a></li>
+<li>12. <a href="#impl-plan">Implementation Plan</a></li>
+<li>13. <a href="#references">References</a></li>
+</ul>
+</div>
+
+
+<!-- ============================================================ -->
+<h2 id="overview">1. Design Overview &amp; Rationale</h2>
+
+<p>Option B v1 used <code>process_madvise(MADV_PAGEOUT)</code> &mdash; a pure user-space approach
+that required <strong>zero kernel changes</strong>. While conceptually simple, a critical limitation was
+discovered: <code>process_madvise</code> operates at VMA granularity (contiguous virtual address ranges),
+not individual physical pages. SMAP&rsquo;s cold detection, however, produces per-page bitmap indices
+via <code>actcData[].addr</code>, which are <strong>not</strong> virtual addresses.</p>
+
+<div class="warn">
+<strong>Problem discovered:</strong> <code>actcData[nid][i].addr</code> is a <strong>bitmap index</strong> (0, 1, 2, ...),
+not a physical or virtual address. The kernel&rsquo;s <code>convert_pos_to_paddr_sorted()</code> does the
+index &rarr; physical address conversion internally. A pure user-space approach cannot perform this
+conversion without kernel cooperation.
+</div>
+
+<p><strong>Option B v2</strong> solves this with a <strong>single new ioctl</strong> (<code>SMAP_MIG_SWAP_OUT</code>) in the existing
+kernel module. This ioctl reuses 90% of the migration infrastructure &mdash; specifically
+<code>build_migrate_list()</code> for index-to-PA conversion &mdash; then calls <code>fp_reclaim_pages()</code> instead
+of <code>fp_migrate_pages()</code>. The result: per-page swap control with minimal kernel changes.</p>
+
+<div class="good">
+<strong>Key insight:</strong> The existing migration path already solves the hard problem (bitmap index &rarr;
+physical address &rarr; folio). We reuse that entire pipeline, substituting only the final step:
+<code>reclaim_pages()</code> instead of <code>migrate_pages()</code>.
+</div>
+
+<h3>v1 vs v2 at a Glance</h3>
+
+<table>
+<tr><th>Aspect</th><th>B v1 (process_madvise)</th><th>B v2 (ioctl + reclaim)</th></tr>
+<tr><td>Swap trigger</td><td><code>process_madvise(MADV_PAGEOUT)</code></td><td><code>ioctl(SMAP_MIG_SWAP_OUT)</code></td></tr>
+<tr><td>Granularity</td><td><span class="badge badge-orange">VMA-level</span></td><td><span class="badge badge-green">Per-page</span></td></tr>
+<tr><td>Index &rarr; PA conversion</td><td>Cannot do (user-space)</td><td>Kernel via <code>convert_pos_to_paddr_sorted()</code></td></tr>
+<tr><td>Kernel changes</td><td><span class="badge badge-green">None</span></td><td><span class="badge badge-orange">~110 lines</span></td></tr>
+<tr><td>Reused infrastructure</td><td>None</td><td><code>build_migrate_list()</code>, message format, ioctl dispatch</td></tr>
+<tr><td>Needs pidfd / VA</td><td>Yes &mdash; complex</td><td>No &mdash; uses bitmap indices directly</td></tr>
+<tr><td>CAP_SYS_NICE</td><td>Required</td><td>Not needed (char device)</td></tr>
+</table>
+
+
+<!-- ============================================================ -->
+<h2 id="arch">2. Architecture</h2>
+
+<div class="svg-wrap">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1060 780" width="1060" height="780">
+  <defs>
+    <marker id="a1" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#3fb950"/></marker>
+    <marker id="a2" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#d29922"/></marker>
+    <marker id="a3" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#f85149"/></marker>
+    <marker id="a4" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#bc8cff"/></marker>
+    <marker id="a5" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#58a6ff"/></marker>
+  </defs>
+  <rect width="1060" height="780" rx="10" fill="#0d1117"/>
+  <text x="530" y="28" text-anchor="middle" fill="#3fb950" font-family="monospace" font-size="14" font-weight="bold">Option B v2 Architecture: ioctl(SMAP_MIG_SWAP_OUT) + reclaim_pages()</text>
+
+  <!-- SMAP user-space -->
+  <rect x="30" y="50" width="1000" height="230" rx="8" fill="none" stroke="#3fb950" stroke-width="2" stroke-dasharray="6,3"/>
+  <text x="50" y="75" fill="#3fb950" font-family="monospace" font-size="13" font-weight="bold">SMAP User Space (libsmap.so)</text>
+
+  <!-- Existing components -->
+  <rect x="50" y="90" width="180" height="50" rx="6" fill="#161b22" stroke="#58a6ff"/>
+  <text x="140" y="110" text-anchor="middle" fill="#58a6ff" font-family="monospace" font-size="10">AF-bit Scanner</text>
+  <text x="140" y="125" text-anchor="middle" fill="#8b949e" font-family="monospace" font-size="8">freq data &rarr; actcData[]</text>
+
+  <rect x="250" y="90" width="200" height="50" rx="6" fill="#161b22" stroke="#58a6ff"/>
+  <text x="350" y="110" text-anchor="middle" fill="#58a6ff" font-family="monospace" font-size="10">ColdTracker</text>
+  <text x="350" y="125" text-anchor="middle" fill="#8b949e" font-family="monospace" font-size="8">UpdateColdWindowCounters()</text>
+
+  <rect x="470" y="90" width="220" height="50" rx="6" fill="#161b22" stroke="#58a6ff"/>
+  <text x="580" y="110" text-anchor="middle" fill="#58a6ff" font-family="monospace" font-size="10">SelectSwapCandidates()</text>
+  <text x="580" y="125" text-anchor="middle" fill="#8b949e" font-family="monospace" font-size="8">cold_windows &ge; threshold</text>
+
+  <rect x="710" y="90" width="300" height="50" rx="6" fill="rgba(248,81,73,0.08)" stroke="#f85149" stroke-width="2"/>
+  <text x="860" y="110" text-anchor="middle" fill="#f85149" font-family="monospace" font-size="11" font-weight="bold">DoSwapOut()</text>
+  <text x="860" y="125" text-anchor="middle" fill="#8b949e" font-family="monospace" font-size="8">group by L2 &rarr; build MigrateMsg &rarr; ioctl()</text>
+
+  <!-- Row 2: support components -->
+  <rect x="50" y="160" width="280" height="50" rx="6" fill="rgba(248,81,73,0.08)" stroke="#f85149"/>
+  <text x="190" y="180" text-anchor="middle" fill="#f85149" font-family="monospace" font-size="10">SwapDeviceManager</text>
+  <text x="190" y="195" text-anchor="middle" fill="#8b949e" font-family="monospace" font-size="8">swapon, /proc/swaps, device health</text>
+
+  <rect x="350" y="160" width="280" height="50" rx="6" fill="rgba(248,81,73,0.08)" stroke="#f85149"/>
+  <text x="490" y="180" text-anchor="middle" fill="#f85149" font-family="monospace" font-size="10">SwapAccountant</text>
+  <text x="490" y="195" text-anchor="middle" fill="#8b949e" font-family="monospace" font-size="8">/proc/[pid]/status VmSwap tracking</text>
+
+  <rect x="650" y="160" width="280" height="50" rx="6" fill="rgba(248,81,73,0.08)" stroke="#f85149"/>
+  <text x="790" y="180" text-anchor="middle" fill="#f85149" font-family="monospace" font-size="10">SDK API</text>
+  <text x="790" y="195" text-anchor="middle" fill="#8b949e" font-family="monospace" font-size="8">ubturbo_smap_swap_config() / set_threshold()</text>
+
+  <!-- Arrows from user-space flow -->
+  <line x1="230" y1="115" x2="248" y2="115" stroke="#3fb950" stroke-width="1.5" marker-end="url(#a1)"/>
+  <line x1="450" y1="115" x2="468" y2="115" stroke="#3fb950" stroke-width="1.5" marker-end="url(#a1)"/>
+  <line x1="690" y1="115" x2="708" y2="115" stroke="#3fb950" stroke-width="1.5" marker-end="url(#a1)"/>
+
+  <!-- SMAP kernel module -->
+  <rect x="30" y="310" width="1000" height="190" rx="8" fill="none" stroke="#d29922" stroke-width="2"/>
+  <text x="50" y="335" fill="#d29922" font-family="monospace" font-size="13" font-weight="bold">SMAP Kernel Module</text>
+
+  <!-- Existing migration path -->
+  <rect x="50" y="350" width="440" height="55" rx="6" fill="#161b22" stroke="#d29922"/>
+  <text x="270" y="370" text-anchor="middle" fill="#d29922" font-family="monospace" font-size="10">Existing: ioctl(SMAP_MIG_MIGRATE) &mdash; L1 &harr; L2</text>
+  <text x="270" y="388" text-anchor="middle" fill="#8b949e" font-family="monospace" font-size="8">build_migrate_list &rarr; convert_pos_to_paddr_sorted &rarr; fp_migrate_pages</text>
+
+  <!-- New swap-out path -->
+  <rect x="520" y="350" width="490" height="55" rx="6" fill="rgba(248,81,73,0.08)" stroke="#f85149" stroke-width="2"/>
+  <text x="765" y="370" text-anchor="middle" fill="#f85149" font-family="monospace" font-size="10" font-weight="bold">NEW: ioctl(SMAP_MIG_SWAP_OUT) &mdash; L2 &rarr; L3</text>
+  <text x="765" y="388" text-anchor="middle" fill="#8b949e" font-family="monospace" font-size="8">build_migrate_list &rarr; convert_pos_to_paddr_sorted &rarr; fp_reclaim_pages</text>
+
+  <!-- Shared components -->
+  <rect x="50" y="420" width="960" height="30" rx="4" fill="rgba(63,185,80,0.06)" stroke="#3fb950" stroke-dasharray="4,2"/>
+  <text x="530" y="440" text-anchor="middle" fill="#3fb950" font-family="monospace" font-size="9">SHARED: build_migrate_list() | convert_pos_to_paddr_sorted() | is_migrate_msg_valid() | free_migrate_list()</text>
+
+  <!-- Kernel swap subsystem -->
+  <rect x="50" y="460" width="960" height="30" rx="4" fill="#161b22" stroke="#bc8cff"/>
+  <text x="530" y="480" text-anchor="middle" fill="#bc8cff" font-family="monospace" font-size="9">Kernel Swap Subsystem: reclaim_pages &rarr; shrink_folio_list &rarr; swap_writepage &rarr; NVMe block driver</text>
+
+  <!-- Arrow from DoSwapOut to kernel ioctl -->
+  <line x1="860" y1="140" x2="765" y2="348" stroke="#f85149" stroke-width="2" marker-end="url(#a3)"/>
+  <text x="830" y="245" fill="#f85149" font-family="monospace" font-size="8" transform="rotate(-60,830,245)">ioctl(SMAP_MIG_SWAP_OUT)</text>
+
+  <!-- Arrow from new ioctl to swap subsystem -->
+  <line x1="765" y1="405" x2="765" y2="458" stroke="#bc8cff" stroke-width="1.5" marker-end="url(#a4)"/>
+  <text x="780" y="435" fill="#bc8cff" font-family="monospace" font-size="7">fp_reclaim_pages()</text>
+
+  <!-- Hardware tiers -->
+  <rect x="30" y="520" width="1000" height="30" rx="0" fill="#161b2280" stroke="none"/>
+  <text x="530" y="540" text-anchor="middle" fill="#8b949e" font-family="monospace" font-size="10">&mdash;&mdash; Physical Storage Tiers &mdash;&mdash;</text>
+
+  <rect x="30" y="565" width="300" height="60" rx="8" fill="rgba(63,185,80,0.08)" stroke="#3fb950" stroke-width="2"/>
+  <text x="180" y="590" text-anchor="middle" fill="#3fb950" font-family="monospace" font-size="13" font-weight="bold">L1: Local DRAM</text>
+  <text x="180" y="610" text-anchor="middle" fill="#8b949e" font-family="monospace" font-size="9">~100 ns | Hot pages</text>
+
+  <rect x="370" y="565" width="300" height="60" rx="8" fill="rgba(210,153,34,0.08)" stroke="#d29922" stroke-width="2"/>
+  <text x="520" y="590" text-anchor="middle" fill="#d29922" font-family="monospace" font-size="13" font-weight="bold">L2: Remote NUMA (CXL)</text>
+  <text x="520" y="610" text-anchor="middle" fill="#8b949e" font-family="monospace" font-size="9">~300 ns | Warm/cold pages</text>
+
+  <rect x="710" y="565" width="320" height="60" rx="8" fill="rgba(248,81,73,0.08)" stroke="#f85149" stroke-width="2"/>
+  <text x="870" y="590" text-anchor="middle" fill="#f85149" font-family="monospace" font-size="13" font-weight="bold">L3: NVMe Swap</text>
+  <text x="870" y="610" text-anchor="middle" fill="#8b949e" font-family="monospace" font-size="9">~10-100 &mu;s | Coldest pages</text>
+
+  <!-- Tier arrows -->
+  <line x1="330" y1="592" x2="368" y2="592" stroke="#d29922" stroke-width="1.5" marker-end="url(#a2)"/>
+  <text x="342" y="585" fill="#d29922" font-family="monospace" font-size="7">DEMOTE</text>
+  <line x1="368" y1="602" x2="330" y2="602" stroke="#3fb950" stroke-width="1.5" marker-end="url(#a1)"/>
+  <text x="340" y="618" fill="#3fb950" font-family="monospace" font-size="7">PROMOTE</text>
+
+  <line x1="670" y1="592" x2="708" y2="592" stroke="#f85149" stroke-width="2" marker-end="url(#a3)"/>
+  <text x="676" y="585" fill="#f85149" font-family="monospace" font-size="7" font-weight="bold">SWAP_OUT</text>
+  <line x1="708" y1="602" x2="670" y2="602" stroke="#bc8cff" stroke-width="1.5" marker-end="url(#a4)"/>
+  <text x="676" y="618" fill="#bc8cff" font-family="monospace" font-size="7">SWAP_IN (fault)</text>
+
+  <!-- Swap-in note -->
+  <rect x="710" y="640" width="320" height="35" rx="6" fill="rgba(188,140,255,0.06)" stroke="#bc8cff" stroke-dasharray="4,2"/>
+  <text x="870" y="655" text-anchor="middle" fill="#bc8cff" font-family="monospace" font-size="8">Swap-in: automatic via do_swap_page()</text>
+  <text x="870" y="668" text-anchor="middle" fill="#8b949e" font-family="monospace" font-size="7">L3 &rarr; L1 direct (page fault on access)</text>
+
+  <!-- Legend -->
+  <rect x="30" y="695" width="1000" height="70" rx="6" fill="#161b22" stroke="#30363d"/>
+  <text x="50" y="715" fill="#f85149" font-family="monospace" font-size="10" font-weight="bold">Legend:</text>
+  <rect x="120" y="705" width="14" height="14" rx="2" fill="none" stroke="#58a6ff"/>
+  <text x="140" y="716" fill="#8b949e" font-family="monospace" font-size="9">Existing component</text>
+  <rect x="320" y="705" width="14" height="14" rx="2" fill="rgba(248,81,73,0.08)" stroke="#f85149" stroke-width="2"/>
+  <text x="340" y="716" fill="#8b949e" font-family="monospace" font-size="9">New / modified</text>
+  <rect x="520" y="705" width="14" height="14" rx="2" fill="rgba(63,185,80,0.06)" stroke="#3fb950" stroke-dasharray="4,2"/>
+  <text x="540" y="716" fill="#8b949e" font-family="monospace" font-size="9">Shared (reused)</text>
+  <text x="50" y="745" fill="#8b949e" font-family="monospace" font-size="9">Swap-out: user chooses specific pages via bitmap index &rarr; kernel converts to PA &rarr; reclaim_pages() writes to NVMe</text>
+  <text x="50" y="758" fill="#8b949e" font-family="monospace" font-size="9">Swap-in: automatic kernel page fault &mdash; no SMAP code needed &mdash; page allocated on faulting CPU&rsquo;s local NUMA node (L1)</text>
+</svg>
+</div>
+
+
+<!-- ============================================================ -->
+<h2 id="data-flow">3. Data Flow: Per-Page Swap-Out Path</h2>
+
+<div class="svg-wrap">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1060 680" width="1060" height="680">
+  <defs>
+    <marker id="b1" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#3fb950"/></marker>
+    <marker id="b2" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#58a6ff"/></marker>
+    <marker id="b3" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#f85149"/></marker>
+    <marker id="b4" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#d29922"/></marker>
+    <marker id="b5" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#bc8cff"/></marker>
+  </defs>
+  <rect width="1060" height="680" rx="10" fill="#0d1117"/>
+  <text x="530" y="28" text-anchor="middle" fill="#3fb950" font-family="monospace" font-size="14" font-weight="bold">Data Flow: Per-Page Swap-Out (8 Steps)</text>
+
+  <!-- Step 1 -->
+  <rect x="30" y="50" width="230" height="65" rx="6" fill="#161b22" stroke="#3fb950"/>
+  <text x="40" y="68" fill="#3fb950" font-family="monospace" font-size="10" font-weight="bold">Step 1: AF-bit Scan</text>
+  <text x="40" y="85" fill="#8b949e" font-family="monospace" font-size="8">Kernel scans access-frequency bits</text>
+  <text x="40" y="100" fill="#8b949e" font-family="monospace" font-size="8">actcData[nid][i] = {.addr=idx, .freq=N}</text>
+
+  <!-- Step 2 -->
+  <rect x="280" y="50" width="230" height="65" rx="6" fill="#161b22" stroke="#3fb950"/>
+  <text x="290" y="68" fill="#3fb950" font-family="monospace" font-size="10" font-weight="bold">Step 2: ColdTracker</text>
+  <text x="290" y="85" fill="#8b949e" font-family="monospace" font-size="8">UpdateColdWindowCounters():</text>
+  <text x="290" y="100" fill="#8b949e" font-family="monospace" font-size="8">freq=0 &rarr; cold_windows++ (sat 255)</text>
+  <text x="290" y="112" fill="#8b949e" font-family="monospace" font-size="7">any access &rarr; reset to 0</text>
+
+  <!-- Step 3 -->
+  <rect x="530" y="50" width="230" height="65" rx="6" fill="#161b22" stroke="#3fb950"/>
+  <text x="540" y="68" fill="#3fb950" font-family="monospace" font-size="10" font-weight="bold">Step 3: SelectCandidates</text>
+  <text x="540" y="85" fill="#8b949e" font-family="monospace" font-size="8">Collect bitmap indices where</text>
+  <text x="540" y="100" fill="#8b949e" font-family="monospace" font-size="8">cold_windows &ge; threshold (default 5)</text>
+
+  <!-- Step 4 -->
+  <rect x="780" y="50" width="250" height="65" rx="6" fill="rgba(248,81,73,0.08)" stroke="#f85149" stroke-width="2"/>
+  <text x="790" y="68" fill="#f85149" font-family="monospace" font-size="10" font-weight="bold">Step 4: DoSwapOut()</text>
+  <text x="790" y="85" fill="#8b949e" font-family="monospace" font-size="8">Group indices by L2 NUMA node</text>
+  <text x="790" y="100" fill="#8b949e" font-family="monospace" font-size="8">Build MigrateMsg &rarr; ioctl(SWAP_OUT)</text>
+
+  <!-- Arrows step 1-4 -->
+  <line x1="260" y1="82" x2="278" y2="82" stroke="#3fb950" stroke-width="1.5" marker-end="url(#b1)"/>
+  <line x1="510" y1="82" x2="528" y2="82" stroke="#3fb950" stroke-width="1.5" marker-end="url(#b1)"/>
+  <line x1="760" y1="82" x2="778" y2="82" stroke="#3fb950" stroke-width="1.5" marker-end="url(#b1)"/>
+
+  <!-- Boundary -->
+  <rect x="20" y="135" width="1020" height="4" rx="2" fill="none" stroke="#d29922" stroke-dasharray="8,4"/>
+  <text x="530" y="155" text-anchor="middle" fill="#d29922" font-family="monospace" font-size="10" font-weight="bold">--- ioctl boundary (user &rarr; kernel) ---</text>
+
+  <!-- Step 5 -->
+  <rect x="30" y="170" width="480" height="80" rx="6" fill="#161b22" stroke="#d29922"/>
+  <text x="40" y="190" fill="#d29922" font-family="monospace" font-size="10" font-weight="bold">Step 5: __ioctl_swap_out()</text>
+  <text x="40" y="210" fill="#8b949e" font-family="monospace" font-size="8">copy_from_user(mMsg) &rarr; validate(is_migrate_msg_valid)</text>
+  <text x="40" y="226" fill="#8b949e" font-family="monospace" font-size="8">build_migrate_list() &rarr; populates mig_list with entries</text>
+  <text x="40" y="242" fill="#8b949e" font-family="monospace" font-size="8">convert_pos_to_paddr_sorted(): bitmap_idx &rarr; physical address</text>
+
+  <!-- Step 6 -->
+  <rect x="540" y="170" width="480" height="80" rx="6" fill="rgba(248,81,73,0.08)" stroke="#f85149" stroke-width="2"/>
+  <text x="550" y="190" fill="#f85149" font-family="monospace" font-size="10" font-weight="bold">Step 6: do_swap_out()</text>
+  <text x="550" y="210" fill="#8b949e" font-family="monospace" font-size="8">For each PA in mig_list:</text>
+  <text x="550" y="226" fill="#8b949e" font-family="monospace" font-size="8">  pfn_to_page &rarr; page_folio &rarr; folio_try_get</text>
+  <text x="550" y="242" fill="#8b949e" font-family="monospace" font-size="8">  fp_isolate_folio_to_list(&amp;folio_list)</text>
+
+  <!-- Arrow 5 to 6 -->
+  <line x1="510" y1="210" x2="538" y2="210" stroke="#d29922" stroke-width="1.5" marker-end="url(#b4)"/>
+
+  <!-- Step 7 -->
+  <rect x="30" y="280" width="480" height="80" rx="6" fill="rgba(188,140,255,0.08)" stroke="#bc8cff" stroke-width="2"/>
+  <text x="40" y="300" fill="#bc8cff" font-family="monospace" font-size="10" font-weight="bold">Step 7: fp_reclaim_pages(&amp;folio_list)</text>
+  <text x="40" y="318" fill="#8b949e" font-family="monospace" font-size="8">Kernel swap subsystem takes over:</text>
+  <text x="40" y="334" fill="#8b949e" font-family="monospace" font-size="8">  shrink_folio_list &rarr; add_to_swap &rarr; swap_writepage</text>
+  <text x="40" y="350" fill="#8b949e" font-family="monospace" font-size="8">  PTE updated: page mapping &rarr; swap entry</text>
+
+  <!-- Step 8 -->
+  <rect x="540" y="280" width="480" height="80" rx="6" fill="#161b22" stroke="#3fb950"/>
+  <text x="550" y="300" fill="#3fb950" font-family="monospace" font-size="10" font-weight="bold">Step 8: Results &rarr; User-space</text>
+  <text x="550" y="318" fill="#8b949e" font-family="monospace" font-size="8">copy_to_user(mMsg) with success/fail counts</text>
+  <text x="550" y="334" fill="#8b949e" font-family="monospace" font-size="8">UpdateSwapAccounting(): track per-process swap bytes</text>
+  <text x="550" y="350" fill="#8b949e" font-family="monospace" font-size="8">Log results, update watermarks</text>
+
+  <!-- Arrow 6 to 7 -->
+  <line x1="780" y1="250" x2="270" y2="278" stroke="#bc8cff" stroke-width="1.5" marker-end="url(#b5)"/>
+  <!-- Arrow 7 to 8 -->
+  <line x1="510" y1="330" x2="538" y2="330" stroke="#3fb950" stroke-width="1.5" marker-end="url(#b1)"/>
+
+  <!-- NVMe at bottom -->
+  <rect x="30" y="390" width="990" height="50" rx="8" fill="rgba(248,81,73,0.05)" stroke="#f85149" stroke-dasharray="4,2"/>
+  <text x="530" y="415" text-anchor="middle" fill="#f85149" font-family="monospace" font-size="11" font-weight="bold">NVMe Swap Device (/dev/nvmeXnYpZ)</text>
+  <text x="530" y="432" text-anchor="middle" fill="#8b949e" font-family="monospace" font-size="8">Kernel block driver handles all I/O &mdash; write (swap-out) and read (swap-in via page fault)</text>
+
+  <!-- Arrow from step 7 to NVMe -->
+  <line x1="270" y1="360" x2="270" y2="388" stroke="#f85149" stroke-width="2" marker-end="url(#b3)"/>
+  <text x="285" y="378" fill="#f85149" font-family="monospace" font-size="7">write pages</text>
+
+  <!-- Swap-in path (return) -->
+  <rect x="30" y="470" width="990" height="90" rx="8" fill="rgba(188,140,255,0.04)" stroke="#bc8cff" stroke-dasharray="6,3"/>
+  <text x="530" y="495" text-anchor="middle" fill="#bc8cff" font-family="monospace" font-size="12" font-weight="bold">Swap-In Path (Automatic &mdash; No SMAP Code)</text>
+  <text x="530" y="515" text-anchor="middle" fill="#8b949e" font-family="monospace" font-size="9">Application accesses swapped page &rarr; page fault &rarr; do_swap_page() &rarr; swap_readpage() &rarr; NVMe read</text>
+  <text x="530" y="535" text-anchor="middle" fill="#8b949e" font-family="monospace" font-size="9">Page allocated on faulting CPU&rsquo;s local NUMA node (L1 direct) &mdash; SMAP detects via VmSwap decrease</text>
+
+  <!-- Color coding legend -->
+  <rect x="30" y="580" width="990" height="80" rx="6" fill="#161b22" stroke="#30363d"/>
+  <text x="50" y="600" fill="#3fb950" font-family="monospace" font-size="10" font-weight="bold">Step Legend:</text>
+  <rect x="50" y="612" width="12" height="12" rx="2" fill="#161b22" stroke="#3fb950"/>
+  <text x="68" y="622" fill="#8b949e" font-family="monospace" font-size="9">Steps 1-3: User-space (existing infra)</text>
+  <rect x="300" y="612" width="12" height="12" rx="2" fill="rgba(248,81,73,0.08)" stroke="#f85149" stroke-width="2"/>
+  <text x="318" y="622" fill="#8b949e" font-family="monospace" font-size="9">Steps 4,6: New code</text>
+  <rect x="530" y="612" width="12" height="12" rx="2" fill="#161b22" stroke="#d29922"/>
+  <text x="548" y="622" fill="#8b949e" font-family="monospace" font-size="9">Step 5: Reused migration infra</text>
+  <rect x="770" y="612" width="12" height="12" rx="2" fill="rgba(188,140,255,0.08)" stroke="#bc8cff" stroke-width="2"/>
+  <text x="788" y="622" fill="#8b949e" font-family="monospace" font-size="9">Step 7: Kernel swap subsystem</text>
+  <text x="50" y="648" fill="#8b949e" font-family="monospace" font-size="9">Total new kernel code: ~110 lines. Everything else is reused from existing SMAP migration or standard kernel swap path.</text>
+</svg>
+</div>
+
+
+<!-- ============================================================ -->
+<h2 id="actcdata">4. The actcData.addr Problem</h2>
+
+<p>Understanding why Option B v1 failed requires understanding how SMAP tracks page access frequency.
+The kernel module maintains a bitmap (<code>paddr_bm[]</code>) where each bit represents a physical page.
+When user-space queries access data, the kernel returns:</p>
+
+<pre><code><span class="kw">struct</span> ActcData {
+    <span class="kw">unsigned long</span> addr;   <span class="cm">// NOT a physical address &mdash; this is a bitmap INDEX</span>
+    <span class="kw">unsigned int</span>  freq;   <span class="cm">// access frequency count for this scan window</span>
+};
+
+<span class="cm">// In manage.c:461 (during kernel scan):</span>
+actcData[nid][actcLen].addr = actcLen;   <span class="cm">// sequential index 0, 1, 2, ...</span>
+actcData[nid][actcLen].freq = freq;
+actcLen++;
+</code></pre>
+
+<p>The <code>.addr</code> field is a <strong>position counter</strong>, not an address. The kernel&rsquo;s
+<code>convert_pos_to_paddr_sorted()</code> walks the bitmap to convert these positions to
+actual physical addresses. This function is only available in kernel space.</p>
+
+<div class="svg-wrap">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1060 420" width="1060" height="420">
+  <defs>
+    <marker id="c1" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#3fb950"/></marker>
+    <marker id="c2" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#58a6ff"/></marker>
+    <marker id="c3" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#f85149"/></marker>
+    <marker id="c4" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#d29922"/></marker>
+    <marker id="c5" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#bc8cff"/></marker>
+  </defs>
+  <rect width="1060" height="420" rx="10" fill="#0d1117"/>
+  <text x="530" y="28" text-anchor="middle" fill="#3fb950" font-family="monospace" font-size="14" font-weight="bold">actcData.addr: Bitmap Index &rarr; Physical Address &rarr; Folio &rarr; Reclaim</text>
+
+  <!-- Bitmap -->
+  <text x="40" y="65" fill="#58a6ff" font-family="monospace" font-size="11" font-weight="bold">paddr_bm[] (kernel bitmap)</text>
+  <rect x="40" y="75" width="30" height="30" fill="#161b22" stroke="#3fb950"/>
+  <text x="55" y="95" text-anchor="middle" fill="#3fb950" font-family="monospace" font-size="10">1</text>
+  <rect x="70" y="75" width="30" height="30" fill="#161b22" stroke="#30363d"/>
+  <text x="85" y="95" text-anchor="middle" fill="#8b949e" font-family="monospace" font-size="10">0</text>
+  <rect x="100" y="75" width="30" height="30" fill="#161b22" stroke="#3fb950"/>
+  <text x="115" y="95" text-anchor="middle" fill="#3fb950" font-family="monospace" font-size="10">1</text>
+  <rect x="130" y="75" width="30" height="30" fill="#161b22" stroke="#30363d"/>
+  <text x="145" y="95" text-anchor="middle" fill="#8b949e" font-family="monospace" font-size="10">0</text>
+  <rect x="160" y="75" width="30" height="30" fill="#161b22" stroke="#30363d"/>
+  <text x="175" y="95" text-anchor="middle" fill="#8b949e" font-family="monospace" font-size="10">0</text>
+  <rect x="190" y="75" width="30" height="30" fill="#161b22" stroke="#3fb950"/>
+  <text x="205" y="95" text-anchor="middle" fill="#3fb950" font-family="monospace" font-size="10">1</text>
+  <rect x="220" y="75" width="30" height="30" fill="#161b22" stroke="#3fb950"/>
+  <text x="235" y="95" text-anchor="middle" fill="#3fb950" font-family="monospace" font-size="10">1</text>
+  <rect x="250" y="75" width="30" height="30" fill="#161b22" stroke="#30363d"/>
+  <text x="265" y="95" text-anchor="middle" fill="#8b949e" font-family="monospace" font-size="10">0</text>
+  <rect x="280" y="75" width="30" height="30" fill="#161b22" stroke="#3fb950"/>
+  <text x="295" y="95" text-anchor="middle" fill="#3fb950" font-family="monospace" font-size="10">1</text>
+  <text x="330" y="95" fill="#8b949e" font-family="monospace" font-size="10">...</text>
+  <text x="40" y="122" fill="#8b949e" font-family="monospace" font-size="8">PFN: 0x1000  0x1001  0x1002  0x1003  0x1004  0x1005  0x1006  0x1007  0x1008</text>
+
+  <!-- actcData -->
+  <text x="440" y="65" fill="#d29922" font-family="monospace" font-size="11" font-weight="bold">actcData[nid][] (user-visible)</text>
+  <rect x="440" y="75" width="120" height="30" fill="#161b22" stroke="#d29922"/>
+  <text x="500" y="95" text-anchor="middle" fill="#d29922" font-family="monospace" font-size="9">[0] addr=0 freq=3</text>
+  <rect x="570" y="75" width="120" height="30" fill="#161b22" stroke="#d29922"/>
+  <text x="630" y="95" text-anchor="middle" fill="#d29922" font-family="monospace" font-size="9">[1] addr=1 freq=0</text>
+  <rect x="700" y="75" width="120" height="30" fill="#161b22" stroke="#d29922"/>
+  <text x="760" y="95" text-anchor="middle" fill="#d29922" font-family="monospace" font-size="9">[2] addr=2 freq=0</text>
+  <rect x="830" y="75" width="120" height="30" fill="#161b22" stroke="#d29922"/>
+  <text x="890" y="95" text-anchor="middle" fill="#d29922" font-family="monospace" font-size="9">[3] addr=3 freq=1</text>
+  <text x="440" y="122" fill="#8b949e" font-family="monospace" font-size="8">addr is INDEX into set bits, not PFN! addr=1 &rarr; 2nd set bit &rarr; PFN 0x1002</text>
+
+  <!-- Arrow from bitmap to actcData -->
+  <line x1="350" y1="90" x2="438" y2="90" stroke="#d29922" stroke-width="1.5" marker-end="url(#c4)"/>
+  <text x="380" y="83" fill="#d29922" font-family="monospace" font-size="7">scan &amp; index</text>
+
+  <!-- The conversion problem -->
+  <rect x="40" y="150" width="980" height="40" rx="6" fill="rgba(248,81,73,0.06)" stroke="#f85149"/>
+  <text x="530" y="170" text-anchor="middle" fill="#f85149" font-family="monospace" font-size="10" font-weight="bold">PROBLEM: User-space gets addr=1 but needs PA=0x1002000. Only kernel can do the conversion.</text>
+  <text x="530" y="185" text-anchor="middle" fill="#8b949e" font-family="monospace" font-size="8">v1 tried to pass these indices to process_madvise() which expects virtual addresses &mdash; WRONG</text>
+
+  <!-- Solution: two paths -->
+  <text x="40" y="220" fill="#3fb950" font-family="monospace" font-size="12" font-weight="bold">Solution: Reuse the Existing Kernel Conversion Pipeline</text>
+
+  <!-- Migration path (existing) -->
+  <rect x="40" y="240" width="480" height="40" rx="6" fill="#161b22" stroke="#58a6ff"/>
+  <text x="280" y="258" text-anchor="middle" fill="#58a6ff" font-family="monospace" font-size="9">EXISTING: ioctl(MIGRATE) &rarr; build_migrate_list &rarr; convert_pos_to_paddr_sorted</text>
+  <text x="280" y="274" text-anchor="middle" fill="#8b949e" font-family="monospace" font-size="8">bitmap indices &rarr; physical addresses &rarr; fp_migrate_pages()</text>
+
+  <!-- Swap path (new) -->
+  <rect x="540" y="240" width="480" height="40" rx="6" fill="rgba(248,81,73,0.08)" stroke="#f85149" stroke-width="2"/>
+  <text x="780" y="258" text-anchor="middle" fill="#f85149" font-family="monospace" font-size="9" font-weight="bold">NEW: ioctl(SWAP_OUT) &rarr; build_migrate_list &rarr; convert_pos_to_paddr_sorted</text>
+  <text x="780" y="274" text-anchor="middle" fill="#8b949e" font-family="monospace" font-size="8">bitmap indices &rarr; physical addresses &rarr; fp_reclaim_pages()</text>
+
+  <!-- Visual: the conversion -->
+  <text x="40" y="310" fill="#bc8cff" font-family="monospace" font-size="10" font-weight="bold">Conversion in detail (convert_pos_to_paddr_sorted):</text>
+
+  <rect x="40" y="325" width="140" height="35" rx="4" fill="#161b22" stroke="#d29922"/>
+  <text x="110" y="347" text-anchor="middle" fill="#d29922" font-family="monospace" font-size="9">Index: 1</text>
+
+  <line x1="180" y1="342" x2="220" y2="342" stroke="#d29922" stroke-width="1.5" marker-end="url(#c4)"/>
+
+  <rect x="220" y="325" width="200" height="35" rx="4" fill="#161b22" stroke="#bc8cff"/>
+  <text x="320" y="347" text-anchor="middle" fill="#bc8cff" font-family="monospace" font-size="9">Walk bitmap: 2nd set bit</text>
+
+  <line x1="420" y1="342" x2="460" y2="342" stroke="#bc8cff" stroke-width="1.5" marker-end="url(#c5)"/>
+
+  <rect x="460" y="325" width="160" height="35" rx="4" fill="#161b22" stroke="#3fb950"/>
+  <text x="540" y="347" text-anchor="middle" fill="#3fb950" font-family="monospace" font-size="9">PA: 0x1002000</text>
+
+  <line x1="620" y1="342" x2="660" y2="342" stroke="#3fb950" stroke-width="1.5" marker-end="url(#c1)"/>
+
+  <rect x="660" y="325" width="160" height="35" rx="4" fill="#161b22" stroke="#58a6ff"/>
+  <text x="740" y="347" text-anchor="middle" fill="#58a6ff" font-family="monospace" font-size="9">pfn_to_page(0x1002)</text>
+
+  <line x1="820" y1="342" x2="860" y2="342" stroke="#58a6ff" stroke-width="1.5" marker-end="url(#c2)"/>
+
+  <rect x="860" y="325" width="160" height="35" rx="4" fill="rgba(248,81,73,0.08)" stroke="#f85149" stroke-width="2"/>
+  <text x="940" y="347" text-anchor="middle" fill="#f85149" font-family="monospace" font-size="9">reclaim(folio)</text>
+
+  <!-- Summary -->
+  <rect x="40" y="380" width="980" height="30" rx="4" fill="rgba(63,185,80,0.08)" stroke="#3fb950"/>
+  <text x="530" y="400" text-anchor="middle" fill="#3fb950" font-family="monospace" font-size="10">Same pipeline, different endpoint: migrate_pages() &rarr; reclaim_pages(). ~110 lines of kernel code.</text>
+</svg>
+</div>
+
+<div class="note">
+<strong>Why this matters:</strong> Option B v1 attempted to use <code>process_madvise()</code> which requires
+virtual addresses and operates per-VMA. But SMAP&rsquo;s access tracking produces bitmap indices that
+can only be converted to physical addresses inside the kernel. The v2 ioctl approach keeps everything
+in the kernel&rsquo;s address space, reusing the exact same conversion code that migration already uses.
+</div>
+
+
+<!-- ============================================================ -->
+<h2 id="kernel">5. Kernel Changes (Minimal)</h2>
+
+<h3 id="kprobe">5.1 New kprobe: reclaim_pages()</h3>
+
+<p>The <code>reclaim_pages()</code> function (available since Linux 5.16) forces page reclaim for a given
+list of folios, writing them to the configured swap device. We resolve it at module init time
+using the same <code>kallsyms_lookup_name</code> pattern already used for <code>fp_migrate_pages</code>.</p>
+
+<pre><code><span class="cm">/* smap_migrate_wrapper.h */</span>
+<span class="kw">extern unsigned long</span> (*<span class="fn">fp_reclaim_pages</span>)(<span class="kw">struct</span> list_head *folio_list);
+
+<span class="cm">/* smap_migrate_wrapper.c &mdash; in smap_resolve_symbols() */</span>
+<span class="fn">fp_reclaim_pages</span> = (<span class="kw">void</span> *)<span class="fn">kallsyms_lookup_name</span>(<span class="str">"reclaim_pages"</span>);
+<span class="kw">if</span> (!fp_reclaim_pages) {
+    <span class="fn">pr_warn</span>(<span class="str">"smap: reclaim_pages not found, swap-out disabled\n"</span>);
+    <span class="cm">/* Module continues to work &mdash; only swap-out is unavailable */</span>
+}
+</code></pre>
+
+<div class="note">
+<strong>Graceful fallback:</strong> If <code>reclaim_pages</code> is not found (older kernels), the module loads
+normally but the <code>SMAP_MIG_SWAP_OUT</code> ioctl returns <code>-ENOSYS</code>. All existing functionality
+(L1/L2 migration) is unaffected.
+</div>
+
+<h3 id="ioctl">5.2 New ioctl: SMAP_MIG_SWAP_OUT</h3>
+
+<h4>5.2.1 ioctl Definition</h4>
+
+<pre><code><span class="cm">/* mig_init.h */</span>
+<span class="kw">#define</span> <span class="fn">SMAP_MIG_MAGIC</span>     <span class="num">0xB9</span>
+<span class="kw">#define</span> <span class="fn">SMAP_MIG_MIGRATE</span>   _IOWR(SMAP_MIG_MAGIC, <span class="num">1</span>, MigrateMsg)   <span class="cm">/* existing */</span>
+<span class="kw">#define</span> <span class="fn">SMAP_MIG_SWAP_OUT</span>  _IOWR(SMAP_MIG_MAGIC, <span class="num">4</span>, MigrateMsg)   <span class="cm">/* NEW */</span>
+</code></pre>
+
+<h4>5.2.2 do_swap_out() &mdash; Core Swap Logic</h4>
+
+<pre><code><span class="cm">/*
+ * do_swap_out &mdash; Convert physical addresses to folios, isolate, and reclaim.
+ * Reuses the same mig_list produced by build_migrate_list().
+ * Each entry in mig_list has .paddr set by convert_pos_to_paddr_sorted().
+ */</span>
+<span class="kw">static int</span> <span class="fn">do_swap_out</span>(<span class="kw">struct</span> list_head *mig_list, MigrateMsg *mMsg)
+{
+    <span class="kw">struct</span> mig_entry *entry;
+    <span class="kw">struct</span> page *page;
+    <span class="kw">struct</span> folio *folio;
+    LIST_HEAD(folio_list);
+    <span class="kw">int</span> nr_isolated = <span class="num">0</span>, nr_reclaimed = <span class="num">0</span>;
+    <span class="kw">unsigned long</span> nr_total = <span class="num">0</span>;
+
+    <span class="kw">if</span> (!fp_reclaim_pages)
+        <span class="kw">return</span> -ENOSYS;
+
+    <span class="cm">/* Phase 1: Convert PAs to folios and isolate */</span>
+    list_for_each_entry(entry, mig_list, list) {
+        <span class="kw">unsigned long</span> pfn;
+        nr_total++;
+
+        <span class="kw">if</span> (!entry->paddr)
+            <span class="kw">continue</span>;
+
+        pfn = entry->paddr >> PAGE_SHIFT;
+        <span class="kw">if</span> (!pfn_valid(pfn))
+            <span class="kw">continue</span>;
+
+        page = pfn_to_page(pfn);
+        folio = page_folio(page);
+
+        <span class="kw">if</span> (!folio_try_get(folio))
+            <span class="kw">continue</span>;
+
+        <span class="kw">if</span> (folio_test_lru(folio) && !folio_test_unevictable(folio)) {
+            <span class="kw">if</span> (<span class="fn">fp_isolate_folio_to_list</span>(folio, &amp;folio_list) == <span class="num">0</span>)
+                nr_isolated++;
+            <span class="kw">else</span>
+                folio_put(folio);
+        } <span class="kw">else</span> {
+            folio_put(folio);
+        }
+    }
+
+    <span class="cm">/* Phase 2: Reclaim isolated folios to swap */</span>
+    <span class="kw">if</span> (nr_isolated > <span class="num">0</span>)
+        nr_reclaimed = <span class="fn">fp_reclaim_pages</span>(&amp;folio_list);
+
+    <span class="cm">/* Report results */</span>
+    mMsg->result.nr_total     = nr_total;
+    mMsg->result.nr_succeeded = nr_reclaimed;
+    mMsg->result.nr_failed    = nr_isolated - nr_reclaimed;
+
+    <span class="fn">pr_debug</span>(<span class="str">"smap: swap_out total=%lu isolated=%d reclaimed=%d\n"</span>,
+             nr_total, nr_isolated, nr_reclaimed);
+
+    <span class="kw">return</span> <span class="num">0</span>;
+}
+</code></pre>
+
+<h4>5.2.3 __ioctl_swap_out() &mdash; ioctl Entry Point</h4>
+
+<pre><code><span class="cm">/*
+ * __ioctl_swap_out &mdash; Entry point for SMAP_MIG_SWAP_OUT ioctl.
+ * Same structure as __ioctl_migrate(): copy, validate, build, act, return.
+ */</span>
+<span class="kw">static long</span> <span class="fn">__ioctl_swap_out</span>(<span class="kw">unsigned long</span> arg)
+{
+    MigrateMsg mMsg;
+    <span class="kw">struct</span> list_head mig_list;
+    <span class="kw">int</span> ret;
+
+    <span class="cm">/* 1. Copy message from user-space */</span>
+    <span class="kw">if</span> (<span class="fn">copy_from_user</span>(&amp;mMsg, (<span class="kw">void</span> __user *)arg, <span class="kw">sizeof</span>(MigrateMsg)))
+        <span class="kw">return</span> -EFAULT;
+
+    <span class="cm">/* 2. Validate */</span>
+    <span class="kw">if</span> (!<span class="fn">is_migrate_msg_valid</span>(&amp;mMsg))
+        <span class="kw">return</span> -EINVAL;
+
+    <span class="cm">/* 3. Build list: bitmap indices &rarr; physical addresses */</span>
+    INIT_LIST_HEAD(&amp;mig_list);
+    ret = <span class="fn">build_migrate_list</span>(&amp;mMsg, &amp;mig_list);
+    <span class="kw">if</span> (ret) {
+        <span class="fn">free_migrate_list</span>(&amp;mig_list);
+        <span class="kw">return</span> ret;
+    }
+
+    <span class="cm">/* 4. convert_pos_to_paddr_sorted is called inside build_migrate_list */</span>
+
+    <span class="cm">/* 5. Swap out: isolate folios and reclaim */</span>
+    ret = <span class="fn">do_swap_out</span>(&amp;mig_list, &amp;mMsg);
+
+    <span class="cm">/* 6. Cleanup */</span>
+    <span class="fn">free_migrate_list</span>(&amp;mig_list);
+
+    <span class="cm">/* 7. Copy results back to user-space */</span>
+    <span class="kw">if</span> (<span class="fn">copy_to_user</span>((<span class="kw">void</span> __user *)arg, &amp;mMsg, <span class="kw">sizeof</span>(MigrateMsg)))
+        <span class="kw">return</span> -EFAULT;
+
+    <span class="kw">return</span> ret;
+}
+</code></pre>
+
+<h4>5.2.4 ioctl Dispatch (switch case addition)</h4>
+
+<pre><code><span class="cm">/* mig_init.c &mdash; in smap_mig_ioctl() */</span>
+<span class="kw">case</span> <span class="fn">SMAP_MIG_SWAP_OUT</span>:
+    ret = <span class="fn">__ioctl_swap_out</span>(arg);
+    <span class="kw">break</span>;
+</code></pre>
+
+<h3 id="loc">5.3 Lines Changed</h3>
+
+<table>
+<tr><th>File</th><th>Change</th><th>Lines</th></tr>
+<tr><td><code>smap_migrate_wrapper.h</code></td><td>Add <code>extern fp_reclaim_pages</code> declaration</td><td><span class="badge badge-green">+1</span></td></tr>
+<tr><td><code>smap_migrate_wrapper.c</code></td><td>Resolve <code>reclaim_pages</code> via kallsyms at init</td><td><span class="badge badge-green">+5</span></td></tr>
+<tr><td><code>mig_init.h</code></td><td>Define <code>SMAP_MIG_SWAP_OUT</code> ioctl command</td><td><span class="badge badge-green">+1</span></td></tr>
+<tr><td><code>mig_init.c</code></td><td><code>do_swap_out()</code> + <code>__ioctl_swap_out()</code> + switch case</td><td><span class="badge badge-orange">+103</span></td></tr>
+<tr><td colspan="2"><strong>Total kernel changes</strong></td><td><strong>~110 lines</strong></td></tr>
+</table>
+
+<div class="good">
+<strong>Minimal footprint:</strong> Four existing files modified, zero new files. The new code follows
+exactly the same patterns as the existing migration ioctl, making review straightforward.
+</div>
+
+
+<!-- ============================================================ -->
+<h2 id="userspace">6. User-Space Changes</h2>
+
+<h3 id="cold-tracker">6.1 Cold Tracker (strategy/cold_tracker.c) &mdash; Same as v1</h3>
+
+<p>The cold tracker maintains a per-page <code>cold_windows</code> counter. Each scan cycle:</p>
+
+<ul>
+<li>If <code>actcData[nid][i].freq == 0</code>: increment <code>cold_windows[nid][i]</code> (saturate at 255)</li>
+<li>If <code>actcData[nid][i].freq &gt; 0</code>: reset <code>cold_windows[nid][i] = 0</code></li>
+</ul>
+
+<pre><code><span class="kw">void</span> <span class="fn">UpdateColdWindowCounters</span>(ProcessInfo *proc, <span class="kw">int</span> nid)
+{
+    <span class="kw">for</span> (<span class="kw">int</span> i = <span class="num">0</span>; i &lt; proc->actcLen[nid]; i++) {
+        <span class="kw">if</span> (proc->actcData[nid][i].freq == <span class="num">0</span>) {
+            <span class="kw">if</span> (proc->cold_windows[nid][i] &lt; <span class="num">255</span>)
+                proc->cold_windows[nid][i]++;
+        } <span class="kw">else</span> {
+            proc->cold_windows[nid][i] = <span class="num">0</span>;
+        }
+    }
+}
+</code></pre>
+
+<h3 id="swap-device">6.2 Swap Device Manager (manage/swap_device.c) &mdash; Same as v1</h3>
+
+<p>Manages the NVMe swap device lifecycle: checks if already active via <code>/proc/swaps</code>,
+calls <code>swapon()</code> with specified priority, monitors device health and free capacity.</p>
+
+<pre><code><span class="kw">int</span> <span class="fn">SwapDeviceInit</span>(<span class="kw">const char</span> *device_path, <span class="kw">int</span> priority)
+{
+    <span class="cm">/* Check if already active */</span>
+    <span class="kw">if</span> (<span class="fn">IsSwapActive</span>(device_path))
+        <span class="kw">return</span> <span class="num">0</span>;
+
+    <span class="cm">/* Activate via swapon syscall */</span>
+    <span class="kw">int</span> ret = <span class="fn">swapon</span>(device_path, SWAP_FLAG_PREFER | (priority &amp; SWAP_FLAG_PRIO_MASK));
+    <span class="kw">if</span> (ret &lt; <span class="num">0</span>) {
+        <span class="fn">SMAP_LOG_ERR</span>(<span class="str">"swapon(%s) failed: %s"</span>, device_path, strerror(errno));
+        <span class="kw">return</span> -<span class="num">1</span>;
+    }
+
+    <span class="fn">SMAP_LOG_INFO</span>(<span class="str">"NVMe swap activated: %s (priority %d)"</span>, device_path, priority);
+    <span class="kw">return</span> <span class="num">0</span>;
+}
+</code></pre>
+
+<h3 id="swap-account">6.3 Swap Accounting (manage/swap_account.c) &mdash; Same as v1</h3>
+
+<p>Tracks per-process swap usage by reading <code>/proc/[pid]/status</code> VmSwap field.
+Detects swap-in events (VmSwap decrease) without any kernel modification.</p>
+
+<pre><code><span class="kw">void</span> <span class="fn">UpdateSwapAccounting</span>(ProcessInfo *proc)
+{
+    <span class="kw">unsigned long</span> current_swap = <span class="fn">ReadVmSwap</span>(proc->pid);
+    <span class="kw">long</span> delta = (<span class="kw">long</span>)current_swap - (<span class="kw">long</span>)proc->last_vmswap;
+
+    <span class="kw">if</span> (delta &gt; <span class="num">0</span>)
+        proc->swap_out_bytes += delta;     <span class="cm">/* pages swapped out */</span>
+    <span class="kw">else if</span> (delta &lt; <span class="num">0</span>)
+        proc->swap_in_bytes += (-delta);   <span class="cm">/* pages swapped in via fault */</span>
+
+    proc->last_vmswap = current_swap;
+}
+</code></pre>
+
+<h3 id="swap-out">6.4 DoSwapOut (strategy/swap_out.c) &mdash; CHANGED from v1</h3>
+
+<div class="warn">
+<strong>Key change from v1:</strong> No more <code>process_madvise</code>, no <code>pidfd</code>, no PA-to-VA conversion.
+Instead, we build a <code>MigrateMsg</code> with bitmap indices (grouped by L2 NUMA node) and call the
+existing migration ioctl interface with the new <code>SMAP_MIG_SWAP_OUT</code> command. The kernel handles
+everything from index conversion to reclaim.
+</div>
+
+<pre><code><span class="kw">int</span> <span class="fn">DoSwapOut</span>(SmapManager *manager, ProcessInfo *proc,
+              <span class="kw">int</span> *candidates, <span class="kw">int</span> nr_candidates, <span class="kw">int</span> src_nid)
+{
+    MigrateMsg mMsg;
+    <span class="kw">int</span> ret;
+
+    <span class="kw">if</span> (nr_candidates == <span class="num">0</span>)
+        <span class="kw">return</span> <span class="num">0</span>;
+
+    <span class="cm">/* Build MigrateMsg &mdash; same format as existing migration */</span>
+    <span class="fn">memset</span>(&amp;mMsg, <span class="num">0</span>, <span class="kw">sizeof</span>(mMsg));
+    mMsg.pid       = proc->pid;
+    mMsg.src_nid   = src_nid;       <span class="cm">/* L2 NUMA node */</span>
+    mMsg.dst_nid   = -<span class="num">1</span>;            <span class="cm">/* unused for swap-out */</span>
+    mMsg.nr_pages  = nr_candidates;
+
+    <span class="cm">/* Fill page indices &mdash; these are bitmap positions, not addresses */</span>
+    <span class="kw">for</span> (<span class="kw">int</span> i = <span class="num">0</span>; i &lt; nr_candidates &amp;&amp; i &lt; MAX_MIGRATE_PAGES; i++)
+        mMsg.pages[i] = candidates[i];
+
+    <span class="cm">/* Call the NEW ioctl &mdash; uses the same fd as migration */</span>
+    ret = <span class="fn">ioctl</span>(manager->fds.migrate, <span class="fn">SMAP_MIG_SWAP_OUT</span>, &amp;mMsg);
+    <span class="kw">if</span> (ret &lt; <span class="num">0</span>) {
+        <span class="fn">SMAP_LOG_ERR</span>(<span class="str">"SMAP_MIG_SWAP_OUT failed: %s"</span>, strerror(errno));
+        <span class="kw">return</span> -<span class="num">1</span>;
+    }
+
+    <span class="fn">SMAP_LOG_DEBUG</span>(<span class="str">"swap_out: total=%lu ok=%lu fail=%lu"</span>,
+        mMsg.result.nr_total, mMsg.result.nr_succeeded, mMsg.result.nr_failed);
+
+    <span class="kw">return</span> mMsg.result.nr_succeeded;
+}
+</code></pre>
+
+<div class="good">
+<strong>Simplicity:</strong> <code>DoSwapOut()</code> is structurally identical to the existing <code>DoMigrate()</code> call.
+Same message format, same fd, same copy semantics. The only difference is the ioctl command number.
+</div>
+
+<h3 id="sdk-api">6.5 SDK API (smap_interface.c)</h3>
+
+<p>Two new public API functions for SDK integration:</p>
+
+<pre><code><span class="cm">/**
+ * Configure and activate NVMe swap for SMAP.
+ * @device_path  Path to NVMe partition (e.g., "/dev/nvme0n1p3")
+ * @priority     Swap priority (higher = preferred, default 10)
+ * @enable       1 to enable, 0 to disable
+ */</span>
+<span class="kw">int</span> <span class="fn">ubturbo_smap_swap_config</span>(<span class="kw">const char</span> *device_path, <span class="kw">int</span> priority, <span class="kw">int</span> enable)
+{
+    <span class="kw">if</span> (enable) {
+        <span class="kw">int</span> ret = <span class="fn">SwapDeviceInit</span>(device_path, priority);
+        <span class="kw">if</span> (ret) <span class="kw">return</span> ret;
+
+        <span class="fn">TuneKernelSwapParams</span>();    <span class="cm">/* swappiness, page-cluster, etc. */</span>
+        <span class="fn">ValidateZswapConfig</span>();     <span class="cm">/* ensure writeback is enabled */</span>
+
+        g_swap_enabled = <span class="num">1</span>;
+    } <span class="kw">else</span> {
+        g_swap_enabled = <span class="num">0</span>;
+    }
+    <span class="kw">return</span> <span class="num">0</span>;
+}
+
+<span class="cm">/**
+ * Set the cold window threshold for swap eligibility.
+ * Pages must be cold for this many consecutive scan windows before swap-out.
+ */</span>
+<span class="kw">int</span> <span class="fn">ubturbo_smap_swap_set_threshold</span>(<span class="kw">int</span> threshold)
+{
+    <span class="kw">if</span> (threshold &lt; <span class="num">1</span> || threshold &gt; <span class="num">255</span>)
+        <span class="kw">return</span> -EINVAL;
+    g_cold_window_threshold = threshold;
+    <span class="kw">return</span> <span class="num">0</span>;
+}
+</code></pre>
+
+<h3 id="integration">6.6 Integration in ScanMigrateWork (strategy/migration.c)</h3>
+
+<p>Swap-out runs as <strong>Phase 2</strong> after the existing L1/L2 migration (Phase 1). It executes within
+the same scan cycle, using the same access data that Phase 1 already loaded:</p>
+
+<pre><code><span class="kw">void</span> <span class="fn">ScanMigrateWork</span>(SmapManager *manager)
+{
+    <span class="cm">/* Phase 1: Existing L1 &harr; L2 migration (unchanged) */</span>
+    <span class="kw">for</span> (<span class="kw">int</span> i = <span class="num">0</span>; i &lt; manager->nr_procs; i++) {
+        ProcessInfo *proc = &amp;manager->procs[i];
+        <span class="fn">DoMigration</span>(manager, proc);  <span class="cm">/* existing code */</span>
+    }
+
+    <span class="cm">/* Phase 2: NVMe swap-out for cold L2 pages (NEW) */</span>
+    <span class="kw">if</span> (!g_swap_enabled)
+        <span class="kw">return</span>;
+
+    <span class="kw">for</span> (<span class="kw">int</span> i = <span class="num">0</span>; i &lt; manager->nr_procs; i++) {
+        ProcessInfo *proc = &amp;manager->procs[i];
+
+        <span class="cm">/* Iterate L2 NUMA nodes */</span>
+        <span class="kw">for</span> (<span class="kw">int</span> nid = <span class="num">0</span>; nid &lt; manager->nr_l2_nodes; nid++) {
+            <span class="kw">int</span> l2_nid = manager->l2_nodes[nid];
+
+            <span class="cm">/* Step 1: Update cold counters from this cycle&rsquo;s freq data */</span>
+            <span class="fn">UpdateColdWindowCounters</span>(proc, l2_nid);
+
+            <span class="cm">/* Step 2: Select pages exceeding cold threshold */</span>
+            <span class="kw">int</span> candidates[MAX_SWAP_PER_CYCLE];
+            <span class="kw">int</span> nr = <span class="fn">SelectSwapCandidates</span>(proc, l2_nid,
+                        candidates, MAX_SWAP_PER_CYCLE);
+
+            <span class="cm">/* Step 3: Issue swap-out ioctl */</span>
+            <span class="kw">if</span> (nr &gt; <span class="num">0</span>)
+                <span class="fn">DoSwapOut</span>(manager, proc, candidates, nr, l2_nid);
+
+            <span class="cm">/* Step 4: Update accounting */</span>
+            <span class="fn">UpdateSwapAccounting</span>(proc);
+        }
+    }
+}
+</code></pre>
+
+
+<!-- ============================================================ -->
+<h2 id="swapin">7. Swap-In Path</h2>
+
+<p>Swap-in is handled <strong>entirely by the kernel</strong> with zero SMAP involvement:</p>
+
+<ol>
+<li>Application accesses a swapped-out page</li>
+<li>CPU generates a page fault (PTE contains swap entry, not page mapping)</li>
+<li>Kernel&rsquo;s <code>do_swap_page()</code> handles the fault:
+  <ul>
+    <li>Allocates a new page on the <strong>faulting CPU&rsquo;s local NUMA node</strong> (L1 direct)</li>
+    <li>Calls <code>swap_readpage()</code> to read the page data from NVMe</li>
+    <li>Updates PTE to point to the new physical page</li>
+    <li>Frees the swap slot</li>
+  </ul>
+</li>
+<li>Application resumes &mdash; page is now in L1 local DRAM</li>
+</ol>
+
+<div class="good">
+<strong>Optimal placement:</strong> Swap-in always places pages on L1 (local DRAM) because the kernel
+allocates on the faulting CPU&rsquo;s NUMA node. A cold page that was on L2 before swap-out
+gets promoted directly to L1 on swap-in &mdash; no intermediate L2 step.
+</div>
+
+<p>SMAP detects swap-in events passively by monitoring <code>VmSwap</code> decrease in
+<code>UpdateSwapAccounting()</code>. This is purely informational &mdash; no action is needed because the
+kernel has already placed the page optimally.</p>
+
+
+<!-- ============================================================ -->
+<h2 id="config">8. Configuration &amp; Tuning</h2>
+
+<h3>8.1 Kernel Parameters</h3>
+
+<table>
+<tr><th>Parameter</th><th>Value</th><th>Rationale</th></tr>
+<tr><td><code>vm.swappiness</code></td><td><code>10</code></td><td>Let SMAP control swap-out, minimize kernel LRU interference</td></tr>
+<tr><td><code>vm.page-cluster</code></td><td><code>0</code></td><td>NVMe random read is fast; no need for swap readahead clustering</td></tr>
+<tr><td><code>vm.vma_ra_enabled</code></td><td><code>1</code></td><td>Enable VMA-based readahead for sequential access patterns</td></tr>
+</table>
+
+<h3>8.2 Zswap Configuration</h3>
+
+<table>
+<tr><th>Parameter</th><th>Value</th><th>Rationale</th></tr>
+<tr><td><code>zswap.enabled</code></td><td><code>Y</code></td><td>Compress before writing to NVMe (reduces I/O)</td></tr>
+<tr><td><code>zswap.compressor</code></td><td><code>lz4</code></td><td>Fast compression, low CPU overhead</td></tr>
+<tr><td><code>zswap.max_pool_percent</code></td><td><code>20</code></td><td>Limit zswap memory usage</td></tr>
+<tr><td><code>zswap.writeback</code></td><td><code>Y</code></td><td>Must be enabled &mdash; allows overflow to NVMe backing device</td></tr>
+</table>
+
+<h3>8.3 SMAP Swap Parameters</h3>
+
+<table>
+<tr><th>Parameter</th><th>Default</th><th>Description</th></tr>
+<tr><td><code>cold_window_threshold</code></td><td><code>5</code></td><td>Consecutive zero-freq windows before swap eligibility</td></tr>
+<tr><td><code>max_swap_per_cycle</code></td><td><code>1024</code></td><td>Max pages to swap-out per scan cycle per process</td></tr>
+<tr><td><code>l2_watermark_ratio</code></td><td><code>0.85</code></td><td>Only swap when L2 usage exceeds this ratio</td></tr>
+<tr><td><code>batch_size</code></td><td><code>64</code></td><td>Unused in ioctl mode but kept for API compatibility</td></tr>
+</table>
+
+<div class="note">
+<strong>Tuning guidance:</strong> Start with <code>cold_window_threshold=5</code> (approximately 5 scan intervals
+of coldness before swap). Increase for latency-sensitive workloads, decrease for memory-constrained
+systems. The <code>max_swap_per_cycle</code> limit prevents thundering-herd swap storms.
+</div>
+
+
+<!-- ============================================================ -->
+<h2 id="changemap">9. Code Change Map</h2>
+
+<h3>9.1 Kernel Files (4 modified, 0 new)</h3>
+
+<table>
+<tr><th>File</th><th>Type</th><th>Changes</th><th>Details</th></tr>
+<tr><td><code>mig_init.h</code></td><td>Modified</td><td>+1 line</td><td><code>SMAP_MIG_SWAP_OUT</code> define</td></tr>
+<tr><td><code>mig_init.c</code></td><td>Modified</td><td>+103 lines</td><td><code>do_swap_out()</code>, <code>__ioctl_swap_out()</code>, switch case</td></tr>
+<tr><td><code>smap_migrate_wrapper.h</code></td><td>Modified</td><td>+1 line</td><td><code>extern fp_reclaim_pages</code></td></tr>
+<tr><td><code>smap_migrate_wrapper.c</code></td><td>Modified</td><td>+5 lines</td><td>Resolve <code>reclaim_pages</code> symbol</td></tr>
+</table>
+
+<h3>9.2 User-Space Files (5 new, 4 modified)</h3>
+
+<table>
+<tr><th>File</th><th>Type</th><th>Details</th></tr>
+<tr><td><code>manage/swap_types.h</code></td><td><span class="badge badge-red">NEW</span></td><td>Swap configuration structs, constants</td></tr>
+<tr><td><code>manage/swap_device.c</code></td><td><span class="badge badge-red">NEW</span></td><td>SwapDeviceInit, IsSwapActive, GetSwapUsage</td></tr>
+<tr><td><code>manage/swap_device.h</code></td><td><span class="badge badge-red">NEW</span></td><td>Header for swap device manager</td></tr>
+<tr><td><code>manage/swap_account.c</code></td><td><span class="badge badge-red">NEW</span></td><td>UpdateSwapAccounting, ReadVmSwap</td></tr>
+<tr><td><code>manage/swap_account.h</code></td><td><span class="badge badge-red">NEW</span></td><td>Header for swap accounting</td></tr>
+<tr><td><code>strategy/cold_tracker.c</code></td><td><span class="badge badge-red">NEW</span></td><td>UpdateColdWindowCounters, SelectSwapCandidates</td></tr>
+<tr><td><code>strategy/cold_tracker.h</code></td><td><span class="badge badge-red">NEW</span></td><td>Header for cold tracker</td></tr>
+<tr><td><code>strategy/swap_out.c</code></td><td><span class="badge badge-red">NEW</span></td><td>DoSwapOut (ioctl-based, no process_madvise)</td></tr>
+<tr><td><code>strategy/swap_out.h</code></td><td><span class="badge badge-red">NEW</span></td><td>Header for swap-out executor</td></tr>
+<tr><td><code>manage/manage.h</code></td><td>Modified</td><td>Add cold_windows array, swap fields to ProcessInfo</td></tr>
+<tr><td><code>manage/manage.c</code></td><td>Modified</td><td>Initialize/free cold_windows, swap state</td></tr>
+<tr><td><code>strategy/migration.c</code></td><td>Modified</td><td>Add Phase 2 swap-out to ScanMigrateWork</td></tr>
+<tr><td><code>smap_interface.c</code></td><td>Modified</td><td>Add ubturbo_smap_swap_config, set_threshold</td></tr>
+<tr><td><code>smap_interface.h</code></td><td>Modified</td><td>Declare new SDK API functions</td></tr>
+</table>
+
+
+<!-- ============================================================ -->
+<h2 id="comparison">10. Comparison: Option B v1 vs v2 vs Option A</h2>
+
+<table>
+<tr><th>Aspect</th><th>B v1 (process_madvise)</th><th>B v2 (ioctl + reclaim)</th><th>A (custom bio)</th></tr>
+<tr><td>Per-page control</td><td><span class="badge badge-red">No</span> (VMA-level)</td><td><span class="badge badge-green">Yes</span></td><td><span class="badge badge-green">Yes</span></td></tr>
+<tr><td>Kernel changes</td><td><span class="badge badge-green">None</span></td><td><span class="badge badge-orange">~110 lines</span></td><td><span class="badge badge-red">~3000 lines</span></td></tr>
+<tr><td>Hugepage swap</td><td>THP split</td><td>THP split</td><td><span class="badge badge-green">2M intact</span></td></tr>
+<tr><td>Swap I/O</td><td>Kernel handles</td><td>Kernel handles</td><td>Custom submit_bio()</td></tr>
+<tr><td>PTE management</td><td>Kernel handles</td><td>Kernel handles</td><td>Custom hook</td></tr>
+<tr><td>cgroup support</td><td><span class="badge badge-green">Free</span></td><td><span class="badge badge-green">Free</span></td><td>Must implement</td></tr>
+<tr><td>Swap entry mgmt</td><td>Kernel subsystem</td><td>Kernel subsystem</td><td>Custom bitmap</td></tr>
+<tr><td>Index &rarr; PA</td><td>Cannot (user-space)</td><td>Kernel convert_pos_to_paddr_sorted</td><td>Custom</td></tr>
+<tr><td>Requires pidfd</td><td>Yes</td><td>No</td><td>No</td></tr>
+<tr><td>CAP_SYS_NICE</td><td>Required</td><td>Not needed</td><td>Not needed</td></tr>
+<tr><td>Complexity</td><td>Low</td><td>Low-Medium</td><td>High</td></tr>
+<tr><td>Implementation</td><td><span class="badge badge-green">~2 weeks</span></td><td><span class="badge badge-green">~2 weeks</span></td><td><span class="badge badge-red">~2 months</span></td></tr>
+<tr><td>Risk</td><td>Low (but limited)</td><td>Low</td><td>High</td></tr>
+</table>
+
+<div class="good">
+<strong>Option B v2 is the sweet spot:</strong> It achieves per-page control (the main limitation of v1)
+with only ~110 lines of kernel code (vs ~3000 for Option A). It reuses battle-tested kernel swap
+infrastructure for I/O, PTE manipulation, and page fault handling.
+</div>
+
+
+<!-- ============================================================ -->
+<h2 id="limitations">11. Limitations &amp; Mitigations</h2>
+
+<table>
+<tr><th>Limitation</th><th>Impact</th><th>Mitigation</th></tr>
+<tr>
+  <td>THP split on swap</td>
+  <td>2M hugepages are split to 4K base pages before swap-out; TLB efficiency lost</td>
+  <td>Use Option A for workloads that depend on hugepage TLB coverage. v2 targets workloads with many small cold pages.</td>
+</tr>
+<tr>
+  <td><code>reclaim_pages()</code> requires Linux 5.16+</td>
+  <td>Older kernels cannot use swap-out feature</td>
+  <td>Graceful fallback: if symbol not found, ioctl returns <code>-ENOSYS</code>. Module loads and migration works normally.</td>
+</tr>
+<tr>
+  <td>Swap device must be pre-configured</td>
+  <td>Requires <code>swapon</code> before SMAP swap is enabled</td>
+  <td><code>SwapDeviceInit()</code> handles <code>swapon</code> automatically via the SDK API. Admin just provides device path.</td>
+</tr>
+<tr>
+  <td>CAP_SYS_NICE no longer needed</td>
+  <td>N/A (improvement over v1)</td>
+  <td>ioctl goes through char device with existing permissions. No extra capabilities required.</td>
+</tr>
+<tr>
+  <td>Swap-in latency (~10-100 &mu;s)</td>
+  <td>Higher than DRAM access for re-accessed pages</td>
+  <td>Only swap pages that have been cold for multiple consecutive windows. Conservative threshold minimizes false positives.</td>
+</tr>
+<tr>
+  <td>No swap-in control</td>
+  <td>SMAP cannot influence where swapped-in pages land</td>
+  <td>Kernel already does the right thing: allocates on faulting CPU&rsquo;s local NUMA node (L1). This is optimal.</td>
+</tr>
+</table>
+
+
+<!-- ============================================================ -->
+<h2 id="impl-plan">12. Implementation Plan</h2>
+
+<div class="phase">
+<div class="phase-title">Phase 1: Kernel &mdash; Symbol Resolution &amp; ioctl (3 days)</div>
+<ul>
+<li>Resolve <code>reclaim_pages</code> via <code>kallsyms_lookup_name</code> in <code>smap_migrate_wrapper.c</code></li>
+<li>Add <code>SMAP_MIG_SWAP_OUT</code> ioctl definition to <code>mig_init.h</code></li>
+<li>Implement <code>do_swap_out()</code> and <code>__ioctl_swap_out()</code> in <code>mig_init.c</code></li>
+<li>Add switch case in ioctl dispatch</li>
+<li>Unit test: verify ioctl accepts message, returns results, handles edge cases</li>
+</ul>
+</div>
+
+<div class="phase">
+<div class="phase-title">Phase 2: User-Space &mdash; Cold Tracking &amp; Types (3 days)</div>
+<ul>
+<li>Implement <code>strategy/cold_tracker.c</code>: <code>UpdateColdWindowCounters()</code>, <code>SelectSwapCandidates()</code></li>
+<li>Add <code>cold_windows[]</code> arrays to <code>ProcessInfo</code> struct</li>
+<li>Define swap types in <code>manage/swap_types.h</code></li>
+<li>Implement <code>manage/swap_account.c</code>: <code>UpdateSwapAccounting()</code>, <code>ReadVmSwap()</code></li>
+<li>Test: verify cold window counting, candidate selection, VmSwap reading</li>
+</ul>
+</div>
+
+<div class="phase">
+<div class="phase-title">Phase 3: User-Space &mdash; Swap-Out &amp; Integration (2 days)</div>
+<ul>
+<li>Implement <code>strategy/swap_out.c</code>: <code>DoSwapOut()</code> using ioctl</li>
+<li>Integrate Phase 2 into <code>ScanMigrateWork()</code> in <code>strategy/migration.c</code></li>
+<li>Add SDK API functions to <code>smap_interface.c</code></li>
+<li>Test: end-to-end swap-out flow with mock data</li>
+</ul>
+</div>
+
+<div class="phase">
+<div class="phase-title">Phase 4: Device Management &amp; Tuning (2 days)</div>
+<ul>
+<li>Implement <code>manage/swap_device.c</code>: <code>SwapDeviceInit()</code>, <code>IsSwapActive()</code>, <code>GetSwapUsage()</code></li>
+<li>Implement <code>TuneKernelSwapParams()</code>: set swappiness, page-cluster, vma_ra_enabled</li>
+<li>Implement <code>ValidateZswapConfig()</code>: check and warn about zswap settings</li>
+<li>Test: device lifecycle, parameter tuning, zswap validation</li>
+</ul>
+</div>
+
+<div class="phase">
+<div class="phase-title">Phase 5: Integration Testing (3 days)</div>
+<ul>
+<li>Test on NVMe-equipped server with Linux 5.16+ kernel</li>
+<li>Verify: pages are actually reclaimed to swap (check <code>/proc/swaps</code> usage)</li>
+<li>Verify: swap-in works via page fault (access swapped page, check VmSwap decrease)</li>
+<li>Stress test: concurrent migration + swap-out, process exit during swap-out</li>
+<li>Performance: measure swap-out throughput, swap-in latency</li>
+<li>Graceful degradation: test on kernel without <code>reclaim_pages</code></li>
+</ul>
+</div>
+
+<table>
+<tr><th>Phase</th><th>Duration</th><th>Cumulative</th></tr>
+<tr><td>Phase 1: Kernel ioctl</td><td>3 days</td><td>3 days</td></tr>
+<tr><td>Phase 2: Cold tracking</td><td>3 days</td><td>6 days</td></tr>
+<tr><td>Phase 3: Swap-out + integration</td><td>2 days</td><td>8 days</td></tr>
+<tr><td>Phase 4: Device management</td><td>2 days</td><td>10 days</td></tr>
+<tr><td>Phase 5: Testing</td><td>3 days</td><td>13 days</td></tr>
+<tr><td colspan="2"><strong>Total</strong></td><td><strong>~2 weeks</strong></td></tr>
+</table>
+
+
+<!-- ============================================================ -->
+<h2 id="references">13. References</h2>
+
+<ol>
+<li><strong>reclaim_pages()</strong> &mdash; Added in Linux 5.16 (<code>mm/vmscan.c</code>). Forces reclaim of a list of folios,
+writing dirty/anonymous pages to swap. Used by <code>MADV_PAGEOUT</code> internally and by memory cgroup reclaim.</li>
+
+<li><strong>process_madvise(2)</strong> &mdash; Linux 5.10+. Allows a process to advise the kernel about another
+process&rsquo;s memory. <code>MADV_PAGEOUT</code> reclaims pages but operates at VMA granularity, not per-page.</li>
+
+<li><strong>SMAP Migration Infrastructure</strong> &mdash; Existing kernel module code:
+<code>build_migrate_list()</code>, <code>convert_pos_to_paddr_sorted()</code>, <code>fp_migrate_pages()</code>, <code>fp_isolate_folio_to_list()</code>.
+The v2 design reuses all of these except the final <code>fp_migrate_pages()</code> call.</li>
+
+<li><strong>kallsyms_lookup_name()</strong> &mdash; Kernel function to resolve unexported symbols at runtime.
+Already used by SMAP for <code>fp_migrate_pages</code>, <code>fp_isolate_folio_to_list</code>, and other kprobed functions.</li>
+
+<li><strong>Option B v1 Design</strong> &mdash; <a href="smap_nvme_swap_option_b.html">smap_nvme_swap_option_b.html</a>
+&mdash; Original pure user-space design using <code>process_madvise(MADV_PAGEOUT)</code>.</li>
+
+<li><strong>Option A Design</strong> &mdash; <a href="smap_nvme_swap_option_a.html">smap_nvme_swap_option_a.html</a>
+&mdash; Full custom kernel design with <code>submit_bio()</code>, custom PTE handling, 2M swap slots.</li>
+
+<li><strong>Linux Swap Subsystem</strong> &mdash; <code>mm/swap_state.c</code>, <code>mm/swapfile.c</code>, <code>mm/page_io.c</code>.
+Handles swap entry allocation, page I/O, and PTE management for the standard swap path.</li>
+
+<li><strong>folio API</strong> &mdash; Linux 5.16+ page cache and LRU management. <code>folio_try_get()</code>,
+<code>folio_test_lru()</code>, <code>folio_test_unevictable()</code>, <code>folio_put()</code>.</li>
+</ol>
+
+<hr>
+<p class="subtitle">Option B v2 &mdash; Per-page swap with ~110 lines of kernel code. The pragmatic middle ground.</p>
+<p class="subtitle">Last updated: April 2026</p>
+
+</body>
+</html>
