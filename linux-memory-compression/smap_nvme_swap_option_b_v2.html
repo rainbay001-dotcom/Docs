@@ -88,8 +88,9 @@ li { margin: 4px 0; }
 <li>9. <a href="#changemap">Code Change Map</a></li>
 <li>10. <a href="#comparison">Comparison: B v1 vs B v2 vs Option A</a></li>
 <li>11. <a href="#limitations">Limitations &amp; Mitigations</a></li>
-<li>12. <a href="#impl-plan">Implementation Plan</a></li>
-<li>13. <a href="#references">References</a></li>
+<li>12. <a href="#debugging">Debugging &amp; Troubleshooting</a></li>
+<li>13. <a href="#impl-plan">Implementation Plan</a></li>
+<li>14. <a href="#references">References</a></li>
 </ul>
 </div>
 
@@ -1137,7 +1138,159 @@ Both paths use the same ioctl, same kernel reclaim, same accounting.
 
 
 <!-- ============================================================ -->
-<h2 id="impl-plan">12. Implementation Plan</h2>
+<h2 id="debugging">12. Debugging &amp; Troubleshooting</h2>
+
+<h3>12.1 The <code>reclaimed=0</code> Problem</h3>
+
+<p>During testing, <code>do_swap_out()</code> successfully isolates pages from LRU but
+<code>fp_reclaim_pages()</code> returns 0 &mdash; no pages are actually reclaimed (written to swap).
+This causes all isolated pages to be stuck off-LRU until <code>fp_putback_movable_pages()</code>
+returns them, potentially causing the target process to hang.</p>
+
+<h4>Root Cause Analysis</h4>
+
+<p>The kernel&rsquo;s <code>reclaim_pages()</code> &rarr; <code>shrink_folio_list()</code> performs multiple
+checks before reclaiming a page. If any check fails, the page is skipped. Common failure modes:</p>
+
+<table>
+<tr><th>Check</th><th>Kernel Function</th><th>Failure Means</th></tr>
+<tr><td>Folio refcount too high</td><td><code>folio_ref_freeze(folio, expected)</code></td>
+    <td>Extra references held &mdash; someone else is using the page. Fix: ensure <code>folio_put()</code> after <code>isolate_folio_to_list()</code></td></tr>
+<tr><td>Folio is unevictable</td><td><code>folio_test_unevictable()</code></td>
+    <td>Page was <code>mlock()</code>&rsquo;d by the process (e.g., redis <code>CONFIG SET maxmemory-policy</code>). Cannot be reclaimed.</td></tr>
+<tr><td>Folio is mlocked</td><td><code>folio_test_mlocked()</code></td>
+    <td>Same as unevictable &mdash; process called <code>mlock()</code> or <code>mlockall()</code></td></tr>
+<tr><td>Folio is dirty + no writeback</td><td><code>folio_test_dirty()</code></td>
+    <td>Anonymous dirty page requires swap slot allocation. If swap is full or not configured, fails.</td></tr>
+<tr><td>Folio is not anonymous</td><td><code>folio_test_anon()</code></td>
+    <td>File-backed pages go through different reclaim path. Our pages should be anonymous.</td></tr>
+<tr><td>Folio on wrong zone</td><td>Zone-based checks</td>
+    <td>CXL memory in special zones (ZONE_MOVABLE, ZONE_DEVICE) may have different reclaim rules.</td></tr>
+<tr><td>Folio is locked</td><td><code>folio_trylock()</code></td>
+    <td>Another thread holds the folio lock. Transient &mdash; retry should work.</td></tr>
+<tr><td>try_to_unmap fails</td><td><code>try_to_unmap(folio)</code></td>
+    <td>Cannot remove PTE mappings &mdash; shared mappings, special VMAs</td></tr>
+</table>
+
+<h4>Diagnostic Logging</h4>
+
+<p>The diagnostic build adds per-page and per-batch logging to <code>dmesg</code>. After triggering swap, check:</p>
+
+<pre><code>dmesg | grep swap_out</code></pre>
+
+<p>Expected output format:</p>
+
+<pre><code><span class="cm"># First page state dump — tells us what kind of pages we're dealing with</span>
+swap_out: first folio pfn=XXX refcount=N mapcount=N flags=0xXXX
+         anon=1 swapcache=0 locked=0 lru=1 active=0 unevictable=0
+
+<span class="cm"># Per-batch reclaim results — tells us if reclaim is consuming pages</span>
+swap_out: batch[0] isolated=256 list_before=256 reclaimed=0 list_after=256
+
+<span class="cm"># First un-reclaimed folio state — tells us WHY reclaim rejected it</span>
+swap_out: remaining folio refcount=N mapcount=N anon=1 dirty=0
+         writeback=0 locked=0 mlock=0
+
+<span class="cm"># Summary</span>
+swap_out[0]: pid XXXX node 4, total isolated=XXXX reclaimed=XXXX
+             isolate_fail=XX skip(invalid=XX pfn=XX page=XX) batches=XX</code></pre>
+
+<h4>Diagnostic Decision Table</h4>
+
+<table>
+<tr><th>Observed in dmesg</th><th>Diagnosis</th><th>Action</th></tr>
+<tr>
+  <td><code>unevictable=1</code> or <code>mlock=1</code></td>
+  <td>Process called <code>mlock()</code> or <code>mlockall()</code></td>
+  <td>Check: <code>cat /proc/PID/status | grep VmLck</code>. If nonzero, pages are locked. Either disable mlock in the application or skip mlock&rsquo;d pages.</td>
+</tr>
+<tr>
+  <td><code>anon=0</code></td>
+  <td>Pages are file-backed, not swappable to swap device</td>
+  <td>Filter: only attempt reclaim on anonymous pages. Add <code>folio_test_anon()</code> check before isolation.</td>
+</tr>
+<tr>
+  <td><code>refcount</code> &gt; expected (mapcount+1)</td>
+  <td>Extra reference holders prevent reclaim</td>
+  <td>Ensure <code>folio_put()</code> after <code>fp_isolate_folio_to_list()</code>. Check if other kernel subsystems hold refs on CXL pages.</td>
+</tr>
+<tr>
+  <td><code>list_after == list_before</code></td>
+  <td><code>reclaim_pages()</code> didn&rsquo;t process any pages</td>
+  <td>Check if <code>fp_reclaim_pages</code> points to the correct symbol. Verify: <code>cat /proc/kallsyms | grep reclaim_pages</code></td>
+</tr>
+<tr>
+  <td><code>lru=0</code> before isolation</td>
+  <td>Pages already isolated or in special state</td>
+  <td>Skip pages not on LRU: check <code>folio_test_lru()</code> before attempting isolation.</td>
+</tr>
+<tr>
+  <td><code>isolate_fail</code> count is high</td>
+  <td>Pages not on LRU, or LRU lock contention</td>
+  <td>Normal for some percentage. If near 100%, pages may already be isolated by another thread.</td>
+</tr>
+<tr>
+  <td>Swap space full (<code>free -h</code> shows Swap used == total)</td>
+  <td>No swap slots available for reclaim</td>
+  <td>Expand swap: <code>swapon /additional/device</code></td>
+</tr>
+<tr>
+  <td><code>reclaimed &gt; 0</code> but process hangs</td>
+  <td>Reclaim works but too slow for 244K pages</td>
+  <td>Reduce <code>max_swap_per_cycle</code> (e.g., 4096 instead of 244K). Increase <code>cold_window_threshold</code>.</td>
+</tr>
+</table>
+
+<h3>12.2 System Hang After Swap-Out</h3>
+
+<p>If the SMAP daemon stops printing logs after <code>DoSwapOut()</code>, the ioctl call is blocking in kernel space.
+Possible causes:</p>
+
+<ul>
+<li><strong>Massive putback:</strong> After <code>reclaimed=0</code>, <code>fp_putback_movable_pages()</code> must return
+all isolated pages to LRU. With 244K pages, this takes significant time under LRU lock contention.</li>
+<li><strong>Lock contention:</strong> If the target process is actively accessing pages while we&rsquo;re
+isolating/putting back, LRU lock contention causes long delays.</li>
+<li><strong>Soft lockup:</strong> <code>cond_resched()</code> between batches prevents watchdog triggers,
+but total wall time for 244K pages can exceed minutes.</li>
+</ul>
+
+<div class="warn">
+<strong>Mitigation:</strong> Limit <code>max_swap_per_cycle</code> to a reasonable number (e.g., 4096 pages = 16MB).
+Don&rsquo;t try to swap 244K pages (1GB) in a single ScanMigrateWork cycle. The cold tracker will
+catch remaining cold pages in subsequent cycles.
+</div>
+
+<h3>12.3 Verification Commands</h3>
+
+<pre><code><span class="cm"># Check if swap is active</span>
+swapon -s
+
+<span class="cm"># Check per-process swap usage</span>
+cat /proc/$(pidof redis-server)/status | grep -E "VmSwap|VmLck"
+
+<span class="cm"># Check system-wide swap</span>
+free -h
+
+<span class="cm"># Check if reclaim_pages is available</span>
+cat /proc/kallsyms | grep reclaim_pages
+
+<span class="cm"># Check CXL memory zone type</span>
+cat /proc/zoneinfo | grep -A5 "Node 4"
+
+<span class="cm"># Check if redis uses mlock</span>
+cat /proc/$(pidof redis-server)/status | grep VmLck
+<span class="cm"># VmLck > 0 means pages are mlocked and CANNOT be reclaimed</span>
+
+<span class="cm"># Monitor dmesg for swap diagnostics</span>
+dmesg -w | grep swap_out
+
+<span class="cm"># Check page flags for a specific PFN (requires CONFIG_PAGE_OWNER)</span>
+cat /sys/kernel/debug/page_owner | head</code></pre>
+
+
+<!-- ============================================================ -->
+<h2 id="impl-plan">13. Implementation Plan</h2>
 
 <div class="phase">
 <div class="phase-title">Phase 1: Kernel &mdash; Symbol Resolution &amp; ioctl (3 days)</div>
@@ -1205,7 +1358,7 @@ Both paths use the same ioctl, same kernel reclaim, same accounting.
 
 
 <!-- ============================================================ -->
-<h2 id="references">13. References</h2>
+<h2 id="references">14. References</h2>
 
 <ol>
 <li><strong>reclaim_pages()</strong> &mdash; Added in Linux 5.16 (<code>mm/vmscan.c</code>). Forces reclaim of a list of folios,
