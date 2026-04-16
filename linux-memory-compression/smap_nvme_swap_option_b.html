@@ -1,0 +1,1245 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>SMAP NVMe Swap — Option B Detailed Design: process_madvise + swapon</title>
+<style>
+:root { --bg: #0d1117; --surface: #161b22; --border: #30363d; --text: #e6edf3; --muted: #8b949e;
+  --green: #3fb950; --blue: #58a6ff; --purple: #bc8cff; --orange: #d29922; --red: #f85149; --cyan: #39d2c0; }
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { background: var(--bg); color: var(--text); font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', monospace;
+  line-height: 1.7; padding: 40px 60px; max-width: 1200px; margin: 0 auto; }
+h1 { color: var(--green); font-size: 2em; margin-bottom: 8px; }
+h2 { color: var(--blue); font-size: 1.4em; margin: 40px 0 16px; border-left: 3px solid var(--blue); padding-left: 12px; }
+h3 { color: var(--purple); font-size: 1.15em; margin: 28px 0 12px; }
+h4 { color: var(--orange); font-size: 1em; margin: 20px 0 8px; }
+hr { border: none; border-top: 2px solid var(--blue); margin: 20px 0 30px; }
+p { margin: 10px 0; }
+a { color: var(--blue); text-decoration: none; }
+code { background: var(--surface); padding: 2px 6px; border-radius: 4px; font-size: 0.92em; color: var(--cyan); }
+pre { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 16px 20px;
+  overflow-x: auto; margin: 12px 0; font-size: 0.88em; line-height: 1.6; }
+pre code { background: none; padding: 0; color: var(--text); }
+table { border-collapse: collapse; width: 100%; margin: 16px 0; }
+th, td { border: 1px solid var(--border); padding: 10px 14px; text-align: left; }
+th { background: var(--surface); color: var(--blue); }
+td { color: var(--text); }
+tr:nth-child(even) td { background: rgba(22,27,34,0.5); }
+.subtitle { color: var(--muted); font-size: 0.95em; margin-bottom: 6px; }
+.badge { display: inline-block; padding: 2px 10px; border-radius: 12px; font-size: 0.8em; font-weight: bold; margin-right: 6px; }
+.badge-green { background: rgba(63,185,80,0.15); color: var(--green); border: 1px solid var(--green); }
+.badge-orange { background: rgba(210,153,34,0.15); color: var(--orange); border: 1px solid var(--orange); }
+.badge-red { background: rgba(248,81,73,0.15); color: var(--red); border: 1px solid var(--red); }
+.badge-purple { background: rgba(188,140,255,0.15); color: var(--purple); border: 1px solid var(--purple); }
+.badge-new { background: rgba(248,81,73,0.2); color: var(--red); border: 1px solid var(--red); font-size: 0.75em; }
+.note { background: rgba(88,166,255,0.08); border-left: 3px solid var(--blue); padding: 12px 16px; margin: 16px 0; border-radius: 0 6px 6px 0; }
+.warn { background: rgba(210,153,34,0.08); border-left: 3px solid var(--orange); padding: 12px 16px; margin: 16px 0; border-radius: 0 6px 6px 0; }
+.good { background: rgba(63,185,80,0.08); border-left: 3px solid var(--green); padding: 12px 16px; margin: 16px 0; border-radius: 0 6px 6px 0; }
+.svg-wrap { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 20px; margin: 20px 0; overflow-x: auto; }
+ul, ol { margin: 8px 0 8px 24px; }
+li { margin: 4px 0; }
+.toc { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 20px 28px; margin: 20px 0; }
+.toc ul { list-style: none; margin: 0; padding: 0; }
+.toc li { margin: 4px 0; }
+.toc li ul { padding-left: 20px; }
+.toc a { color: var(--muted); }
+.toc a:hover { color: var(--blue); }
+.kw { color: var(--purple); } .fn { color: var(--blue); } .cm { color: var(--muted); font-style: italic; }
+.str { color: var(--green); } .num { color: var(--orange); } .new { color: var(--red); }
+.phase { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 16px 20px; margin: 12px 0; }
+.phase-title { color: var(--green); font-weight: bold; margin-bottom: 8px; }
+</style>
+</head>
+<body>
+
+<h1>SMAP NVMe Swap &mdash; Option B Detailed Design</h1>
+<p class="subtitle">User-Space Cold Page Swapout via <code>process_madvise(MADV_PAGEOUT)</code> + kernel <code>swapon</code></p>
+<p class="subtitle">Design Document &mdash; ubturbo/SMAP (openEuler) &mdash; April 2026</p>
+<hr>
+
+<!-- TOC -->
+<div class="toc">
+<strong style="color:var(--green)">Contents</strong>
+<ul>
+<li>1. <a href="#overview">Design Overview &amp; Rationale</a></li>
+<li>2. <a href="#arch">Architecture</a>
+  <ul>
+    <li>2.1 <a href="#arch-overview">Three-Tier Architecture with Option B</a></li>
+    <li>2.2 <a href="#data-flow">Data Flow: Cold Page &rarr; NVMe</a></li>
+    <li>2.3 <a href="#component-map">Component Map</a></li>
+  </ul>
+</li>
+<li>3. <a href="#swap-setup">NVMe Swap Device Setup</a>
+  <ul>
+    <li>3.1 <a href="#swap-config">Swap Device Configuration</a></li>
+    <li>3.2 <a href="#swap-init">Initialization &amp; swapon</a></li>
+    <li>3.3 <a href="#swap-tuning">Kernel Tuning Parameters</a></li>
+    <li>3.4 <a href="#zswap-interaction">Zswap Interaction</a></li>
+  </ul>
+</li>
+<li>4. <a href="#cold-detection">Cold Page Detection</a>
+  <ul>
+    <li>4.1 <a href="#existing-freq">Existing Frequency Tracking</a></li>
+    <li>4.2 <a href="#cold-window">Multi-Window Cold Tracking (NEW)</a></li>
+    <li>4.3 <a href="#swap-criteria">SWAP_OUT Eligibility Criteria</a></li>
+  </ul>
+</li>
+<li>5. <a href="#swapout">Swap-Out Path: process_madvise(MADV_PAGEOUT)</a>
+  <ul>
+    <li>5.1 <a href="#syscall">Syscall Mechanics</a></li>
+    <li>5.2 <a href="#pidfd">pidfd Management</a></li>
+    <li>5.3 <a href="#batching">Batching &amp; Rate Limiting</a></li>
+    <li>5.4 <a href="#thp">Transparent Hugepage Handling</a></li>
+    <li>5.5 <a href="#error-handling">Error Handling &amp; Partial Success</a></li>
+  </ul>
+</li>
+<li>6. <a href="#swapin">Swap-In Path</a></li>
+<li>7. <a href="#accounting">Swap Accounting &amp; Monitoring</a></li>
+<li>8. <a href="#strategy">Strategy Engine Changes</a>
+  <ul>
+    <li>8.1 <a href="#three-tier-decision">Three-Tier Decision Logic</a></li>
+    <li>8.2 <a href="#strategy-integration">Integration with SeparateStrategy</a></li>
+  </ul>
+</li>
+<li>9. <a href="#data-structures">New Data Structures</a></li>
+<li>10. <a href="#code-changes">Code Change Map</a></li>
+<li>11. <a href="#operational-flow">Operational Flow</a></li>
+<li>12. <a href="#config-persist">Configuration &amp; Persistence</a></li>
+<li>13. <a href="#limitations">Limitations &amp; Mitigations</a></li>
+<li>14. <a href="#impl-plan">Implementation Plan</a></li>
+<li>15. <a href="#references">References</a></li>
+</ul>
+</div>
+
+
+<!-- ============================================================ -->
+<h2 id="overview">1. Design Overview &amp; Rationale</h2>
+
+<p>Option B adds NVMe swap capability to SMAP entirely in <strong>user space</strong>, leveraging the kernel&rsquo;s
+existing swap infrastructure. Instead of implementing custom block I/O and swap entry management,
+SMAP uses <code>process_madvise(MADV_PAGEOUT)</code> to request the kernel to reclaim specific cold pages,
+which are then written to a pre-configured swap device by the kernel&rsquo;s normal swap path.</p>
+
+<div class="good">
+<strong>Key Advantage:</strong> Zero kernel module changes. The entire feature is implemented in SMAP
+user-space (<code>libsmap.so</code>). The kernel handles all swap I/O, PTE manipulation, swap entry allocation,
+and page fault handling transparently.
+</div>
+
+<table>
+<tr><th>Aspect</th><th>Option B (This Design)</th><th>Option A (Custom Kernel)</th></tr>
+<tr><td>Kernel changes</td><td><span class="badge badge-green">None</span></td><td><span class="badge badge-red">Heavy</span> (bio, PTE, fault hook)</td></tr>
+<tr><td>Swap I/O</td><td>Kernel handles via <code>swapon</code></td><td>Custom <code>submit_bio()</code></td></tr>
+<tr><td>Swap entry management</td><td>Kernel swap subsystem</td><td>Custom bitmap allocator</td></tr>
+<tr><td>Page fault path</td><td>Kernel swap fault handler</td><td>Custom <code>do_swap_page</code> hook</td></tr>
+<tr><td>Hugepage support</td><td><span class="badge badge-orange">THP split on swap</span></td><td>Custom 2M swap slots possible</td></tr>
+<tr><td>cgroup integration</td><td><span class="badge badge-green">Free</span> (memory.swap.*)</td><td>Must implement</td></tr>
+<tr><td>Kernel version</td><td>Linux 5.10+ (process_madvise)</td><td>Any (custom module)</td></tr>
+<tr><td>Implementation time</td><td><span class="badge badge-green">~2 weeks</span></td><td><span class="badge badge-red">~2 months</span></td></tr>
+</table>
+
+
+<!-- ============================================================ -->
+<h2 id="arch">2. Architecture</h2>
+
+<h3 id="arch-overview">2.1 Three-Tier Architecture with Option B</h3>
+
+<div class="svg-wrap">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1060 720" width="1060" height="720">
+  <defs>
+    <marker id="a1" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#3fb950"/></marker>
+    <marker id="a2" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#d29922"/></marker>
+    <marker id="a3" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#f85149"/></marker>
+    <marker id="a4" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#bc8cff"/></marker>
+    <marker id="a5" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#58a6ff"/></marker>
+  </defs>
+  <rect width="1060" height="720" rx="10" fill="#0d1117"/>
+  <text x="530" y="28" text-anchor="middle" fill="#3fb950" font-family="monospace" font-size="14" font-weight="bold">Option B Architecture: process_madvise + swapon</text>
+
+  <!-- SMAP user-space -->
+  <rect x="30" y="50" width="1000" height="250" rx="8" fill="none" stroke="#3fb950" stroke-width="2" stroke-dasharray="6,3"/>
+  <text x="50" y="75" fill="#3fb950" font-family="monospace" font-size="13" font-weight="bold">SMAP User Space (libsmap.so) &mdash; All changes here</text>
+
+  <!-- Existing components -->
+  <rect x="50" y="90" width="200" height="50" rx="6" fill="#161b22" stroke="#58a6ff"/>
+  <text x="150" y="110" text-anchor="middle" fill="#58a6ff" font-family="monospace" font-size="10">ProcessManager</text>
+  <text x="150" y="125" text-anchor="middle" fill="#8b949e" font-family="monospace" font-size="8">+ SwapAccounting (NEW)</text>
+
+  <rect x="270" y="90" width="200" height="50" rx="6" fill="#161b22" stroke="#58a6ff"/>
+  <text x="370" y="110" text-anchor="middle" fill="#58a6ff" font-family="monospace" font-size="10">Strategy Engine</text>
+  <text x="370" y="125" text-anchor="middle" fill="#8b949e" font-family="monospace" font-size="8">+ Three-Tier Decision (NEW)</text>
+
+  <rect x="490" y="90" width="200" height="50" rx="6" fill="#161b22" stroke="#58a6ff"/>
+  <text x="590" y="110" text-anchor="middle" fill="#58a6ff" font-family="monospace" font-size="10">Migration Controller</text>
+  <text x="590" y="125" text-anchor="middle" fill="#8b949e" font-family="monospace" font-size="8">ScanMigrateWork()</text>
+
+  <rect x="710" y="90" width="300" height="50" rx="6" fill="#161b22" stroke="#58a6ff"/>
+  <text x="860" y="110" text-anchor="middle" fill="#58a6ff" font-family="monospace" font-size="10">Cold Window Tracker</text>
+  <text x="860" y="125" text-anchor="middle" fill="#8b949e" font-family="monospace" font-size="8">Per-page consecutive zero-freq counter</text>
+
+  <!-- NEW components -->
+  <rect x="50" y="160" width="280" height="55" rx="6" fill="rgba(248,81,73,0.08)" stroke="#f85149" stroke-width="2"/>
+  <text x="190" y="180" text-anchor="middle" fill="#f85149" font-family="monospace" font-size="11" font-weight="bold">NEW: SwapOutExecutor</text>
+  <text x="190" y="198" text-anchor="middle" fill="#8b949e" font-family="monospace" font-size="8">pidfd_open() + process_madvise(MADV_PAGEOUT)</text>
+  <text x="190" y="210" text-anchor="middle" fill="#8b949e" font-family="monospace" font-size="8">Batched iovec[], rate-limited, async</text>
+
+  <rect x="350" y="160" width="280" height="55" rx="6" fill="rgba(248,81,73,0.08)" stroke="#f85149" stroke-width="2"/>
+  <text x="490" y="180" text-anchor="middle" fill="#f85149" font-family="monospace" font-size="11" font-weight="bold">NEW: SwapDeviceManager</text>
+  <text x="490" y="198" text-anchor="middle" fill="#8b949e" font-family="monospace" font-size="8">mkswap + swapon, device health, capacity</text>
+  <text x="490" y="210" text-anchor="middle" fill="#8b949e" font-family="monospace" font-size="8">/proc/swaps monitoring</text>
+
+  <rect x="650" y="160" width="280" height="55" rx="6" fill="rgba(248,81,73,0.08)" stroke="#f85149" stroke-width="2"/>
+  <text x="790" y="180" text-anchor="middle" fill="#f85149" font-family="monospace" font-size="11" font-weight="bold">NEW: SwapAccountant</text>
+  <text x="790" y="198" text-anchor="middle" fill="#8b949e" font-family="monospace" font-size="8">/proc/[pid]/status VmSwap tracking</text>
+  <text x="790" y="210" text-anchor="middle" fill="#8b949e" font-family="monospace" font-size="8">Per-process swap limits &amp; watermarks</text>
+
+  <!-- NEW: swap config -->
+  <rect x="50" y="235" width="280" height="45" rx="6" fill="rgba(248,81,73,0.08)" stroke="#f85149"/>
+  <text x="190" y="260" text-anchor="middle" fill="#f85149" font-family="monospace" font-size="10">NEW: SwapConfig (persist to /dev/shm)</text>
+
+  <!-- Existing kernel path (unchanged) -->
+  <rect x="30" y="320" width="480" height="80" rx="8" fill="#161b22" stroke="#d29922" stroke-width="1.5"/>
+  <text x="270" y="345" text-anchor="middle" fill="#d29922" font-family="monospace" font-size="12" font-weight="bold">SMAP Kernel Module (UNCHANGED)</text>
+  <text x="270" y="365" text-anchor="middle" fill="#8b949e" font-family="monospace" font-size="9">smap_migrate() via ioctl &mdash; L1 &harr; L2 only</text>
+  <text x="270" y="380" text-anchor="middle" fill="#8b949e" font-family="monospace" font-size="8">No swap code needed &mdash; kernel handles L3</text>
+
+  <!-- Kernel swap subsystem (existing, leveraged) -->
+  <rect x="540" y="320" width="490" height="80" rx="8" fill="#161b22" stroke="#bc8cff" stroke-width="1.5"/>
+  <text x="785" y="345" text-anchor="middle" fill="#bc8cff" font-family="monospace" font-size="12" font-weight="bold">Linux Kernel Swap Subsystem (LEVERAGED)</text>
+  <text x="785" y="365" text-anchor="middle" fill="#8b949e" font-family="monospace" font-size="9">MADV_PAGEOUT handler &rarr; shrink_folio_list() &rarr; swap_writepage()</text>
+  <text x="785" y="380" text-anchor="middle" fill="#8b949e" font-family="monospace" font-size="8">PTE &rarr; swap entry | page fault &rarr; do_swap_page() &rarr; swap_readpage()</text>
+
+  <!-- Arrows: user to kernel -->
+  <line x1="270" y1="300" x2="270" y2="318" stroke="#d29922" stroke-width="1.5" marker-end="url(#a2)"/>
+  <text x="285" y="312" fill="#8b949e" font-family="monospace" font-size="7">ioctl (L1&harr;L2)</text>
+
+  <line x1="190" y1="215" x2="785" y2="318" stroke="#f85149" stroke-width="2" marker-end="url(#a3)"/>
+  <text x="470" y="268" fill="#f85149" font-family="monospace" font-size="8" transform="rotate(-12,470,268)">process_madvise(MADV_PAGEOUT) syscall &mdash; L2 &rarr; L3</text>
+
+  <!-- Hardware tiers -->
+  <rect x="30" y="430" width="1000" height="30" rx="0" fill="#161b2280" stroke="none"/>
+  <text x="530" y="450" text-anchor="middle" fill="#8b949e" font-family="monospace" font-size="10">&mdash;&mdash; Physical Storage Tiers &mdash;&mdash;</text>
+
+  <rect x="30" y="475" width="300" height="60" rx="8" fill="rgba(63,185,80,0.08)" stroke="#3fb950" stroke-width="2"/>
+  <text x="180" y="500" text-anchor="middle" fill="#3fb950" font-family="monospace" font-size="13" font-weight="bold">L1: Local DRAM</text>
+  <text x="180" y="520" text-anchor="middle" fill="#8b949e" font-family="monospace" font-size="9">~100 ns | Hot pages</text>
+
+  <rect x="370" y="475" width="300" height="60" rx="8" fill="rgba(210,153,34,0.08)" stroke="#d29922" stroke-width="2"/>
+  <text x="520" y="500" text-anchor="middle" fill="#d29922" font-family="monospace" font-size="13" font-weight="bold">L2: Remote NUMA (CXL)</text>
+  <text x="520" y="520" text-anchor="middle" fill="#8b949e" font-family="monospace" font-size="9">~300 ns | Warm/cold pages</text>
+
+  <rect x="710" y="475" width="320" height="60" rx="8" fill="rgba(248,81,73,0.08)" stroke="#f85149" stroke-width="2"/>
+  <text x="870" y="500" text-anchor="middle" fill="#f85149" font-family="monospace" font-size="13" font-weight="bold">L3: NVMe Swap (NEW)</text>
+  <text x="870" y="520" text-anchor="middle" fill="#8b949e" font-family="monospace" font-size="9">~10-100 &mu;s | Coldest pages (freq=0)</text>
+
+  <!-- Tier arrows -->
+  <line x1="330" y1="505" x2="368" y2="505" stroke="#d29922" stroke-width="1.5" marker-end="url(#a2)"/>
+  <text x="342" y="498" fill="#d29922" font-family="monospace" font-size="7">DEMOTE</text>
+  <line x1="368" y1="515" x2="330" y2="515" stroke="#3fb950" stroke-width="1.5" marker-end="url(#a1)"/>
+  <text x="340" y="530" fill="#3fb950" font-family="monospace" font-size="7">PROMOTE</text>
+
+  <line x1="670" y1="505" x2="708" y2="505" stroke="#f85149" stroke-width="2" marker-end="url(#a3)"/>
+  <text x="676" y="498" fill="#f85149" font-family="monospace" font-size="7" font-weight="bold">SWAP_OUT</text>
+  <line x1="708" y1="515" x2="670" y2="515" stroke="#bc8cff" stroke-width="1.5" marker-end="url(#a4)"/>
+  <text x="676" y="530" fill="#bc8cff" font-family="monospace" font-size="7">SWAP_IN (fault)</text>
+
+  <!-- Legend -->
+  <rect x="30" y="560" width="1000" height="45" rx="6" fill="#161b22" stroke="#30363d"/>
+  <text x="50" y="580" fill="#f85149" font-family="monospace" font-size="10" font-weight="bold">Legend:</text>
+  <rect x="130" y="568" width="12" height="12" rx="2" fill="rgba(248,81,73,0.15)" stroke="#f85149"/>
+  <text x="148" y="580" fill="#8b949e" font-family="monospace" font-size="9">NEW component</text>
+  <rect x="280" y="568" width="12" height="12" rx="2" fill="#161b22" stroke="#58a6ff"/>
+  <text x="298" y="580" fill="#8b949e" font-family="monospace" font-size="9">Modified existing</text>
+  <rect x="440" y="568" width="12" height="12" rx="2" fill="#161b22" stroke="#d29922"/>
+  <text x="458" y="580" fill="#8b949e" font-family="monospace" font-size="9">Unchanged</text>
+  <rect x="570" y="568" width="12" height="12" rx="2" fill="#161b22" stroke="#bc8cff"/>
+  <text x="588" y="580" fill="#8b949e" font-family="monospace" font-size="9">Kernel (leveraged, not modified)</text>
+
+  <!-- Key insight box -->
+  <rect x="30" y="620" width="1000" height="80" rx="8" fill="rgba(63,185,80,0.05)" stroke="#3fb950"/>
+  <text x="530" y="645" text-anchor="middle" fill="#3fb950" font-family="monospace" font-size="12" font-weight="bold">Key Insight: Division of Responsibility</text>
+  <text x="50" y="668" fill="#8b949e" font-family="monospace" font-size="9">SMAP decides WHICH pages to swap (freq=0 for N windows on L2) &mdash; user-space policy engine</text>
+  <text x="50" y="685" fill="#8b949e" font-family="monospace" font-size="9">Kernel decides HOW to swap (PTE, swap entry, bio, readahead, fault) &mdash; already production-grade</text>
+</svg>
+</div>
+
+<h3 id="data-flow">2.2 Data Flow: Cold Page &rarr; NVMe</h3>
+
+<div class="svg-wrap">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1060 480" width="1060" height="480">
+  <defs>
+    <marker id="df1" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#58a6ff"/></marker>
+    <marker id="df2" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#f85149"/></marker>
+    <marker id="df3" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#3fb950"/></marker>
+  </defs>
+  <rect width="1060" height="480" rx="10" fill="#0d1117"/>
+  <text x="530" y="25" text-anchor="middle" fill="#3fb950" font-family="monospace" font-size="13" font-weight="bold">Swap-Out Data Flow (per ScanMigrateWork cycle)</text>
+
+  <!-- Step 1 -->
+  <rect x="30" y="50" width="180" height="60" rx="6" fill="#161b22" stroke="#58a6ff"/>
+  <text x="120" y="73" text-anchor="middle" fill="#58a6ff" font-family="monospace" font-size="10" font-weight="bold">1. Scan Frequencies</text>
+  <text x="120" y="93" text-anchor="middle" fill="#8b949e" font-family="monospace" font-size="8">BuildAllPidData()</text>
+  <text x="120" y="103" text-anchor="middle" fill="#8b949e" font-family="monospace" font-size="8">Read actcData[] from kernel</text>
+
+  <!-- Step 2 -->
+  <rect x="240" y="50" width="180" height="60" rx="6" fill="#161b22" stroke="#58a6ff"/>
+  <text x="330" y="73" text-anchor="middle" fill="#58a6ff" font-family="monospace" font-size="10" font-weight="bold">2. Update Cold Windows</text>
+  <text x="330" y="93" text-anchor="middle" fill="#f85149" font-family="monospace" font-size="8">NEW: UpdateColdWindowCounters()</text>
+  <text x="330" y="103" text-anchor="middle" fill="#8b949e" font-family="monospace" font-size="8">freq=0 &rarr; cold_windows++</text>
+
+  <!-- Step 3 -->
+  <rect x="450" y="50" width="180" height="60" rx="6" fill="#161b22" stroke="#58a6ff"/>
+  <text x="540" y="73" text-anchor="middle" fill="#58a6ff" font-family="monospace" font-size="10" font-weight="bold">3. Run Strategy</text>
+  <text x="540" y="93" text-anchor="middle" fill="#8b949e" font-family="monospace" font-size="8">Existing L1&harr;L2 migration</text>
+  <text x="540" y="103" text-anchor="middle" fill="#f85149" font-family="monospace" font-size="8">+ NEW: Identify swap candidates</text>
+
+  <!-- Step 4 -->
+  <rect x="660" y="50" width="180" height="60" rx="6" fill="#161b22" stroke="#d29922"/>
+  <text x="750" y="73" text-anchor="middle" fill="#d29922" font-family="monospace" font-size="10" font-weight="bold">4. DoMigration()</text>
+  <text x="750" y="93" text-anchor="middle" fill="#8b949e" font-family="monospace" font-size="8">ioctl &rarr; kernel L1&harr;L2</text>
+  <text x="750" y="103" text-anchor="middle" fill="#8b949e" font-family="monospace" font-size="8">(existing, unchanged)</text>
+
+  <!-- Step 5 (NEW) -->
+  <rect x="870" y="50" width="160" height="60" rx="6" fill="rgba(248,81,73,0.08)" stroke="#f85149" stroke-width="2"/>
+  <text x="950" y="73" text-anchor="middle" fill="#f85149" font-family="monospace" font-size="10" font-weight="bold">5. DoSwapOut()</text>
+  <text x="950" y="93" text-anchor="middle" fill="#f85149" font-family="monospace" font-size="8">NEW: process_madvise</text>
+  <text x="950" y="103" text-anchor="middle" fill="#f85149" font-family="monospace" font-size="8">(MADV_PAGEOUT)</text>
+
+  <!-- Arrows between steps -->
+  <line x1="210" y1="80" x2="238" y2="80" stroke="#58a6ff" stroke-width="1.5" marker-end="url(#df1)"/>
+  <line x1="420" y1="80" x2="448" y2="80" stroke="#58a6ff" stroke-width="1.5" marker-end="url(#df1)"/>
+  <line x1="630" y1="80" x2="658" y2="80" stroke="#58a6ff" stroke-width="1.5" marker-end="url(#df1)"/>
+  <line x1="840" y1="80" x2="868" y2="80" stroke="#f85149" stroke-width="2" marker-end="url(#df2)"/>
+
+  <!-- DoSwapOut detail -->
+  <rect x="30" y="140" width="1000" height="320" rx="8" fill="rgba(248,81,73,0.03)" stroke="#f85149" stroke-dasharray="6,3"/>
+  <text x="530" y="165" text-anchor="middle" fill="#f85149" font-family="monospace" font-size="12" font-weight="bold">DoSwapOut() &mdash; Detailed Execution Path</text>
+
+  <rect x="60" y="185" width="200" height="55" rx="6" fill="#161b22" stroke="#f85149"/>
+  <text x="160" y="207" text-anchor="middle" fill="#f85149" font-family="monospace" font-size="10">5a. Select Pages</text>
+  <text x="160" y="225" text-anchor="middle" fill="#8b949e" font-family="monospace" font-size="8">cold_windows &ge; threshold</text>
+  <text x="160" y="235" text-anchor="middle" fill="#8b949e" font-family="monospace" font-size="8">on L2 NUMA nodes only</text>
+
+  <rect x="290" y="185" width="200" height="55" rx="6" fill="#161b22" stroke="#f85149"/>
+  <text x="390" y="207" text-anchor="middle" fill="#f85149" font-family="monospace" font-size="10">5b. Build iovec[]</text>
+  <text x="390" y="225" text-anchor="middle" fill="#8b949e" font-family="monospace" font-size="8">phys addr &rarr; virtual addr</text>
+  <text x="390" y="235" text-anchor="middle" fill="#8b949e" font-family="monospace" font-size="8">via /proc/pid/pagemap</text>
+
+  <rect x="520" y="185" width="200" height="55" rx="6" fill="#161b22" stroke="#f85149"/>
+  <text x="620" y="207" text-anchor="middle" fill="#f85149" font-family="monospace" font-size="10">5c. Open pidfd</text>
+  <text x="620" y="225" text-anchor="middle" fill="#8b949e" font-family="monospace" font-size="8">pidfd_open(pid, 0)</text>
+  <text x="620" y="235" text-anchor="middle" fill="#8b949e" font-family="monospace" font-size="8">cache &amp; reuse per process</text>
+
+  <rect x="750" y="185" width="260" height="55" rx="6" fill="#161b22" stroke="#f85149" stroke-width="2"/>
+  <text x="880" y="207" text-anchor="middle" fill="#f85149" font-family="monospace" font-size="10" font-weight="bold">5d. Syscall</text>
+  <text x="880" y="225" text-anchor="middle" fill="#8b949e" font-family="monospace" font-size="8">process_madvise(pidfd, iovec, n,</text>
+  <text x="880" y="235" text-anchor="middle" fill="#8b949e" font-family="monospace" font-size="8">MADV_PAGEOUT, 0)</text>
+
+  <line x1="260" y1="212" x2="288" y2="212" stroke="#f85149" stroke-width="1.2" marker-end="url(#df2)"/>
+  <line x1="490" y1="212" x2="518" y2="212" stroke="#f85149" stroke-width="1.2" marker-end="url(#df2)"/>
+  <line x1="720" y1="212" x2="748" y2="212" stroke="#f85149" stroke-width="1.5" marker-end="url(#df2)"/>
+
+  <!-- Kernel path -->
+  <rect x="60" y="270" width="950" height="30" rx="0" fill="#bc8cff10"/>
+  <text x="530" y="290" text-anchor="middle" fill="#bc8cff" font-family="monospace" font-size="10">&mdash;&mdash; Kernel Space (automatic, no SMAP code) &mdash;&mdash;</text>
+
+  <rect x="60" y="310" width="180" height="45" rx="6" fill="#161b22" stroke="#bc8cff"/>
+  <text x="150" y="330" text-anchor="middle" fill="#bc8cff" font-family="monospace" font-size="9">madvise_pageout()</text>
+  <text x="150" y="345" text-anchor="middle" fill="#8b949e" font-family="monospace" font-size="7">clear PTE young bit</text>
+
+  <rect x="270" y="310" width="180" height="45" rx="6" fill="#161b22" stroke="#bc8cff"/>
+  <text x="360" y="330" text-anchor="middle" fill="#bc8cff" font-family="monospace" font-size="9">shrink_folio_list()</text>
+  <text x="360" y="345" text-anchor="middle" fill="#8b949e" font-family="monospace" font-size="7">isolate from LRU</text>
+
+  <rect x="480" y="310" width="180" height="45" rx="6" fill="#161b22" stroke="#bc8cff"/>
+  <text x="570" y="330" text-anchor="middle" fill="#bc8cff" font-family="monospace" font-size="9">add_to_swap()</text>
+  <text x="570" y="345" text-anchor="middle" fill="#8b949e" font-family="monospace" font-size="7">allocate swap entry</text>
+
+  <rect x="690" y="310" width="160" height="45" rx="6" fill="#161b22" stroke="#bc8cff"/>
+  <text x="770" y="330" text-anchor="middle" fill="#bc8cff" font-family="monospace" font-size="9">swap_writepage()</text>
+  <text x="770" y="345" text-anchor="middle" fill="#8b949e" font-family="monospace" font-size="7">bio &rarr; NVMe driver</text>
+
+  <rect x="880" y="310" width="130" height="45" rx="6" fill="rgba(248,81,73,0.1)" stroke="#f85149"/>
+  <text x="945" y="330" text-anchor="middle" fill="#f85149" font-family="monospace" font-size="9">NVMe SSD</text>
+  <text x="945" y="345" text-anchor="middle" fill="#8b949e" font-family="monospace" font-size="7">Page on disk</text>
+
+  <line x1="240" y1="332" x2="268" y2="332" stroke="#bc8cff" stroke-width="1" marker-end="url(#df1)"/>
+  <line x1="450" y1="332" x2="478" y2="332" stroke="#bc8cff" stroke-width="1" marker-end="url(#df1)"/>
+  <line x1="660" y1="332" x2="688" y2="332" stroke="#bc8cff" stroke-width="1" marker-end="url(#df1)"/>
+  <line x1="850" y1="332" x2="878" y2="332" stroke="#f85149" stroke-width="1.5" marker-end="url(#df2)"/>
+
+  <!-- Update accounting -->
+  <rect x="60" y="380" width="280" height="45" rx="6" fill="#161b22" stroke="#3fb950"/>
+  <text x="200" y="400" text-anchor="middle" fill="#3fb950" font-family="monospace" font-size="10">5e. Update Accounting</text>
+  <text x="200" y="418" text-anchor="middle" fill="#8b949e" font-family="monospace" font-size="8">Read /proc/pid/status VmSwap &rarr; update SwapAccounting</text>
+
+  <line x1="880" y1="240" x2="880" y2="270" stroke="#f85149" stroke-width="1.5" marker-end="url(#df2)" stroke-dasharray="4,2"/>
+  <line x1="880" y1="355" x2="200" y2="378" stroke="#3fb950" stroke-width="1" marker-end="url(#df3)" stroke-dasharray="4,2"/>
+</svg>
+</div>
+
+<h3 id="component-map">2.3 Component Map</h3>
+
+<table>
+<tr><th>Component</th><th>Status</th><th>Location</th><th>Responsibility</th></tr>
+<tr><td>SwapOutExecutor</td><td><span class="badge badge-new">NEW</span></td><td><code>strategy/swap_out.c</code></td><td>Execute process_madvise syscall with batched iovec</td></tr>
+<tr><td>ColdWindowTracker</td><td><span class="badge badge-new">NEW</span></td><td><code>strategy/cold_tracker.c</code></td><td>Track consecutive zero-freq windows per page</td></tr>
+<tr><td>SwapDeviceManager</td><td><span class="badge badge-new">NEW</span></td><td><code>manage/swap_device.c</code></td><td>Manage NVMe swap device lifecycle (swapon/swapoff)</td></tr>
+<tr><td>SwapAccountant</td><td><span class="badge badge-new">NEW</span></td><td><code>manage/swap_account.c</code></td><td>Per-process swap usage tracking via /proc</td></tr>
+<tr><td>SwapConfig</td><td><span class="badge badge-new">NEW</span></td><td><code>manage/swap_config.c</code></td><td>Persist swap settings to /dev/shm</td></tr>
+<tr><td>SeparateStrategy</td><td><span class="badge badge-orange">MODIFIED</span></td><td><code>strategy/separate_strategy.c</code></td><td>Add SWAP_OUT direction after existing L1&harr;L2 logic</td></tr>
+<tr><td>ScanMigrateWork</td><td><span class="badge badge-orange">MODIFIED</span></td><td><code>strategy/migration.c</code></td><td>Call DoSwapOut() after DoMigration()</td></tr>
+<tr><td>ProcessAttribute</td><td><span class="badge badge-orange">MODIFIED</span></td><td><code>manage/manage.h</code></td><td>Add SwapAccounting fields</td></tr>
+<tr><td>MigrateDirection</td><td><span class="badge badge-orange">MODIFIED</span></td><td><code>manage/manage.h</code></td><td>Add SWAP_OUT, SWAP_IN values</td></tr>
+</table>
+
+
+<!-- ============================================================ -->
+<h2 id="swap-setup">3. NVMe Swap Device Setup</h2>
+
+<h3 id="swap-config">3.1 Swap Device Configuration</h3>
+
+<p>SMAP manages the NVMe swap device lifecycle. The swap device can be a dedicated NVMe partition
+or a swap file on an NVMe filesystem. Partition is preferred for production; file is easier for testing.</p>
+
+<pre><code><span class="kw">struct</span> <span class="fn">SwapDeviceConfig</span> {
+    <span class="kw">char</span> device_path[<span class="num">256</span>];     <span class="cm">// e.g., "/dev/nvme0n1p3" or "/swap/swapfile"</span>
+    <span class="kw">enum</span> { SWAP_PARTITION, SWAP_FILE } type;
+    <span class="kw">uint64_t</span> size_bytes;        <span class="cm">// Swap device capacity</span>
+    <span class="kw">int</span> priority;               <span class="cm">// swapon priority (0-32767, higher = preferred)</span>
+    <span class="kw">bool</span> enable_discard;        <span class="cm">// TRIM/discard for NVMe (recommended)</span>
+    <span class="kw">bool</span> auto_swapon;           <span class="cm">// Auto-enable on SMAP start</span>
+};
+
+<span class="kw">struct</span> <span class="fn">SwapPolicy</span> {
+    <span class="kw">uint32_t</span> cold_window_threshold;  <span class="cm">// Consecutive zero-freq windows before swap (default: 5)</span>
+    <span class="kw">uint64_t</span> max_swap_per_cycle;     <span class="cm">// Max pages to swap per ScanMigrateWork cycle</span>
+    <span class="kw">uint64_t</span> max_swap_per_process;   <span class="cm">// Max swap bytes per process (0 = unlimited)</span>
+    <span class="kw">double</span> l2_watermark_ratio;       <span class="cm">// Start swapping when L2 usage exceeds this ratio (e.g., 0.85)</span>
+    <span class="kw">uint32_t</span> batch_size;             <span class="cm">// iovec entries per process_madvise call (default: 64)</span>
+    <span class="kw">bool</span> swap_enabled;               <span class="cm">// Global swap enable/disable</span>
+};</code></pre>
+
+<h3 id="swap-init">3.2 Initialization &amp; swapon</h3>
+
+<pre><code><span class="cm">// SwapDeviceManager::Init()</span>
+<span class="kw">int</span> <span class="fn">SwapDeviceInit</span>(<span class="kw">struct</span> SwapDeviceConfig *cfg) {
+    <span class="cm">// 1. Validate device exists and is NVMe</span>
+    <span class="kw">if</span> (access(cfg->device_path, F_OK) != <span class="num">0</span>)
+        <span class="kw">return</span> -ENODEV;
+
+    <span class="cm">// 2. Check if already swapon'd</span>
+    <span class="kw">if</span> (IsDeviceAlreadySwap(cfg->device_path))
+        <span class="kw">return</span> <span class="num">0</span>;  <span class="cm">// Already active</span>
+
+    <span class="cm">// 3. Format as swap (only if SWAP_PARTITION and not already formatted)</span>
+    <span class="kw">if</span> (cfg->type == SWAP_PARTITION && !IsSwapFormatted(cfg->device_path)) {
+        ret = system_cmd(<span class="str">"mkswap %s"</span>, cfg->device_path);
+        <span class="kw">if</span> (ret) <span class="kw">return</span> ret;
+    }
+
+    <span class="cm">// 4. Enable swap with priority and discard</span>
+    <span class="kw">char</span> cmd[<span class="num">512</span>];
+    snprintf(cmd, <span class="kw">sizeof</span>(cmd), <span class="str">"swapon -p %d %s %s"</span>,
+             cfg->priority,
+             cfg->enable_discard ? <span class="str">"-o discard=pages"</span> : <span class="str">""</span>,
+             cfg->device_path);
+    <span class="kw">return</span> system_cmd(cmd);
+}
+
+<span class="cm">// Check /proc/swaps for active swap device</span>
+<span class="kw">static bool</span> <span class="fn">IsDeviceAlreadySwap</span>(<span class="kw">const char</span> *path) {
+    FILE *f = fopen(<span class="str">"/proc/swaps"</span>, <span class="str">"r"</span>);
+    <span class="cm">// Parse and match device_path against first column</span>
+    ...
+}</code></pre>
+
+<h3 id="swap-tuning">3.3 Kernel Tuning Parameters</h3>
+
+<p>SMAP should configure kernel parameters at swap initialization for optimal NVMe performance:</p>
+
+<pre><code><span class="kw">void</span> <span class="fn">TuneKernelSwapParams</span>(<span class="kw">void</span>) {
+    <span class="cm">// Low swappiness: let SMAP control what gets swapped, not kernel LRU</span>
+    write_sysctl(<span class="str">"vm/swappiness"</span>, <span class="str">"10"</span>);
+
+    <span class="cm">// Disable page-cluster readahead (NVMe is fast enough for single-page I/O)</span>
+    write_sysctl(<span class="str">"vm/page-cluster"</span>, <span class="str">"0"</span>);
+
+    <span class="cm">// Enable VMA-based readahead (better hit rate on NVMe)</span>
+    write_file(<span class="str">"/sys/kernel/mm/swap/vma_ra_enabled"</span>, <span class="str">"1"</span>);
+}</code></pre>
+
+<div class="warn">
+<strong>Important:</strong> Setting <code>vm.swappiness=10</code> (not 0) ensures the kernel doesn&rsquo;t aggressively
+swap on its own, but still allows <code>MADV_PAGEOUT</code> to work. With <code>swappiness=0</code>, the kernel
+refuses to swap unless under extreme memory pressure, which could cause <code>MADV_PAGEOUT</code>
+to fail silently.
+</div>
+
+<h3 id="zswap-interaction">3.4 Zswap Interaction</h3>
+
+<p>If zswap is enabled (common on openEuler), <code>MADV_PAGEOUT</code> pages go through zswap first:</p>
+
+<table>
+<tr><th>Zswap State</th><th>MADV_PAGEOUT Behavior</th><th>Recommendation</th></tr>
+<tr><td>Disabled</td><td>Pages go directly to NVMe swap</td><td>Simplest, predictable latency</td></tr>
+<tr><td>Enabled, writeback=1</td><td>Pages compressed in RAM first, evicted to NVMe on pool pressure</td><td>Good &mdash; free compression tier</td></tr>
+<tr><td>Enabled, writeback=0</td><td>Pages compressed but never reach NVMe</td><td>Bad &mdash; defeats the purpose</td></tr>
+</table>
+
+<pre><code><span class="cm">// Ensure zswap writeback is enabled if zswap is active</span>
+<span class="kw">void</span> <span class="fn">ValidateZswapConfig</span>(<span class="kw">void</span>) {
+    <span class="kw">if</span> (read_file_bool(<span class="str">"/sys/module/zswap/parameters/enabled"</span>)) {
+        <span class="cm">// Ensure writeback is on</span>
+        write_file(<span class="str">"/sys/module/zswap/parameters/writeback_enabled"</span>, <span class="str">"Y"</span>);
+        SMAP_LOGGER_INFO(<span class="str">"Zswap active with writeback: pages will be compressed before NVMe"</span>);
+    }
+}</code></pre>
+
+
+<!-- ============================================================ -->
+<h2 id="cold-detection">4. Cold Page Detection</h2>
+
+<h3 id="existing-freq">4.1 Existing Frequency Tracking</h3>
+
+<p>SMAP already tracks per-page access frequency via the <code>ActcData</code> array. After each scan cycle,
+<code>FillActcByBitmap()</code> in <code>manage.c</code> populates:</p>
+
+<pre><code><span class="cm">// Per-page data (already exists)</span>
+actcData[nid][i].freq  <span class="cm">// Access frequency in current scan window (0-256)</span>
+actcData[nid][i].addr  <span class="cm">// Physical address of page</span>
+
+<span class="cm">// Summary statistics (already exists)</span>
+actCount[nid].freqZero <span class="cm">// Count of pages with freq=0 in this window</span>
+actCount[nid].freqNum  <span class="cm">// Count of pages with freq>0</span></code></pre>
+
+<p>Pages with <code>freq=0</code> are already identified &mdash; they are sorted to the front when
+<code>ActcFreqAscFunc()</code> sorts in ascending order. The existing <code>CalcSwapNum4K()</code> function
+at line 373 of <code>separate_strategy.c</code> already uses <code>freqZero</code> to count cold pages.</p>
+
+<h3 id="cold-window">4.2 Multi-Window Cold Tracking (NEW)</h3>
+
+<p>A page with <code>freq=0</code> in one window might be temporarily idle. To avoid swapping pages
+that will be accessed soon, we require pages to have <code>freq=0</code> for
+<strong>N consecutive scan windows</strong> before becoming swap-eligible.</p>
+
+<pre><code><span class="cm">// NEW: Per-page cold window counter</span>
+<span class="cm">// Stored as a parallel array to actcData[], indexed by physical address</span>
+
+<span class="kw">typedef struct</span> {
+    <span class="kw">uint64_t</span> page_count;             <span class="cm">// Number of tracked L2 pages</span>
+    <span class="kw">uint64_t</span> *phys_addrs;            <span class="cm">// Sorted physical address array</span>
+    <span class="kw">uint8_t</span> *cold_windows;            <span class="cm">// cold_windows[i] for phys_addrs[i]</span>
+    <span class="kw">uint8_t</span> threshold;                <span class="cm">// Consecutive windows required (default: 5)</span>
+} <span class="fn">ColdTracker</span>;
+
+<span class="cm">// Per-process, per-L2-NUMA-node tracking</span>
+<span class="kw">typedef struct</span> {
+    ColdTracker tracker[REMOTE_NUMA_NUM];  <span class="cm">// One per L2 node</span>
+} <span class="fn">ProcessColdState</span>;
+
+<span class="cm">// Called after BuildAllPidData() in each ScanMigrateWork cycle</span>
+<span class="kw">void</span> <span class="fn">UpdateColdWindowCounters</span>(ProcessAttr *process) {
+    <span class="kw">for</span> (<span class="kw">int</span> nid = LOCAL_NUMA_NUM; nid < MAX_NODES; nid++) {
+        <span class="kw">if</span> (NotInAttrL2(process, nid)) <span class="kw">continue</span>;
+        ActcData *data = process->scanAttr.actcData[nid];
+        <span class="kw">uint64_t</span> len = process->scanAttr.actcLen[nid];
+        ColdTracker *ct = &process->coldState.tracker[nid - LOCAL_NUMA_NUM];
+
+        <span class="cm">// Rebuild if page set changed</span>
+        <span class="kw">if</span> (ct->page_count != len) {
+            RebuildColdTracker(ct, data, len);
+        }
+
+        <span class="cm">// Update counters</span>
+        <span class="kw">for</span> (<span class="kw">uint64_t</span> i = <span class="num">0</span>; i < len; i++) {
+            <span class="kw">if</span> (data[i].freq == <span class="num">0</span>) {
+                <span class="kw">if</span> (ct->cold_windows[i] < <span class="num">255</span>)
+                    ct->cold_windows[i]++;  <span class="cm">// Saturating increment</span>
+            } <span class="kw">else</span> {
+                ct->cold_windows[i] = <span class="num">0</span>;   <span class="cm">// Reset on any access</span>
+            }
+        }
+    }
+}</code></pre>
+
+<h3 id="swap-criteria">4.3 SWAP_OUT Eligibility Criteria</h3>
+
+<p>A page on L2 is eligible for swap-out to L3 when <strong>all</strong> conditions are met:</p>
+
+<table>
+<tr><th>#</th><th>Condition</th><th>Rationale</th></tr>
+<tr><td>1</td><td><code>cold_windows[i] &ge; threshold</code> (default 5)</td><td>Page consistently unused across multiple scan windows</td></tr>
+<tr><td>2</td><td>L2 memory usage &gt; <code>l2_watermark_ratio</code> (default 85%)</td><td>Only swap when L2 is under pressure</td></tr>
+<tr><td>3</td><td>Process swap usage &lt; <code>max_swap_per_process</code></td><td>Per-process swap quota not exceeded</td></tr>
+<tr><td>4</td><td>Swap device has free space (from <code>/proc/swaps</code>)</td><td>Don&rsquo;t attempt swap into full device</td></tr>
+<tr><td>5</td><td><code>process->enableSwap == true</code></td><td>Per-process swap enable flag (existing)</td></tr>
+<tr><td>6</td><td><code>swapPolicy.swap_enabled == true</code></td><td>Global swap enable flag</td></tr>
+<tr><td>7</td><td><code>!isWhiteListPage</code></td><td>Whitelist pages are never swapped</td></tr>
+</table>
+
+
+<!-- ============================================================ -->
+<h2 id="swapout">5. Swap-Out Path: process_madvise(MADV_PAGEOUT)</h2>
+
+<h3 id="syscall">5.1 Syscall Mechanics</h3>
+
+<pre><code><span class="cm">// Linux 5.10+ syscall</span>
+<span class="kw">ssize_t</span> <span class="fn">process_madvise</span>(
+    <span class="kw">int</span> pidfd,                    <span class="cm">// PID file descriptor from pidfd_open()</span>
+    <span class="kw">const struct</span> iovec *iovec,    <span class="cm">// Array of {base_addr, length} ranges</span>
+    <span class="kw">size_t</span> vlen,                  <span class="cm">// Number of iovec entries</span>
+    <span class="kw">int</span> advice,                   <span class="cm">// MADV_PAGEOUT (21)</span>
+    <span class="kw">unsigned int</span> flags             <span class="cm">// Must be 0</span>
+);
+
+<span class="cm">// Return: bytes successfully advised (may be less than requested)
+// Requires: CAP_SYS_NICE (Linux 5.12+), swap must be active</span></code></pre>
+
+<div class="note">
+<strong>Key semantics:</strong> <code>MADV_PAGEOUT</code> is a <em>hint</em>. The kernel will attempt to reclaim
+the pages, but success is not guaranteed. Pages may be skipped if they are locked, mapped by
+multiple processes, or if the swap device is full. The return value indicates how many bytes
+were processed, not how many were actually swapped.
+</div>
+
+<h3 id="pidfd">5.2 pidfd Management</h3>
+
+<pre><code><span class="cm">// Cache pidfd per process to avoid repeated syscalls</span>
+<span class="kw">typedef struct</span> {
+    pid_t pid;
+    <span class="kw">int</span> pidfd;        <span class="cm">// -1 if not open</span>
+} <span class="fn">PidfdCache</span>;
+
+<span class="cm">// ProcessAttribute addition:</span>
+<span class="kw">int</span> swap_pidfd;   <span class="cm">// Cached pidfd, -1 = not opened</span>
+
+<span class="kw">static int</span> <span class="fn">GetOrOpenPidfd</span>(ProcessAttr *process) {
+    <span class="kw">if</span> (process->swap_pidfd >= <span class="num">0</span>)
+        <span class="kw">return</span> process->swap_pidfd;
+
+    <span class="kw">int</span> fd = syscall(SYS_pidfd_open, process->pid, <span class="num">0</span>);
+    <span class="kw">if</span> (fd < <span class="num">0</span>) {
+        SMAP_LOGGER_ERROR(<span class="str">"pidfd_open(%d) failed: %s"</span>, process->pid, strerror(errno));
+        <span class="kw">return</span> -errno;
+    }
+    process->swap_pidfd = fd;
+    <span class="kw">return</span> fd;
+}
+
+<span class="cm">// Close pidfd when process is removed from management</span>
+<span class="kw">static void</span> <span class="fn">ClosePidfd</span>(ProcessAttr *process) {
+    <span class="kw">if</span> (process->swap_pidfd >= <span class="num">0</span>) {
+        close(process->swap_pidfd);
+        process->swap_pidfd = -<span class="num">1</span>;
+    }
+}</code></pre>
+
+<h3 id="batching">5.3 Batching &amp; Rate Limiting</h3>
+
+<div class="warn">
+<strong>Performance hazard:</strong> <code>process_madvise()</code> walks page tables, which can block for seconds
+on processes with large RSS. Unbounded calls can stall SMAP&rsquo;s periodic migration thread.
+</div>
+
+<pre><code><span class="kw">#define</span> SWAP_BATCH_SIZE      <span class="num">64</span>     <span class="cm">// iovec entries per syscall</span>
+<span class="kw">#define</span> MAX_SWAP_PER_CYCLE   <span class="num">1024</span>   <span class="cm">// Max pages per ScanMigrateWork cycle</span>
+<span class="kw">#define</span> SWAP_YIELD_US        <span class="num">1000</span>   <span class="cm">// usleep between batches to avoid stalling</span>
+
+<span class="kw">int</span> <span class="fn">DoSwapOut</span>(ProcessAttr *process, <span class="kw">uint64_t</span> *swap_addrs, <span class="kw">uint64_t</span> nr_pages) {
+    <span class="kw">int</span> pidfd = GetOrOpenPidfd(process);
+    <span class="kw">if</span> (pidfd < <span class="num">0</span>) <span class="kw">return</span> pidfd;
+
+    <span class="kw">uint64_t</span> pages_done = <span class="num">0</span>;
+    <span class="kw">uint64_t</span> pages_remaining = MIN(nr_pages, MAX_SWAP_PER_CYCLE);
+    <span class="kw">struct</span> iovec iov[SWAP_BATCH_SIZE];
+
+    <span class="kw">while</span> (pages_done < pages_remaining) {
+        <span class="kw">int</span> batch = MIN(SWAP_BATCH_SIZE, pages_remaining - pages_done);
+
+        <span class="cm">// Convert physical addresses to virtual addresses for this process</span>
+        <span class="kw">for</span> (<span class="kw">int</span> i = <span class="num">0</span>; i < batch; i++) {
+            <span class="kw">uint64_t</span> vaddr = PhysToVirt(process, swap_addrs[pages_done + i]);
+            <span class="kw">if</span> (vaddr == <span class="num">0</span>) <span class="kw">continue</span>;  <span class="cm">// Skip unmapped pages</span>
+            iov[i].iov_base = (<span class="kw">void</span> *)vaddr;
+            iov[i].iov_len = GetPageSize();  <span class="cm">// 4K or 2M</span>
+        }
+
+        <span class="cm">// Issue syscall</span>
+        ssize_t ret = syscall(SYS_process_madvise, pidfd, iov, batch, MADV_PAGEOUT, <span class="num">0</span>);
+        <span class="kw">if</span> (ret < <span class="num">0</span>) {
+            <span class="kw">if</span> (errno == EAGAIN) {
+                usleep(SWAP_YIELD_US);
+                <span class="kw">continue</span>;  <span class="cm">// Retry</span>
+            }
+            SMAP_LOGGER_ERROR(<span class="str">"process_madvise pid %d failed: %s"</span>, process->pid, strerror(errno));
+            <span class="kw">break</span>;
+        }
+
+        pages_done += batch;
+
+        <span class="cm">// Yield between batches to avoid monopolizing CPU</span>
+        <span class="kw">if</span> (pages_done < pages_remaining)
+            usleep(SWAP_YIELD_US);
+    }
+
+    <span class="cm">// Update accounting</span>
+    UpdateSwapAccounting(process);
+    <span class="kw">return</span> pages_done;
+}</code></pre>
+
+<h3 id="thp">5.4 Transparent Hugepage Handling</h3>
+
+<div class="warn">
+<strong>Limitation:</strong> When <code>MADV_PAGEOUT</code> encounters a THP (2M hugepage), the kernel splits it
+into 4K pages before swapping. The hugepage is <strong>not reconstructed</strong> on swap-in &mdash; pages
+return as 4K. This causes performance regression for VM workloads using 2M pages.
+</div>
+
+<p>Mitigation strategies:</p>
+<ol>
+<li><strong>Prefer 4K mode for swap:</strong> Only swap pages from processes tracked in <code>PAGETYPE_NORMAL</code> (4K) mode</li>
+<li><strong>Avoid swapping VM pages:</strong> Set <code>enableSwap=false</code> for <code>VM_TYPE</code> processes by default</li>
+<li><strong>Higher cold threshold for VMs:</strong> If VM swap is enabled, use a much higher <code>cold_window_threshold</code> (e.g., 20 vs 5)</li>
+<li><strong>Accept the tradeoff:</strong> For severely cold pages (freq=0 for 20+ windows), losing hugepage status is acceptable</li>
+</ol>
+
+<h3 id="error-handling">5.5 Error Handling &amp; Partial Success</h3>
+
+<pre><code><span class="cm">// process_madvise returns bytes, not pages. Handle partial success:</span>
+ssize_t bytes_advised = syscall(SYS_process_madvise, pidfd, iov, vlen, MADV_PAGEOUT, <span class="num">0</span>);
+
+<span class="kw">if</span> (bytes_advised < <span class="num">0</span>) {
+    <span class="kw">switch</span> (errno) {
+    <span class="kw">case</span> ESRCH:   <span class="cm">// Process died</span>
+        ClosePidfd(process);
+        RemoveManagedProcess(<span class="num">1</span>, &process->pid);
+        <span class="kw">break</span>;
+    <span class="kw">case</span> EACCES:  <span class="cm">// Permission denied (need CAP_SYS_NICE)</span>
+        SMAP_LOGGER_ERROR(<span class="str">"Need CAP_SYS_NICE for process_madvise"</span>);
+        swapPolicy.swap_enabled = <span class="kw">false</span>;  <span class="cm">// Disable swap globally</span>
+        <span class="kw">break</span>;
+    <span class="kw">case</span> EAGAIN:  <span class="cm">// Temporary failure, retry next cycle</span>
+        <span class="kw">break</span>;
+    <span class="kw">case</span> EINVAL:  <span class="cm">// Bad address (page already unmapped)</span>
+        <span class="cm">// Skip this page, continue with next batch</span>
+        <span class="kw">break</span>;
+    <span class="kw">case</span> ENOMEM:  <span class="cm">// Swap device full</span>
+        SMAP_LOGGER_WARN(<span class="str">"Swap device full, pausing swap-out"</span>);
+        <span class="kw">break</span>;
+    }
+} <span class="kw">else</span> <span class="kw">if</span> (bytes_advised < total_requested) {
+    <span class="cm">// Partial success: some iovecs processed, some failed</span>
+    <span class="kw">uint64_t</span> pages_done = bytes_advised / GetPageSize();
+    SMAP_LOGGER_INFO(<span class="str">"Partial swap: %lu/%lu pages"</span>, pages_done, nr_pages);
+}</code></pre>
+
+
+<!-- ============================================================ -->
+<h2 id="swapin">6. Swap-In Path</h2>
+
+<div class="good">
+<strong>No SMAP code needed for swap-in.</strong> When a swapped page is accessed, the CPU generates a
+page fault. The kernel&rsquo;s <code>do_swap_page()</code> handler automatically reads the page from
+NVMe swap, allocates a new page frame, and installs the PTE. This is completely transparent
+to SMAP.
+</div>
+
+<p>The kernel places the faulted page on the <strong>local NUMA node</strong> of the faulting CPU. This means
+swap-in goes <code>L3 &rarr; L1</code> directly (not back to L2), which is the desired behavior &mdash; a
+page that was cold enough to reach L3 but is now accessed again should return to fast memory.</p>
+
+<pre><code><span class="cm">// Kernel swap-in path (no SMAP involvement):
+//
+// 1. CPU accesses swapped page &rarr; page fault
+// 2. do_swap_page() reads swap entry from PTE
+// 3. swap_readpage() &rarr; bio &rarr; NVMe driver &rarr; page data
+// 4. Allocate new page on faulting CPU's local NUMA node
+// 5. Install PTE, page now on L1
+//
+// SMAP sees the page on L1 in the next scan cycle via actcData[l1Node]
+// If the page stays hot, SMAP keeps it on L1
+// If the page goes cold again, normal DEMOTE to L2, then eventually SWAP_OUT again</span></code></pre>
+
+<p>SMAP should update its accounting when it detects a process&rsquo;s <code>VmSwap</code> decreased between cycles,
+indicating swap-in activity:</p>
+
+<pre><code><span class="kw">void</span> <span class="fn">DetectSwapIn</span>(ProcessAttr *process) {
+    <span class="kw">uint64_t</span> current_swap = ReadVmSwap(process->pid);
+    <span class="kw">if</span> (current_swap < process->swapAccounting.last_vm_swap) {
+        <span class="kw">uint64_t</span> swapped_in = process->swapAccounting.last_vm_swap - current_swap;
+        process->swapAccounting.total_swap_in_kb += swapped_in;
+        SMAP_LOGGER_INFO(<span class="str">"pid %d swap-in detected: %lu KB"</span>, process->pid, swapped_in);
+    }
+    process->swapAccounting.last_vm_swap = current_swap;
+}</code></pre>
+
+
+<!-- ============================================================ -->
+<h2 id="accounting">7. Swap Accounting &amp; Monitoring</h2>
+
+<pre><code><span class="kw">typedef struct</span> {
+    <span class="kw">uint64_t</span> current_swap_kb;       <span class="cm">// Current VmSwap from /proc/pid/status</span>
+    <span class="kw">uint64_t</span> last_vm_swap;          <span class="cm">// Previous cycle's VmSwap (for delta detection)</span>
+    <span class="kw">uint64_t</span> total_swap_out_kb;     <span class="cm">// Cumulative pages swapped out</span>
+    <span class="kw">uint64_t</span> total_swap_in_kb;      <span class="cm">// Cumulative pages swapped in (detected via delta)</span>
+    <span class="kw">uint64_t</span> swap_out_failures;     <span class="cm">// Failed process_madvise calls</span>
+    <span class="kw">uint64_t</span> max_swap_kb;           <span class="cm">// Per-process swap limit (0=unlimited)</span>
+} <span class="fn">SwapAccounting</span>;
+
+<span class="cm">// Read VmSwap from /proc/[pid]/status</span>
+<span class="kw">static uint64_t</span> <span class="fn">ReadVmSwap</span>(pid_t pid) {
+    <span class="kw">char</span> path[<span class="num">64</span>];
+    snprintf(path, <span class="kw">sizeof</span>(path), <span class="str">"/proc/%d/status"</span>, pid);
+    FILE *f = fopen(path, <span class="str">"r"</span>);
+    <span class="kw">if</span> (!f) <span class="kw">return</span> <span class="num">0</span>;
+
+    <span class="kw">char</span> line[<span class="num">256</span>];
+    <span class="kw">uint64_t</span> swap_kb = <span class="num">0</span>;
+    <span class="kw">while</span> (fgets(line, <span class="kw">sizeof</span>(line), f)) {
+        <span class="kw">if</span> (strncmp(line, <span class="str">"VmSwap:"</span>, <span class="num">7</span>) == <span class="num">0</span>) {
+            sscanf(line + <span class="num">7</span>, <span class="str">"%lu"</span>, &swap_kb);
+            <span class="kw">break</span>;
+        }
+    }
+    fclose(f);
+    <span class="kw">return</span> swap_kb;
+}
+
+<span class="cm">// Global swap device monitoring</span>
+<span class="kw">typedef struct</span> {
+    <span class="kw">uint64_t</span> total_kb;          <span class="cm">// Total swap capacity</span>
+    <span class="kw">uint64_t</span> used_kb;           <span class="cm">// Currently used</span>
+    <span class="kw">uint64_t</span> free_kb;           <span class="cm">// Available</span>
+    <span class="kw">double</span> usage_ratio;         <span class="cm">// used / total</span>
+} <span class="fn">SwapDeviceStatus</span>;
+
+<span class="cm">// Parse /proc/swaps for device status</span>
+<span class="kw">int</span> <span class="fn">ReadSwapDeviceStatus</span>(<span class="kw">const char</span> *device_path, SwapDeviceStatus *status);</code></pre>
+
+
+<!-- ============================================================ -->
+<h2 id="strategy">8. Strategy Engine Changes</h2>
+
+<h3 id="three-tier-decision">8.1 Three-Tier Decision Logic</h3>
+
+<div class="svg-wrap">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 500" width="1000" height="500">
+  <defs>
+    <marker id="td1" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#3fb950"/></marker>
+    <marker id="td2" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#f85149"/></marker>
+    <marker id="td3" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#d29922"/></marker>
+  </defs>
+  <rect width="1000" height="500" rx="10" fill="#0d1117"/>
+  <text x="500" y="25" text-anchor="middle" fill="#3fb950" font-family="monospace" font-size="13" font-weight="bold">Three-Tier Decision Flow in ScanMigrateWork()</text>
+
+  <!-- Phase 1 -->
+  <rect x="350" y="45" width="300" height="45" rx="6" fill="#161b22" stroke="#58a6ff"/>
+  <text x="500" y="72" text-anchor="middle" fill="#58a6ff" font-family="monospace" font-size="11">ScanMigrateWork() wakes up</text>
+
+  <!-- Phase 2: existing L1<->L2 -->
+  <rect x="30" y="120" width="440" height="100" rx="8" fill="#161b22" stroke="#d29922" stroke-width="2"/>
+  <text x="250" y="145" text-anchor="middle" fill="#d29922" font-family="monospace" font-size="12" font-weight="bold">Phase 1: L1 &harr; L2 Migration (EXISTING)</text>
+  <text x="250" y="168" text-anchor="middle" fill="#8b949e" font-family="monospace" font-size="9">RunStrategy() &rarr; SeparateStrategy() &rarr; BaseStrategy()</text>
+  <text x="250" y="185" text-anchor="middle" fill="#8b949e" font-family="monospace" font-size="9">DEMOTE cold L1 &rarr; L2 | PROMOTE hot L2 &rarr; L1 | SWAP exchange</text>
+  <text x="250" y="202" text-anchor="middle" fill="#8b949e" font-family="monospace" font-size="9">DoMigration() &rarr; ioctl(SMAP_MIG_MIGRATE)</text>
+
+  <!-- Phase 3: NEW L2->L3 -->
+  <rect x="530" y="120" width="440" height="100" rx="8" fill="rgba(248,81,73,0.06)" stroke="#f85149" stroke-width="2"/>
+  <text x="750" y="145" text-anchor="middle" fill="#f85149" font-family="monospace" font-size="12" font-weight="bold">Phase 2: L2 &rarr; L3 Swap-Out (NEW)</text>
+  <text x="750" y="168" text-anchor="middle" fill="#8b949e" font-family="monospace" font-size="9">UpdateColdWindowCounters()</text>
+  <text x="750" y="185" text-anchor="middle" fill="#8b949e" font-family="monospace" font-size="9">SelectSwapCandidates() &mdash; cold_windows &ge; threshold on L2</text>
+  <text x="750" y="202" text-anchor="middle" fill="#8b949e" font-family="monospace" font-size="9">DoSwapOut() &rarr; process_madvise(MADV_PAGEOUT)</text>
+
+  <line x1="500" y1="90" x2="250" y2="118" stroke="#d29922" stroke-width="1.5" marker-end="url(#td3)"/>
+  <line x1="500" y1="90" x2="750" y2="118" stroke="#f85149" stroke-width="1.5" marker-end="url(#td2)"/>
+
+  <!-- Decision tree for Phase 2 -->
+  <rect x="530" y="250" width="180" height="50" rx="20" fill="#161b22" stroke="#f85149"/>
+  <text x="620" y="275" text-anchor="middle" fill="#f85149" font-family="monospace" font-size="10">swap_enabled?</text>
+  <text x="460" y="285" fill="#f85149" font-family="monospace" font-size="8">no &rarr; skip</text>
+  <line x1="620" y1="300" x2="620" y2="325" stroke="#3fb950" stroke-width="1.2" marker-end="url(#td1)"/>
+  <text x="635" y="315" fill="#3fb950" font-family="monospace" font-size="8">yes</text>
+
+  <rect x="530" y="330" width="180" height="50" rx="20" fill="#161b22" stroke="#f85149"/>
+  <text x="620" y="350" text-anchor="middle" fill="#f85149" font-family="monospace" font-size="9">L2 usage &gt;</text>
+  <text x="620" y="365" text-anchor="middle" fill="#f85149" font-family="monospace" font-size="9">watermark?</text>
+  <text x="460" y="365" fill="#f85149" font-family="monospace" font-size="8">no &rarr; skip</text>
+  <line x1="620" y1="380" x2="620" y2="405" stroke="#3fb950" stroke-width="1.2" marker-end="url(#td1)"/>
+  <text x="635" y="395" fill="#3fb950" font-family="monospace" font-size="8">yes</text>
+
+  <rect x="520" y="410" width="200" height="45" rx="6" fill="rgba(248,81,73,0.1)" stroke="#f85149" stroke-width="2"/>
+  <text x="620" y="430" text-anchor="middle" fill="#f85149" font-family="monospace" font-size="10" font-weight="bold">DoSwapOut()</text>
+  <text x="620" y="445" text-anchor="middle" fill="#8b949e" font-family="monospace" font-size="8">process_madvise(MADV_PAGEOUT)</text>
+
+  <!-- Sequence note -->
+  <rect x="30" y="260" width="440" height="50" rx="6" fill="#161b22" stroke="#3fb950"/>
+  <text x="250" y="282" text-anchor="middle" fill="#3fb950" font-family="monospace" font-size="10" font-weight="bold">Execution Order: Phase 1 FIRST, then Phase 2</text>
+  <text x="250" y="300" text-anchor="middle" fill="#8b949e" font-family="monospace" font-size="8">L1&harr;L2 migration must complete before L2&rarr;L3 swap evaluation</text>
+
+  <!-- Why after -->
+  <rect x="30" y="340" width="440" height="115" rx="6" fill="#161b22" stroke="#8b949e"/>
+  <text x="250" y="362" text-anchor="middle" fill="#8b949e" font-family="monospace" font-size="10" font-weight="bold">Why Phase 2 runs AFTER Phase 1:</text>
+  <text x="50" y="385" fill="#8b949e" font-family="monospace" font-size="8">1. Phase 1 may PROMOTE hot L2 pages &rarr; fewer swap candidates</text>
+  <text x="50" y="402" fill="#8b949e" font-family="monospace" font-size="8">2. Phase 1 may DEMOTE cold L1 pages &rarr; L2 pressure increases</text>
+  <text x="50" y="419" fill="#8b949e" font-family="monospace" font-size="8">3. Phase 2 only swaps truly unwanted pages that survived Phase 1</text>
+  <text x="50" y="436" fill="#8b949e" font-family="monospace" font-size="8">4. Prevents thrashing: don't swap pages that will be promoted next</text>
+</svg>
+</div>
+
+<h3 id="strategy-integration">8.2 Integration with SeparateStrategy</h3>
+
+<p>The swap-out logic is <strong>not</strong> inside <code>SeparateStrategy()</code>. It runs as a separate phase after
+the existing migration to avoid coupling. The integration point is in <code>ScanMigrateWork()</code>:</p>
+
+<pre><code><span class="cm">// Modified ScanMigrateWork() in migration.c</span>
+<span class="kw">int</span> <span class="fn">ScanMigrateWork</span>(ThreadCtx *ctx) {
+    <span class="kw">struct</span> ProcessManager *manager = ctx->processManager;
+
+    <span class="cm">// === EXISTING: Phase 1 &mdash; L1 &harr; L2 migration ===</span>
+    CheckAndRemoveInvalidProcess();
+    BuildAllPidData();
+    CleanStrategyAttribute(manager);
+    PerformMigrationPreparation(manager);
+
+    <span class="kw">struct</span> MigrateMsg mMsg;
+    InitMigrateMsg(&mMsg, manager);
+    <span class="kw">uint64_t</span> migratePage = <span class="num">0</span>;
+
+    ProcessAttr *current;
+    <span class="kw">for</span> (current = manager->processes; current; current = current->next) {
+        BuildMigrationMsg(current, &mMsg, &migratePage);
+    }
+    <span class="kw">if</span> (mMsg.cnt > <span class="num">0</span>) {
+        DoMigration(&mMsg, manager);
+        UpdateMigResult(&mMsg, manager);
+    }
+
+    <span class="cm">// === NEW: Phase 2 &mdash; L2 &rarr; L3 swap-out ===</span>
+    <span class="new"><span class="kw">if</span> (manager->swapPolicy.swap_enabled && IsSwapDeviceActive()) {
+        <span class="kw">for</span> (current = manager->processes; current; current = current->next) {
+            UpdateColdWindowCounters(current);
+
+            <span class="kw">if</span> (!current->enableSwap) <span class="kw">continue</span>;
+            <span class="kw">if</span> (current->type == VM_TYPE && !manager->swapPolicy.allow_vm_swap) <span class="kw">continue</span>;
+
+            <span class="kw">uint64_t</span> nr_candidates;
+            <span class="kw">uint64_t</span> *swap_addrs = SelectSwapCandidates(current, &nr_candidates);
+            <span class="kw">if</span> (nr_candidates > <span class="num">0</span>) {
+                <span class="kw">int</span> swapped = DoSwapOut(current, swap_addrs, nr_candidates);
+                SMAP_LOGGER_INFO(<span class="str">"pid %d swapped %d/%lu pages to NVMe"</span>,
+                                 current->pid, swapped, nr_candidates);
+            }
+            free(swap_addrs);
+        }
+    }</span>
+
+    <span class="kw">return</span> <span class="num">0</span>;
+}</code></pre>
+
+
+<!-- ============================================================ -->
+<h2 id="data-structures">9. New Data Structures</h2>
+
+<h3>Additions to manage.h</h3>
+
+<pre><code><span class="cm">// manage.h additions</span>
+
+<span class="cm">// Extended MigrateDirection enum</span>
+<span class="kw">typedef enum</span> {
+    DEMOTE,      <span class="cm">// Cold L1 &rarr; L2</span>
+    PROMOTE,     <span class="cm">// Hot L2 &rarr; L1</span>
+    SWAP,        <span class="cm">// Bidirectional L1 &harr; L2</span>
+    <span class="new">SWAP_OUT,    <span class="cm">// Coldest L2 &rarr; L3 NVMe (NEW)</span></span>
+    <span class="new">SWAP_IN,     <span class="cm">// L3 &rarr; L1 via page fault (NEW, informational only)</span></span>
+} MigrateDirection;
+
+<span class="cm">// Per-process swap accounting (add to ProcessAttribute)</span>
+<span class="kw">struct</span> ProcessAttribute {
+    <span class="cm">... existing fields ...</span>
+    <span class="new">SwapAccounting swapAccounting;    <span class="cm">// Swap usage tracking</span></span>
+    <span class="new">ProcessColdState coldState;       <span class="cm">// Per-L2-node cold window tracking</span></span>
+    <span class="new"><span class="kw">int</span> swap_pidfd;                   <span class="cm">// Cached pidfd for process_madvise (-1 = not open)</span></span>
+};
+
+<span class="cm">// Global swap policy (add to ProcessManager or as global)</span>
+<span class="kw">struct</span> ProcessManager {
+    <span class="cm">... existing fields ...</span>
+    <span class="new">SwapPolicy swapPolicy;            <span class="cm">// Global swap configuration</span></span>
+    <span class="new">SwapDeviceConfig swapDevice;      <span class="cm">// NVMe swap device config</span></span>
+    <span class="new">SwapDeviceStatus swapDeviceStatus; <span class="cm">// Current swap usage</span></span>
+};</code></pre>
+
+
+<!-- ============================================================ -->
+<h2 id="code-changes">10. Code Change Map</h2>
+
+<table>
+<tr><th>File</th><th>Change</th><th>Effort</th></tr>
+<tr><td><code>manage/manage.h</code></td><td>Add <code>SWAP_OUT/SWAP_IN</code> to enum, <code>SwapAccounting</code>, <code>ProcessColdState</code>, <code>swap_pidfd</code> field, <code>SwapPolicy</code>, <code>SwapDeviceConfig</code></td><td><span class="badge badge-green">S</span></td></tr>
+<tr><td><code>manage/manage.c</code></td><td>Init swap fields in <code>ProcessManagerInit()</code>, cleanup pidfd in <code>RemoveManagedProcess()</code></td><td><span class="badge badge-green">S</span></td></tr>
+<tr><td><code>strategy/migration.c</code></td><td>Add Phase 2 swap-out loop in <code>ScanMigrateWork()</code></td><td><span class="badge badge-orange">M</span></td></tr>
+<tr><td><code>strategy/swap_out.c</code> <span class="badge badge-new">NEW</span></td><td><code>DoSwapOut()</code>, <code>SelectSwapCandidates()</code>, <code>PhysToVirt()</code>, pidfd management</td><td><span class="badge badge-orange">M</span></td></tr>
+<tr><td><code>strategy/cold_tracker.c</code> <span class="badge badge-new">NEW</span></td><td><code>ColdTracker</code>, <code>UpdateColdWindowCounters()</code>, <code>RebuildColdTracker()</code></td><td><span class="badge badge-orange">M</span></td></tr>
+<tr><td><code>manage/swap_device.c</code> <span class="badge badge-new">NEW</span></td><td><code>SwapDeviceInit()</code>, <code>SwapDeviceShutdown()</code>, <code>IsSwapDeviceActive()</code>, kernel tuning</td><td><span class="badge badge-green">S</span></td></tr>
+<tr><td><code>manage/swap_account.c</code> <span class="badge badge-new">NEW</span></td><td><code>ReadVmSwap()</code>, <code>UpdateSwapAccounting()</code>, <code>DetectSwapIn()</code></td><td><span class="badge badge-green">S</span></td></tr>
+<tr><td><code>manage/swap_config.c</code> <span class="badge badge-new">NEW</span></td><td>Persist/recover swap config to <code>/dev/shm/smap_swap_config</code></td><td><span class="badge badge-green">S</span></td></tr>
+<tr><td><code>smap_interface.c</code></td><td>Wire up new SDK functions: <code>ubturbo_smap_swap_config_set()</code>, <code>ubturbo_smap_swap_stats_query()</code></td><td><span class="badge badge-green">S</span></td></tr>
+<tr><td><code>smap_interface.h</code> (SDK)</td><td>Add swap config and stats query API prototypes + structs</td><td><span class="badge badge-green">S</span></td></tr>
+</table>
+
+<p><strong>Total new code:</strong> ~800&ndash;1200 lines across 5 new files + modifications to 5 existing files.<br>
+<strong>Zero kernel module changes.</strong></p>
+
+
+<!-- ============================================================ -->
+<h2 id="operational-flow">11. Operational Flow</h2>
+
+<div class="svg-wrap">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1060 500" width="1060" height="500">
+  <defs>
+    <marker id="of1" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#58a6ff"/></marker>
+    <marker id="of2" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#f85149"/></marker>
+  </defs>
+  <rect width="1060" height="500" rx="10" fill="#0d1117"/>
+  <text x="530" y="25" text-anchor="middle" fill="#3fb950" font-family="monospace" font-size="13" font-weight="bold">Complete Operational Lifecycle</text>
+
+  <!-- Timeline -->
+  <line x1="50" y1="55" x2="1010" y2="55" stroke="#30363d" stroke-width="2"/>
+
+  <!-- Phase 0: Init -->
+  <rect x="50" y="70" width="180" height="120" rx="6" fill="#161b22" stroke="#3fb950"/>
+  <text x="140" y="92" text-anchor="middle" fill="#3fb950" font-family="monospace" font-size="10" font-weight="bold">Phase 0: Init</text>
+  <text x="60" y="112" fill="#8b949e" font-family="monospace" font-size="8">1. smap_start()</text>
+  <text x="60" y="128" fill="#f85149" font-family="monospace" font-size="8">2. SwapDeviceInit()</text>
+  <text x="60" y="144" fill="#f85149" font-family="monospace" font-size="8">3. TuneKernelSwapParams()</text>
+  <text x="60" y="160" fill="#f85149" font-family="monospace" font-size="8">4. ValidateZswapConfig()</text>
+  <text x="60" y="176" fill="#8b949e" font-family="monospace" font-size="8">5. Load SwapConfig from shm</text>
+
+  <circle cx="140" cy="55" r="6" fill="#3fb950"/>
+  <text x="140" y="48" text-anchor="middle" fill="#3fb950" font-family="monospace" font-size="8">BOOT</text>
+
+  <!-- Phase 1: Add Process -->
+  <rect x="260" y="70" width="180" height="120" rx="6" fill="#161b22" stroke="#58a6ff"/>
+  <text x="350" y="92" text-anchor="middle" fill="#58a6ff" font-family="monospace" font-size="10" font-weight="bold">Phase 1: Add Process</text>
+  <text x="270" y="112" fill="#8b949e" font-family="monospace" font-size="8">1. ProcessAddManage()</text>
+  <text x="270" y="128" fill="#8b949e" font-family="monospace" font-size="8">2. Start AF-bit scanning</text>
+  <text x="270" y="144" fill="#f85149" font-family="monospace" font-size="8">3. Init ColdTracker (NEW)</text>
+  <text x="270" y="160" fill="#f85149" font-family="monospace" font-size="8">4. Init SwapAccounting (NEW)</text>
+  <text x="270" y="176" fill="#f85149" font-family="monospace" font-size="8">5. swap_pidfd = -1 (NEW)</text>
+
+  <circle cx="350" cy="55" r="6" fill="#58a6ff"/>
+
+  <!-- Phase 2: Periodic Cycle -->
+  <rect x="470" y="70" width="300" height="120" rx="6" fill="#161b22" stroke="#d29922"/>
+  <text x="620" y="92" text-anchor="middle" fill="#d29922" font-family="monospace" font-size="10" font-weight="bold">Phase 2: Each Migration Cycle (2s)</text>
+  <text x="480" y="112" fill="#8b949e" font-family="monospace" font-size="8">1. BuildAllPidData() &mdash; read freq from kernel</text>
+  <text x="480" y="128" fill="#f85149" font-family="monospace" font-size="8">2. UpdateColdWindowCounters() (NEW)</text>
+  <text x="480" y="144" fill="#8b949e" font-family="monospace" font-size="8">3. RunStrategy() + DoMigration() (L1&harr;L2)</text>
+  <text x="480" y="160" fill="#f85149" font-family="monospace" font-size="8">4. SelectSwapCandidates() + DoSwapOut() (NEW)</text>
+  <text x="480" y="176" fill="#f85149" font-family="monospace" font-size="8">5. UpdateSwapAccounting() (NEW)</text>
+
+  <circle cx="620" cy="55" r="6" fill="#d29922"/>
+  <path d="M650,55 C700,30 690,30 640,55" fill="none" stroke="#d29922" stroke-width="1" marker-end="url(#of1)"/>
+  <text x="680" y="38" fill="#d29922" font-family="monospace" font-size="7">repeat</text>
+
+  <!-- Phase 3: Swap-In (automatic) -->
+  <rect x="800" y="70" width="210" height="120" rx="6" fill="#161b22" stroke="#bc8cff"/>
+  <text x="905" y="92" text-anchor="middle" fill="#bc8cff" font-family="monospace" font-size="10" font-weight="bold">Phase 3: Swap-In (Auto)</text>
+  <text x="810" y="112" fill="#8b949e" font-family="monospace" font-size="8">1. CPU page fault on L3 page</text>
+  <text x="810" y="128" fill="#8b949e" font-family="monospace" font-size="8">2. Kernel: do_swap_page()</text>
+  <text x="810" y="144" fill="#8b949e" font-family="monospace" font-size="8">3. Page returns to L1 (local)</text>
+  <text x="810" y="160" fill="#f85149" font-family="monospace" font-size="8">4. SMAP detects VmSwap &darr; (NEW)</text>
+  <text x="810" y="176" fill="#8b949e" font-family="monospace" font-size="8">5. Normal DEMOTE if cold again</text>
+
+  <circle cx="905" cy="55" r="6" fill="#bc8cff"/>
+  <text x="905" y="48" text-anchor="middle" fill="#bc8cff" font-family="monospace" font-size="7">FAULT</text>
+
+  <!-- Page lifecycle -->
+  <rect x="50" y="220" width="960" height="260" rx="8" fill="#161b2280" stroke="#30363d"/>
+  <text x="530" y="248" text-anchor="middle" fill="#e6edf3" font-family="monospace" font-size="12" font-weight="bold">Page Lifecycle Example: From Hot to Swapped and Back</text>
+
+  <rect x="80" y="270" width="120" height="40" rx="4" fill="rgba(63,185,80,0.1)" stroke="#3fb950"/>
+  <text x="140" y="295" text-anchor="middle" fill="#3fb950" font-family="monospace" font-size="9">L1: freq=200</text>
+
+  <rect x="250" y="270" width="120" height="40" rx="4" fill="rgba(63,185,80,0.1)" stroke="#3fb950"/>
+  <text x="310" y="295" text-anchor="middle" fill="#3fb950" font-family="monospace" font-size="9">L1: freq=50</text>
+
+  <rect x="420" y="270" width="120" height="40" rx="4" fill="rgba(210,153,34,0.1)" stroke="#d29922"/>
+  <text x="480" y="295" text-anchor="middle" fill="#d29922" font-family="monospace" font-size="9">L2: freq=3</text>
+  <text x="480" y="325" fill="#8b949e" font-family="monospace" font-size="7">DEMOTED</text>
+
+  <rect x="590" y="270" width="120" height="40" rx="4" fill="rgba(210,153,34,0.1)" stroke="#d29922"/>
+  <text x="650" y="295" text-anchor="middle" fill="#d29922" font-family="monospace" font-size="9">L2: freq=0</text>
+  <text x="650" y="325" fill="#8b949e" font-family="monospace" font-size="7">cold_w=1</text>
+
+  <rect x="760" y="270" width="120" height="40" rx="4" fill="rgba(210,153,34,0.1)" stroke="#f85149"/>
+  <text x="820" y="288" text-anchor="middle" fill="#f85149" font-family="monospace" font-size="9">L2: freq=0</text>
+  <text x="820" y="303" text-anchor="middle" fill="#f85149" font-family="monospace" font-size="8">cold_w=5</text>
+  <text x="820" y="325" fill="#f85149" font-family="monospace" font-size="7" font-weight="bold">SWAP_OUT!</text>
+
+  <line x1="200" y1="290" x2="248" y2="290" stroke="#3fb950" stroke-width="1" marker-end="url(#of1)"/>
+  <line x1="370" y1="290" x2="418" y2="290" stroke="#d29922" stroke-width="1.5" marker-end="url(#of1)"/>
+  <text x="385" y="283" fill="#d29922" font-family="monospace" font-size="7">DEMOTE</text>
+  <line x1="540" y1="290" x2="588" y2="290" stroke="#d29922" stroke-width="1" marker-end="url(#of1)"/>
+  <line x1="710" y1="290" x2="758" y2="290" stroke="#f85149" stroke-width="1" marker-end="url(#of2)"/>
+  <text x="720" y="283" fill="#8b949e" font-family="monospace" font-size="7">w2..w5</text>
+
+  <!-- NVMe -->
+  <rect x="760" y="350" width="120" height="40" rx="4" fill="rgba(248,81,73,0.1)" stroke="#f85149" stroke-width="2"/>
+  <text x="820" y="375" text-anchor="middle" fill="#f85149" font-family="monospace" font-size="9">L3: NVMe</text>
+
+  <line x1="820" y1="310" x2="820" y2="348" stroke="#f85149" stroke-width="2" marker-end="url(#of2)"/>
+  <text x="835" y="335" fill="#f85149" font-family="monospace" font-size="7">MADV_PAGEOUT</text>
+
+  <!-- Swap-in path -->
+  <rect x="590" y="420" width="120" height="40" rx="4" fill="rgba(63,185,80,0.1)" stroke="#3fb950"/>
+  <text x="650" y="445" text-anchor="middle" fill="#3fb950" font-family="monospace" font-size="9">L1: accessed!</text>
+
+  <line x1="760" y1="375" x2="712" y2="435" stroke="#bc8cff" stroke-width="1.5" marker-end="url(#of1)"/>
+  <text x="720" y="400" fill="#bc8cff" font-family="monospace" font-size="7">page fault</text>
+  <text x="720" y="412" fill="#bc8cff" font-family="monospace" font-size="7">L3 &rarr; L1</text>
+</svg>
+</div>
+
+
+<!-- ============================================================ -->
+<h2 id="config-persist">12. Configuration &amp; Persistence</h2>
+
+<p>Swap configuration is persisted to <code>/dev/shm/smap_swap_config</code> (separate from main smap_config).
+On SMAP restart, the swap device is re-enabled automatically if <code>auto_swapon=true</code>.</p>
+
+<pre><code><span class="cm">// Swap config binary layout</span>
+<span class="kw">struct</span> <span class="fn">SwapConfigFile</span> {
+    <span class="kw">uint8_t</span> version;               <span class="cm">// SWAP_CONFIG_VER = 1</span>
+    <span class="kw">uint8_t</span> swap_enabled;           <span class="cm">// Global enable</span>
+    <span class="kw">uint16_t</span> cold_window_threshold; <span class="cm">// Consecutive zero-freq windows</span>
+    <span class="kw">uint32_t</span> max_swap_per_cycle;    <span class="cm">// Max pages per cycle</span>
+    <span class="kw">uint32_t</span> batch_size;            <span class="cm">// iovec batch size</span>
+    <span class="kw">double</span> l2_watermark_ratio;      <span class="cm">// L2 pressure threshold</span>
+    <span class="cm">// Device config</span>
+    <span class="kw">char</span> device_path[<span class="num">256</span>];
+    <span class="kw">uint8_t</span> device_type;            <span class="cm">// PARTITION or FILE</span>
+    <span class="kw">int32_t</span> priority;
+    <span class="kw">uint8_t</span> enable_discard;
+    <span class="kw">uint8_t</span> auto_swapon;
+};</code></pre>
+
+<h3>New SDK API Functions</h3>
+
+<pre><code><span class="cm">// New SDK functions (add to smap_interface.h)</span>
+
+<span class="cm">// Configure NVMe swap device and policy</span>
+<span class="kw">int</span> <span class="fn">ubturbo_smap_swap_config_set</span>(<span class="kw">struct</span> SwapDeviceConfig *dev, <span class="kw">struct</span> SwapPolicy *policy);
+
+<span class="cm">// Query swap statistics (global + per-process)</span>
+<span class="kw">int</span> <span class="fn">ubturbo_smap_swap_stats_query</span>(pid_t pid, SwapAccounting *result);
+
+<span class="cm">// Enable/disable swap globally</span>
+<span class="kw">int</span> <span class="fn">ubturbo_smap_swap_enable</span>(<span class="kw">bool</span> enable);
+
+<span class="cm">// Set per-process swap limit</span>
+<span class="kw">int</span> <span class="fn">ubturbo_smap_swap_limit_set</span>(pid_t pid, <span class="kw">uint64_t</span> max_swap_kb);</code></pre>
+
+
+<!-- ============================================================ -->
+<h2 id="limitations">13. Limitations &amp; Mitigations</h2>
+
+<table>
+<tr><th>Limitation</th><th>Impact</th><th>Mitigation</th></tr>
+<tr><td>THP split on swap-out</td><td>2M pages become 4K after swap-in; VM performance regression</td><td>Disable swap for VM_TYPE by default; use high threshold (20) if enabled; khugepaged may recoalesce</td></tr>
+<tr><td>No direct physical addr control</td><td>SMAP tracks phys addrs but MADV_PAGEOUT needs virtual addrs</td><td>Use /proc/pid/pagemap to convert phys&rarr;virt (existing capability via <code>walk_pid_pagemap</code>)</td></tr>
+<tr><td>process_madvise is a hint</td><td>Kernel may not actually swap the page</td><td>Verify via VmSwap delta; retry in next cycle</td></tr>
+<tr><td>CAP_SYS_NICE required</td><td>SMAP daemon needs capability</td><td>Already runs as root/privileged via systemd; add capability in service file</td></tr>
+<tr><td>Kernel version &ge; 5.10</td><td>Not available on older kernels</td><td>openEuler 22.03+ uses 5.10; runtime check and graceful disable</td></tr>
+<tr><td>Latency of process_madvise</td><td>Can block for seconds on large RSS</td><td>Batch with SWAP_BATCH_SIZE=64, yield between batches</td></tr>
+<tr><td>vm.swappiness interaction</td><td>Kernel may independently swap pages</td><td>Set swappiness=10 to minimize kernel-initiated swap</td></tr>
+<tr><td>Cold tracker memory overhead</td><td>1 byte per L2 page per process</td><td>At 256GB L2 with 4K pages: 64MB tracker memory. Acceptable.</td></tr>
+</table>
+
+
+<!-- ============================================================ -->
+<h2 id="impl-plan">14. Implementation Plan</h2>
+
+<div class="phase">
+<div class="phase-title">Phase 1: Foundation (3&ndash;4 days)</div>
+<ul>
+<li>Add <code>SWAP_OUT</code>/<code>SWAP_IN</code> to <code>MigrateDirection</code> enum</li>
+<li>Add <code>SwapAccounting</code>, <code>SwapPolicy</code>, <code>SwapDeviceConfig</code> structs to <code>manage.h</code></li>
+<li>Implement <code>swap_device.c</code>: <code>SwapDeviceInit()</code>, <code>IsSwapDeviceActive()</code>, <code>TuneKernelSwapParams()</code></li>
+<li>Implement <code>swap_account.c</code>: <code>ReadVmSwap()</code>, <code>UpdateSwapAccounting()</code></li>
+<li>Initialize swap fields in <code>ProcessManagerInit()</code></li>
+</ul>
+</div>
+
+<div class="phase">
+<div class="phase-title">Phase 2: Cold Tracking (2&ndash;3 days)</div>
+<ul>
+<li>Implement <code>cold_tracker.c</code>: <code>ColdTracker</code> struct, <code>UpdateColdWindowCounters()</code>, <code>RebuildColdTracker()</code></li>
+<li>Add <code>ProcessColdState</code> to <code>ProcessAttribute</code></li>
+<li>Wire <code>UpdateColdWindowCounters()</code> into <code>ScanMigrateWork()</code> after <code>BuildAllPidData()</code></li>
+<li>Add <code>SelectSwapCandidates()</code> that returns phys addrs where <code>cold_windows &ge; threshold</code></li>
+</ul>
+</div>
+
+<div class="phase">
+<div class="phase-title">Phase 3: Swap-Out Execution (3&ndash;4 days)</div>
+<ul>
+<li>Implement <code>swap_out.c</code>: <code>DoSwapOut()</code>, pidfd management, iovec batching</li>
+<li>Implement <code>PhysToVirt()</code> using <code>/proc/pid/pagemap</code> (leverage existing <code>walk_pid_pagemap</code> logic)</li>
+<li>Add Phase 2 swap-out loop to <code>ScanMigrateWork()</code></li>
+<li>Add <code>DetectSwapIn()</code> for swap-in accounting via VmSwap delta</li>
+</ul>
+</div>
+
+<div class="phase">
+<div class="phase-title">Phase 4: Config &amp; API (2 days)</div>
+<ul>
+<li>Implement <code>swap_config.c</code>: persist/recover from <code>/dev/shm/smap_swap_config</code></li>
+<li>Add SDK API functions: <code>ubturbo_smap_swap_config_set()</code>, <code>ubturbo_smap_swap_stats_query()</code></li>
+<li>Wire through IPC codec + server handler</li>
+</ul>
+</div>
+
+<div class="phase">
+<div class="phase-title">Phase 5: Testing &amp; Tuning (3&ndash;5 days)</div>
+<ul>
+<li>Unit test: cold tracker with synthetic frequency data</li>
+<li>Integration test: end-to-end swap-out with real NVMe device</li>
+<li>Stress test: 100+ processes, monitor swap throughput and latency</li>
+<li>Benchmark: compare with manual <code>swapoff/swapon</code> cycles</li>
+<li>Tune defaults: cold_window_threshold, batch_size, watermark_ratio</li>
+<li>Test zswap interaction scenarios</li>
+</ul>
+</div>
+
+<p><strong>Total estimated effort: ~2&ndash;3 weeks</strong> for one developer familiar with the SMAP codebase.</p>
+
+
+<!-- ============================================================ -->
+<h2 id="references">15. References</h2>
+
+<ol>
+<li><code>process_madvise(2)</code> &mdash; Linux manual page. Requires Linux 5.10+, CAP_SYS_NICE (5.12+).</li>
+<li><code>MADV_PAGEOUT</code> &mdash; Introduced Linux 5.4. Forces page reclaim to swap.</li>
+<li><code>pidfd_open(2)</code> &mdash; Linux 5.3+. Creates process file descriptor for race-free PID operations.</li>
+<li>Linux kernel <code>mm/madvise.c</code> &mdash; <code>madvise_pageout()</code> implementation, folio isolation and reclaim.</li>
+<li>LWN: &ldquo;Introduce MADV_COLD and MADV_PAGEOUT&rdquo; &mdash; design rationale for userspace-driven reclaim.</li>
+<li>Linux <code>/proc/swaps</code>, <code>/proc/[pid]/status</code> &mdash; swap device monitoring and per-process swap tracking.</li>
+<li>Linux <code>vm.swappiness</code>, <code>vm.page-cluster</code> &mdash; kernel swap tuning parameters.</li>
+<li>zswap documentation &mdash; <code>/sys/module/zswap/parameters/</code>, interaction with <code>MADV_PAGEOUT</code>.</li>
+<li>cgroup v2 <code>memory.swap.max</code>, <code>memory.zswap.writeback</code> &mdash; per-cgroup swap controls.</li>
+<li>VMA-based swap readahead &mdash; <code>/sys/kernel/mm/swap/vma_ra_enabled</code>, optimal for NVMe.</li>
+<li>ubturbo SMAP source: <code>separate_strategy.c</code> lines 373&ndash;400 (<code>CalcSwapNum4K</code>), <code>manage.h</code> lines 95&ndash;99 (<code>MigrateDirection</code>).</li>
+<li>Existing SMAP <code>enableSwap</code> flag: <code>separate_strategy.c:137</code> &mdash; per-process swap control already wired.</li>
+</ol>
+
+<hr>
+<p style="color:var(--muted); font-size:0.85em; margin-top:2rem;">
+Design document for ubturbo/SMAP NVMe swap (Option B). Source: <code>openeuler/ubturbo</code>.
+Created 2026-04-16. Mulan PSL v2 licensed.
+</p>
+
+</body>
+</html>
