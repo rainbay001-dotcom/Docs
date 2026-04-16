@@ -116,6 +116,16 @@ kernel module. This ioctl reuses 90% of the migration infrastructure &mdash; spe
 of <code>fp_migrate_pages()</code>. The result: per-page swap control with minimal kernel changes.</p>
 
 <div class="good">
+<strong>Dual deployment support:</strong> The design supports two deployment scenarios:
+<ul style="margin:8px 0 0 20px;">
+<li><strong>L1 + L2 + L3:</strong> Standard tiered memory &mdash; cold L2 (CXL/PMEM) pages swapped to NVMe</li>
+<li><strong>L1 + L3 only:</strong> No CXL/PMEM &mdash; cold L1 (local DRAM) pages swapped directly to NVMe</li>
+</ul>
+The cold tracker auto-detects the topology via <code>process-&gt;remoteNumaCnt</code>: if no L2 nodes
+are configured, it tracks L1 nodes instead, enabling direct L1&rarr;L3 swap.
+</div>
+
+<div class="good">
 <strong>Key insight:</strong> The existing migration path already solves the hard problem (bitmap index &rarr;
 physical address &rarr; folio). We reuse that entire pipeline, substituting only the final step:
 <code>reclaim_pages()</code> instead of <code>migrate_pages()</code>.
@@ -200,7 +210,7 @@ physical address &rarr; folio). We reuse that entire pipeline, substituting only
 
   <!-- New swap-out path -->
   <rect x="520" y="350" width="490" height="55" rx="6" fill="rgba(248,81,73,0.08)" stroke="#f85149" stroke-width="2"/>
-  <text x="765" y="370" text-anchor="middle" fill="#f85149" font-family="monospace" font-size="10" font-weight="bold">NEW: ioctl(SMAP_MIG_SWAP_OUT) &mdash; L2 &rarr; L3</text>
+  <text x="765" y="370" text-anchor="middle" fill="#f85149" font-family="monospace" font-size="10" font-weight="bold">NEW: ioctl(SMAP_MIG_SWAP_OUT) &mdash; L1/L2 &rarr; L3</text>
   <text x="765" y="388" text-anchor="middle" fill="#8b949e" font-family="monospace" font-size="8">build_migrate_list &rarr; convert_pos_to_paddr_sorted &rarr; fp_reclaim_pages</text>
 
   <!-- Shared components -->
@@ -303,7 +313,7 @@ physical address &rarr; folio). We reuse that entire pipeline, substituting only
   <!-- Step 4 -->
   <rect x="780" y="50" width="250" height="65" rx="6" fill="rgba(248,81,73,0.08)" stroke="#f85149" stroke-width="2"/>
   <text x="790" y="68" fill="#f85149" font-family="monospace" font-size="10" font-weight="bold">Step 4: DoSwapOut()</text>
-  <text x="790" y="85" fill="#8b949e" font-family="monospace" font-size="8">Group indices by L2 NUMA node</text>
+  <text x="790" y="85" fill="#8b949e" font-family="monospace" font-size="8">Group indices by L1/L2 NUMA node</text>
   <text x="790" y="100" fill="#8b949e" font-family="monospace" font-size="8">Build MigrateMsg &rarr; ioctl(SWAP_OUT)</text>
 
   <!-- Arrows step 1-4 -->
@@ -684,27 +694,65 @@ exactly the same patterns as the existing migration ioctl, making review straigh
 <!-- ============================================================ -->
 <h2 id="userspace">6. User-Space Changes</h2>
 
-<h3 id="cold-tracker">6.1 Cold Tracker (strategy/cold_tracker.c) &mdash; Same as v1</h3>
+<h3 id="cold-tracker">6.1 Cold Tracker (strategy/cold_tracker.c) &mdash; Updated for L1+L3</h3>
 
-<p>The cold tracker maintains a per-page <code>cold_windows</code> counter. Each scan cycle:</p>
+<p>The cold tracker maintains a per-page <code>cold_windows</code> counter indexed by NUMA node ID
+(0..SWAP_MAX_NODES-1), covering <strong>all nodes</strong> &mdash; both L1 (local) and L2 (remote).
+This supports hosts with and without CXL/PMEM memory.</p>
 
-<ul>
-<li>If <code>actcData[nid][i].freq == 0</code>: increment <code>cold_windows[nid][i]</code> (saturate at 255)</li>
-<li>If <code>actcData[nid][i].freq &gt; 0</code>: reset <code>cold_windows[nid][i] = 0</code></li>
-</ul>
+<h4>Dual-Topology Detection: ShouldTrackNode()</h4>
 
-<pre><code><span class="kw">void</span> <span class="fn">UpdateColdWindowCounters</span>(ProcessInfo *proc, <span class="kw">int</span> nid)
+<p>The key function <code>ShouldTrackNode()</code> auto-detects which nodes to track:</p>
+
+<pre><code><span class="kw">static bool</span> <span class="fn">ShouldTrackNode</span>(ProcessAttr *process, <span class="kw">int</span> nid)
 {
-    <span class="kw">for</span> (<span class="kw">int</span> i = <span class="num">0</span>; i &lt; proc->actcLen[nid]; i++) {
-        <span class="kw">if</span> (proc->actcData[nid][i].freq == <span class="num">0</span>) {
-            <span class="kw">if</span> (proc->cold_windows[nid][i] &lt; <span class="num">255</span>)
-                proc->cold_windows[nid][i]++;
-        } <span class="kw">else</span> {
-            proc->cold_windows[nid][i] = <span class="num">0</span>;
+    <span class="kw">int</span> nrLocal = GetNrLocalNuma();
+    <span class="kw">bool</span> has_l2 = (process->remoteNumaCnt > <span class="num">0</span>);
+
+    <span class="kw">if</span> (has_l2) {
+        <span class="cm">/* L1+L2+L3: only track L2 nodes for swap */</span>
+        <span class="kw">return</span> (nid >= nrLocal) && InAttrL2(process, nid);
+    } <span class="kw">else</span> {
+        <span class="cm">/* L1+L3 only: track L1 nodes for direct swap */</span>
+        <span class="kw">return</span> (nid &lt; nrLocal) && InAttrL1(process, nid);
+    }
+}
+</code></pre>
+
+<table>
+<tr><th>Deployment</th><th>has_l2</th><th>Tracked Nodes</th><th>Swap Path</th></tr>
+<tr><td>L1 + L2 + L3</td><td><code>true</code></td><td>L2 only (nid 4&ndash;21)</td><td>Cold L2 &rarr; NVMe</td></tr>
+<tr><td>L1 + L3 only</td><td><code>false</code></td><td>L1 only (nid 0&ndash;3)</td><td>Cold L1 &rarr; NVMe directly</td></tr>
+</table>
+
+<h4>UpdateColdWindowCounters()</h4>
+
+<p>Iterates all NUMA nodes, using <code>ShouldTrackNode()</code> to filter:</p>
+
+<pre><code><span class="kw">void</span> <span class="fn">UpdateColdWindowCounters</span>(ProcessAttr *process)
+{
+    <span class="kw">for</span> (<span class="kw">int</span> nid = <span class="num">0</span>; nid &lt; MAX_NODES; nid++) {
+        <span class="kw">if</span> (!ShouldTrackNode(process, nid)) <span class="kw">continue</span>;
+
+        ColdTracker *ct = &process->coldState.tracker[nid];
+        ActcData *data = process->scanAttr.actcData[nid];
+        <span class="kw">uint64_t</span> len = process->scanAttr.actcLen[nid];
+
+        <span class="kw">for</span> (<span class="kw">uint64_t</span> i = <span class="num">0</span>; i &lt; len; i++) {
+            <span class="kw">if</span> (data[i].freq == <span class="num">0</span> && !data[i].isWhiteListPage)
+                ct->cold_windows[i]++;  <span class="cm">/* saturate at 255 */</span>
+            <span class="kw">else</span>
+                ct->cold_windows[i] = <span class="num">0</span>;  <span class="cm">/* reset on any access */</span>
         }
     }
 }
 </code></pre>
+
+<div class="note">
+<strong>Data structure change:</strong> <code>ProcessColdState.tracker[]</code> is now indexed by NUMA node ID
+(size <code>SWAP_MAX_NODES=22</code>) instead of only remote NUMA index (previously 18). This adds
+4 &times; sizeof(ColdTracker) = ~32 bytes per process &mdash; negligible overhead.
+</div>
 
 <h3 id="swap-device">6.2 Swap Device Manager (manage/swap_device.c) &mdash; Same as v1</h3>
 
@@ -752,7 +800,7 @@ Detects swap-in events (VmSwap decrease) without any kernel modification.</p>
 
 <div class="warn">
 <strong>Key change from v1:</strong> No more <code>process_madvise</code>, no <code>pidfd</code>, no PA-to-VA conversion.
-Instead, we build a <code>MigrateMsg</code> with bitmap indices (grouped by L2 NUMA node) and call the
+Instead, we build a <code>MigrateMsg</code> with bitmap indices (grouped by L1 or L2 NUMA node, depending on topology) and call the
 existing migration ioctl interface with the new <code>SMAP_MIG_SWAP_OUT</code> command. The kernel handles
 everything from index conversion to reclaim.
 </div>
@@ -769,7 +817,7 @@ everything from index conversion to reclaim.
     <span class="cm">/* Build MigrateMsg &mdash; same format as existing migration */</span>
     <span class="fn">memset</span>(&amp;mMsg, <span class="num">0</span>, <span class="kw">sizeof</span>(mMsg));
     mMsg.pid       = proc->pid;
-    mMsg.src_nid   = src_nid;       <span class="cm">/* L2 NUMA node */</span>
+    mMsg.src_nid   = src_nid;       <span class="cm">/* L1 or L2 NUMA node */</span>
     mMsg.dst_nid   = -<span class="num">1</span>;            <span class="cm">/* unused for swap-out */</span>
     mMsg.nr_pages  = nr_candidates;
 
@@ -848,14 +896,14 @@ the same scan cycle, using the same access data that Phase 1 already loaded:</p>
         <span class="fn">DoMigration</span>(manager, proc);  <span class="cm">/* existing code */</span>
     }
 
-    <span class="cm">/* Phase 2: NVMe swap-out for cold L2 pages (NEW) */</span>
+    <span class="cm">/* Phase 2: NVMe swap-out for cold L1/L2 pages (NEW) */</span>
     <span class="kw">if</span> (!g_swap_enabled)
         <span class="kw">return</span>;
 
     <span class="kw">for</span> (<span class="kw">int</span> i = <span class="num">0</span>; i &lt; manager->nr_procs; i++) {
         ProcessInfo *proc = &amp;manager->procs[i];
 
-        <span class="cm">/* Iterate L2 NUMA nodes */</span>
+        <span class="cm">/* Iterate L1/L2 NUMA nodes (auto-detected by ShouldTrackNode) */</span>
         <span class="kw">for</span> (<span class="kw">int</span> nid = <span class="num">0</span>; nid &lt; manager->nr_l2_nodes; nid++) {
             <span class="kw">int</span> l2_nid = manager->l2_nodes[nid];
 
@@ -1044,7 +1092,19 @@ infrastructure for I/O, PTE manipulation, and page fault handling.
   <td>SMAP cannot influence where swapped-in pages land</td>
   <td>Kernel already does the right thing: allocates on faulting CPU&rsquo;s local NUMA node (L1). This is optimal.</td>
 </tr>
+<tr>
+  <td>L1+L3 mode skips tiering</td>
+  <td>Without L2, cold L1 pages go directly to NVMe (higher latency gap vs L2)</td>
+  <td>Higher cold_window_threshold recommended for L1+L3 (e.g., 10 vs 5) to avoid swapping warm pages. Auto-detected via <code>remoteNumaCnt==0</code>.</td>
+</tr>
 </table>
+
+<div class="good">
+<strong>Dual deployment:</strong> The design auto-detects topology &mdash; no configuration needed.
+<code>ShouldTrackNode()</code> checks <code>remoteNumaCnt</code>:
+if L2 exists, swap from L2; if not, swap from L1 directly.
+Both paths use the same ioctl, same kernel reclaim, same accounting.
+</div>
 
 
 <!-- ============================================================ -->
