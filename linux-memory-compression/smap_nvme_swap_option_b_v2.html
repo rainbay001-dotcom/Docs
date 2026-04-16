@@ -131,6 +131,35 @@ physical address &rarr; folio). We reuse that entire pipeline, substituting only
 <code>reclaim_pages()</code> instead of <code>migrate_pages()</code>.
 </div>
 
+<h3>End-to-End Swap-Out Pipeline Summary</h3>
+
+<pre><code>  <span class="cm">User-space (libsmap.so)                Kernel (smap_tiering.ko)</span>
+  <span class="cm">──────────────────────                ─────────────────────────</span>
+  ColdTracker: freq=0 for
+  N windows &rarr; bitmap indices
+          &darr;
+  DoSwapOut() builds MigrateMsg
+  with bitmap indices per L1/L2 node
+          &darr;
+  ioctl(SMAP_MIG_SWAP_OUT) &mdash;&mdash;&mdash;&rarr; __ioctl_swap_out()
+                                        &darr;
+                                        build_migrate_list()
+                                        &darr; convert_pos_to_paddr_sorted()
+                                        &darr; (bitmap index &rarr; physical addr)
+                                        &darr;
+                                        do_swap_out()
+                                        &darr; pfn_to_page &rarr; folio
+                                        &darr; fp_isolate_folio_to_list()
+                                        &darr; fp_reclaim_pages() &mdash;&rarr; kernel
+                                        &darr;                       swap I/O
+                                        &darr;                       &rarr; NVMe
+                                        &darr;
+                                        Copy results to user
+                                        &darr;
+  UpdateSwapAccounting() &larr;&mdash;&mdash;&mdash;&mdash;&mdash;&mdash;&rsquo;
+  (read /proc/pid/status VmSwap)
+</code></pre>
+
 <h3>v1 vs v2 at a Glance</h3>
 
 <table>
