@@ -1,0 +1,1238 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>SMAP NVMe Swap — Option A Detailed Design: Custom Kernel Swap</title>
+<style>
+:root { --bg: #0d1117; --surface: #161b22; --border: #30363d; --text: #e6edf3; --muted: #8b949e;
+  --green: #3fb950; --blue: #58a6ff; --purple: #bc8cff; --orange: #d29922; --red: #f85149; --cyan: #39d2c0; }
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { background: var(--bg); color: var(--text); font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', monospace;
+  line-height: 1.7; padding: 40px 60px; max-width: 1200px; margin: 0 auto; }
+h1 { color: var(--green); font-size: 2em; margin-bottom: 8px; }
+h2 { color: var(--blue); font-size: 1.4em; margin: 40px 0 16px; border-left: 3px solid var(--blue); padding-left: 12px; }
+h3 { color: var(--purple); font-size: 1.15em; margin: 28px 0 12px; }
+h4 { color: var(--orange); font-size: 1em; margin: 20px 0 8px; }
+hr { border: none; border-top: 2px solid var(--blue); margin: 20px 0 30px; }
+p { margin: 10px 0; }
+a { color: var(--blue); text-decoration: none; }
+code { background: var(--surface); padding: 2px 6px; border-radius: 4px; font-size: 0.92em; color: var(--cyan); }
+pre { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 16px 20px;
+  overflow-x: auto; margin: 12px 0; font-size: 0.88em; line-height: 1.6; }
+pre code { background: none; padding: 0; color: var(--text); }
+table { border-collapse: collapse; width: 100%; margin: 16px 0; }
+th, td { border: 1px solid var(--border); padding: 10px 14px; text-align: left; }
+th { background: var(--surface); color: var(--blue); }
+td { color: var(--text); }
+tr:nth-child(even) td { background: rgba(22,27,34,0.5); }
+.subtitle { color: var(--muted); font-size: 0.95em; margin-bottom: 6px; }
+.badge { display: inline-block; padding: 2px 10px; border-radius: 12px; font-size: 0.8em; font-weight: bold; margin-right: 6px; }
+.badge-green { background: rgba(63,185,80,0.15); color: var(--green); border: 1px solid var(--green); }
+.badge-orange { background: rgba(210,153,34,0.15); color: var(--orange); border: 1px solid var(--orange); }
+.badge-red { background: rgba(248,81,73,0.15); color: var(--red); border: 1px solid var(--red); }
+.badge-purple { background: rgba(188,140,255,0.15); color: var(--purple); border: 1px solid var(--purple); }
+.badge-new { background: rgba(248,81,73,0.2); color: var(--red); border: 1px solid var(--red); font-size: 0.75em; }
+.note { background: rgba(88,166,255,0.08); border-left: 3px solid var(--blue); padding: 12px 16px; margin: 16px 0; border-radius: 0 6px 6px 0; }
+.warn { background: rgba(210,153,34,0.08); border-left: 3px solid var(--orange); padding: 12px 16px; margin: 16px 0; border-radius: 0 6px 6px 0; }
+.good { background: rgba(63,185,80,0.08); border-left: 3px solid var(--green); padding: 12px 16px; margin: 16px 0; border-radius: 0 6px 6px 0; }
+.svg-wrap { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 20px; margin: 20px 0; overflow-x: auto; }
+ul, ol { margin: 8px 0 8px 24px; }
+li { margin: 4px 0; }
+.toc { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 20px 28px; margin: 20px 0; }
+.toc ul { list-style: none; margin: 0; padding: 0; }
+.toc li { margin: 4px 0; }
+.toc li ul { padding-left: 20px; }
+.toc a { color: var(--muted); }
+.toc a:hover { color: var(--blue); }
+.kw { color: var(--purple); } .fn { color: var(--blue); } .cm { color: var(--muted); font-style: italic; }
+.str { color: var(--green); } .num { color: var(--orange); } .new { color: var(--red); }
+.phase { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 16px 20px; margin: 12px 0; }
+.phase-title { color: var(--green); font-weight: bold; margin-bottom: 8px; }
+</style>
+</head>
+<body>
+
+<h1>SMAP NVMe Swap &mdash; Option A Detailed Design</h1>
+<p class="subtitle">Custom Kernel Swap with Direct <code>submit_bio</code>, PTE Manipulation, and Custom Fault Handler</p>
+<p class="subtitle">Design Document &mdash; ubturbo/SMAP (openEuler) &mdash; April 2026</p>
+<hr>
+
+<!-- TOC -->
+<div class="toc">
+<strong style="color:var(--green)">Contents</strong>
+<ul>
+<li>1. <a href="#overview">Design Overview</a></li>
+<li>2. <a href="#arch">Architecture</a>
+  <ul>
+    <li>2.1 <a href="#arch-diagram">Three-Tier Architecture Diagram</a></li>
+    <li>2.2 <a href="#component-map">Component Map</a></li>
+  </ul>
+</li>
+<li>3. <a href="#swap-map">Swap Map Allocator</a>
+  <ul>
+    <li>3.1 <a href="#bitmap-design">Bitmap Design</a></li>
+    <li>3.2 <a href="#4k-2m-slots">4K and 2M Slot Sizes</a></li>
+    <li>3.3 <a href="#alloc-free">Allocation &amp; Free</a></li>
+  </ul>
+</li>
+<li>4. <a href="#bio-engine">Block I/O Engine</a>
+  <ul>
+    <li>4.1 <a href="#bio-submit">submit_bio Mechanics</a></li>
+    <li>4.2 <a href="#bio-completion">Completion Callbacks</a></li>
+    <li>4.3 <a href="#bio-batch">Batched I/O</a></li>
+    <li>4.4 <a href="#bio-error">Error Handling &amp; Retry</a></li>
+  </ul>
+</li>
+<li>5. <a href="#swapout">Swap-Out Path</a></li>
+<li>6. <a href="#swapin">Swap-In / Page Fault Path</a></li>
+<li>7. <a href="#pte-encoding">PTE Swap Entry Encoding</a></li>
+<li>8. <a href="#hugepage">2M Hugepage Swap</a></li>
+<li>9. <a href="#data-structures">New Data Structures</a></li>
+<li>10. <a href="#ioctl">Ioctl Interface</a></li>
+<li>11. <a href="#userspace">User-Space Changes</a></li>
+<li>12. <a href="#code-map">Code Change Map</a></li>
+<li>13. <a href="#build">Kernel Module Build Integration</a></li>
+<li>14. <a href="#fault-hook">Fault Hook Strategy</a></li>
+<li>15. <a href="#impl-plan">Implementation Plan</a></li>
+<li>16. <a href="#references">References</a></li>
+</ul>
+</div>
+
+
+<!-- ============================================================ -->
+<h2 id="overview">1. Design Overview</h2>
+
+<p>Option A implements NVMe swap as a <strong>custom kernel-space swap engine</strong> inside the SMAP kernel module.
+Instead of relying on the kernel&rsquo;s existing swap subsystem (<code>swapon</code>, <code>swap_cache</code>, <code>frontswap</code>),
+Option A directly manages swap slot allocation, PTE manipulation, and block I/O via <code>submit_bio()</code>.</p>
+
+<div class="good">
+<strong>Key Advantage:</strong> Option A can swap 2M hugepages <em>without</em> splitting them into 4K base pages
+(no THP splitting), preserving hugepage benefits on swap-in. This is impossible with the standard kernel swap path.
+</div>
+
+<h3>Option A vs Option B Comparison</h3>
+
+<table>
+<tr><th>Aspect</th><th>Option A (Custom Kernel Swap)</th><th>Option B (process_madvise + swapon)</th></tr>
+<tr><td>Swap mechanism</td><td>Direct <code>submit_bio()</code> + custom PTE</td><td>Kernel <code>swapon</code> + <code>process_madvise(MADV_PAGEOUT)</code></td></tr>
+<tr><td>Swap slot management</td><td>Custom bitmap allocator</td><td>Kernel swap_map[]</td></tr>
+<tr><td>Swap-in trigger</td><td>Custom fault handler (kprobe)</td><td>Kernel <code>do_swap_page()</code></td></tr>
+<tr><td>2M hugepage swap</td><td style="color:var(--green)">Native &mdash; no THP splitting</td><td style="color:var(--red)">THP split to 4K before swap</td></tr>
+<tr><td>Kernel code changes</td><td>~1450 lines new kernel code</td><td>~200 lines new kernel code</td></tr>
+<tr><td>User-space code</td><td>Same cold tracker + ioctl wrapper</td><td>Same cold tracker + process_madvise</td></tr>
+<tr><td>Complexity</td><td style="color:var(--orange)">High &mdash; PTE, bio, fault handling</td><td style="color:var(--green)">Low &mdash; leverages existing swap</td></tr>
+<tr><td>Swap-in latency</td><td>Custom path, minimal overhead</td><td>Through kernel swap cache</td></tr>
+<tr><td>NUMA placement</td><td style="color:var(--green)">Direct control &mdash; alloc on faulting node</td><td>Kernel default placement</td></tr>
+<tr><td>Risk</td><td style="color:var(--orange)">PTE bugs = kernel panic</td><td style="color:var(--green)">Uses battle-tested swap code</td></tr>
+</table>
+
+
+<!-- ============================================================ -->
+<h2 id="arch">2. Architecture</h2>
+
+<h3 id="arch-diagram">2.1 Three-Tier Architecture Diagram</h3>
+
+<div class="svg-wrap">
+<svg viewBox="0 0 960 680" xmlns="http://www.w3.org/2000/svg" font-family="monospace" font-size="13">
+  <!-- Background regions -->
+  <rect x="20" y="20" width="920" height="200" rx="10" fill="#161b22" stroke="#30363d"/>
+  <text x="40" y="50" fill="#8b949e" font-size="11">USER SPACE</text>
+
+  <rect x="20" y="240" width="920" height="400" rx="10" fill="#0d1117" stroke="#58a6ff" stroke-dasharray="4"/>
+  <text x="40" y="270" fill="#58a6ff" font-size="11">KERNEL SPACE (smap.ko)</text>
+
+  <!-- User-space boxes -->
+  <rect x="60" y="70" width="180" height="60" rx="6" fill="#1a2332" stroke="#3fb950"/>
+  <text x="150" y="95" fill="#3fb950" text-anchor="middle" font-size="12" font-weight="bold">cold_tracker.c</text>
+  <text x="150" y="112" fill="#8b949e" text-anchor="middle" font-size="10">Multi-window cold detect</text>
+
+  <rect x="280" y="70" width="180" height="60" rx="6" fill="#1a2332" stroke="#3fb950"/>
+  <text x="370" y="95" fill="#3fb950" text-anchor="middle" font-size="12" font-weight="bold">migration.c</text>
+  <text x="370" y="112" fill="#8b949e" text-anchor="middle" font-size="10">DoSwapOut() via ioctl</text>
+
+  <rect x="500" y="70" width="180" height="60" rx="6" fill="#1a2332" stroke="#3fb950"/>
+  <text x="590" y="95" fill="#3fb950" text-anchor="middle" font-size="12" font-weight="bold">swap_account.c</text>
+  <text x="590" y="112" fill="#8b949e" text-anchor="middle" font-size="10">Stats &amp; monitoring</text>
+
+  <rect x="720" y="70" width="200" height="60" rx="6" fill="#1a2332" stroke="#3fb950"/>
+  <text x="820" y="95" fill="#3fb950" text-anchor="middle" font-size="12" font-weight="bold">manage.c</text>
+  <text x="820" y="112" fill="#8b949e" text-anchor="middle" font-size="10">Init / cleanup / config</text>
+
+  <!-- ioctl arrow -->
+  <line x1="370" y1="130" x2="370" y2="290" stroke="#d29922" stroke-width="2" marker-end="url(#arrow-orange)"/>
+  <text x="380" y="210" fill="#d29922" font-size="11">ioctl(SMAP_SWAP_OUT)</text>
+
+  <!-- Kernel module boxes -->
+  <rect x="60" y="290" width="200" height="70" rx="6" fill="#1a2332" stroke="#f85149"/>
+  <text x="160" y="315" fill="#f85149" text-anchor="middle" font-size="12" font-weight="bold">smap_swap.c</text>
+  <text x="160" y="332" fill="#8b949e" text-anchor="middle" font-size="10">Swap-out / swap-in core</text>
+  <text x="160" y="348" fill="#8b949e" text-anchor="middle" font-size="10">PTE manipulation</text>
+
+  <rect x="300" y="290" width="200" height="70" rx="6" fill="#1a2332" stroke="#f85149"/>
+  <text x="400" y="315" fill="#f85149" text-anchor="middle" font-size="12" font-weight="bold">smap_swap_bio.c</text>
+  <text x="400" y="332" fill="#8b949e" text-anchor="middle" font-size="10">Block I/O engine</text>
+  <text x="400" y="348" fill="#8b949e" text-anchor="middle" font-size="10">submit_bio / completion</text>
+
+  <rect x="540" y="290" width="200" height="70" rx="6" fill="#1a2332" stroke="#f85149"/>
+  <text x="640" y="315" fill="#f85149" text-anchor="middle" font-size="12" font-weight="bold">smap_swap_map.c</text>
+  <text x="640" y="332" fill="#8b949e" text-anchor="middle" font-size="10">Bitmap allocator</text>
+  <text x="640" y="348" fill="#8b949e" text-anchor="middle" font-size="10">4K &amp; 2M slots</text>
+
+  <rect x="780" y="290" width="140" height="70" rx="6" fill="#1a2332" stroke="#bc8cff"/>
+  <text x="850" y="315" fill="#bc8cff" text-anchor="middle" font-size="12" font-weight="bold">mig_init.c</text>
+  <text x="850" y="332" fill="#8b949e" text-anchor="middle" font-size="10">ioctl dispatch</text>
+  <text x="850" y="348" fill="#8b949e" text-anchor="middle" font-size="10">(modified)</text>
+
+  <!-- Connections between kernel modules -->
+  <line x1="260" y1="325" x2="300" y2="325" stroke="#58a6ff" stroke-width="1.5"/>
+  <line x1="500" y1="325" x2="540" y2="325" stroke="#58a6ff" stroke-width="1.5"/>
+
+  <!-- Three tiers at bottom -->
+  <rect x="80" y="420" width="220" height="55" rx="8" fill="#0b3d0b" stroke="#3fb950" stroke-width="2"/>
+  <text x="190" y="442" fill="#3fb950" text-anchor="middle" font-size="14" font-weight="bold">L1: DRAM (Local)</text>
+  <text x="190" y="462" fill="#8b949e" text-anchor="middle" font-size="10">Hot pages &mdash; direct access</text>
+
+  <rect x="370" y="420" width="220" height="55" rx="8" fill="#1a1a3d" stroke="#58a6ff" stroke-width="2"/>
+  <text x="480" y="442" fill="#58a6ff" text-anchor="middle" font-size="14" font-weight="bold">L2: CXL Memory</text>
+  <text x="480" y="462" fill="#8b949e" text-anchor="middle" font-size="10">Warm pages &mdash; migrate</text>
+
+  <rect x="660" y="420" width="220" height="55" rx="8" fill="#3d1a0b" stroke="#d29922" stroke-width="2"/>
+  <text x="770" y="442" fill="#d29922" text-anchor="middle" font-size="14" font-weight="bold">L3: NVMe SSD</text>
+  <text x="770" y="462" fill="#8b949e" text-anchor="middle" font-size="10">Cold pages &mdash; swap</text>
+
+  <!-- Tier arrows -->
+  <line x1="300" y1="447" x2="370" y2="447" stroke="#8b949e" stroke-width="2" marker-end="url(#arrow-muted)"/>
+  <line x1="370" y1="453" x2="300" y2="453" stroke="#8b949e" stroke-width="2" marker-end="url(#arrow-muted)"/>
+  <line x1="590" y1="447" x2="660" y2="447" stroke="#8b949e" stroke-width="2" marker-end="url(#arrow-muted)"/>
+  <line x1="660" y1="453" x2="590" y2="453" stroke="#8b949e" stroke-width="2" marker-end="url(#arrow-muted)"/>
+
+  <!-- Bio to NVMe -->
+  <path d="M400,360 L400,395 L770,395 L770,420" stroke="#d29922" stroke-width="2" fill="none" marker-end="url(#arrow-orange)"/>
+  <text x="580" y="390" fill="#d29922" font-size="10">submit_bio(REQ_OP_WRITE/READ)</text>
+
+  <!-- Fault path -->
+  <rect x="80" y="530" width="860" height="90" rx="8" fill="#161b22" stroke="#30363d"/>
+  <text x="100" y="555" fill="#bc8cff" font-size="12" font-weight="bold">Page Fault Path (Swap-In)</text>
+  <text x="100" y="575" fill="#e6edf3" font-size="11">CPU access &rarr; swap PTE fault &rarr; kprobe(do_swap_page) &rarr; smap_swap_readpage() &rarr; bio READ &rarr; alloc page on local NUMA &rarr; install PTE</text>
+  <text x="100" y="595" fill="#8b949e" font-size="11">2M path: detect hugepage entry &rarr; alloc compound page &rarr; read 512 contiguous slots &rarr; install PMD entry</text>
+
+  <!-- Arrow markers -->
+  <defs>
+    <marker id="arrow-orange" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <path d="M0,0 L8,3 L0,6" fill="#d29922"/>
+    </marker>
+    <marker id="arrow-muted" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <path d="M0,0 L8,3 L0,6" fill="#8b949e"/>
+    </marker>
+  </defs>
+</svg>
+</div>
+
+<h3 id="component-map">2.2 Component Map</h3>
+
+<table>
+<tr><th>Component</th><th>Location</th><th>Status</th><th>Role</th></tr>
+<tr><td><code>smap_swap.c</code></td><td>tiering/</td><td><span class="badge badge-red">NEW</span></td><td>Swap-out/swap-in core logic, PTE manipulation, ioctl handlers</td></tr>
+<tr><td><code>smap_swap_bio.c</code></td><td>tiering/</td><td><span class="badge badge-red">NEW</span></td><td>Block I/O engine: submit_bio, completion callbacks, batching</td></tr>
+<tr><td><code>smap_swap_map.c</code></td><td>tiering/</td><td><span class="badge badge-red">NEW</span></td><td>Bitmap-based swap slot allocator for 4K and 2M</td></tr>
+<tr><td><code>smap_swap.h</code></td><td>tiering/</td><td><span class="badge badge-red">NEW</span></td><td>Shared headers, struct definitions</td></tr>
+<tr><td><code>mig_init.c</code></td><td>tiering/</td><td><span class="badge badge-orange">MOD</span></td><td>Add 4 new ioctl commands</td></tr>
+<tr><td><code>mig_init.h</code></td><td>tiering/</td><td><span class="badge badge-orange">MOD</span></td><td>Add ioctl defines</td></tr>
+<tr><td><code>common.h</code></td><td>tiering/</td><td><span class="badge badge-orange">MOD</span></td><td>Add swap message structs</td></tr>
+<tr><td><code>Makefile</code></td><td>tiering/</td><td><span class="badge badge-orange">MOD</span></td><td>Add new .o files</td></tr>
+<tr><td><code>cold_tracker.c/.h</code></td><td>strategy/</td><td><span class="badge badge-red">NEW</span></td><td>Multi-window cold page detection (same as Option B)</td></tr>
+<tr><td><code>swap_account.c/.h</code></td><td>manage/</td><td><span class="badge badge-red">NEW</span></td><td>Swap stats tracking (same as Option B)</td></tr>
+<tr><td><code>migration.c</code></td><td>strategy/</td><td><span class="badge badge-orange">MOD</span></td><td>Phase 2: DoSwapOut() via ioctl instead of process_madvise</td></tr>
+<tr><td><code>manage.h</code></td><td>manage/</td><td><span class="badge badge-orange">MOD</span></td><td>SWAP_OUT/SWAP_IN enum, swap config fields</td></tr>
+</table>
+
+
+<!-- ============================================================ -->
+<h2 id="swap-map">3. Swap Map Allocator</h2>
+
+<p>The swap map allocator (<code>smap_swap_map.c</code>) manages NVMe swap slot allocation using a
+kernel bitmap. It supports two slot sizes: <strong>4K</strong> (standard pages) and <strong>2M</strong> (hugepages).</p>
+
+<h3 id="bitmap-design">3.1 Bitmap Design</h3>
+
+<p>Each NVMe swap device is divided into fixed-size slots. A bitmap tracks allocation state &mdash;
+one bit per slot. For a 128 GB NVMe partition with 4K slots, this requires ~4 MB of bitmap memory.</p>
+
+<pre><code><span class="kw">struct</span> <span class="fn">smap_swap_map</span> {
+    <span class="kw">unsigned long</span> *bitmap;       <span class="cm">/* allocation bitmap, 1 bit per slot */</span>
+    <span class="kw">uint32_t</span>      total_slots;   <span class="cm">/* total number of slots */</span>
+    <span class="kw">uint32_t</span>      slot_size;     <span class="cm">/* PAGE_SIZE (4096) or PMD_SIZE (2M) */</span>
+    <span class="kw">atomic_t</span>      free_slots;    <span class="cm">/* fast free count */</span>
+    <span class="kw">spinlock_t</span>    lock;          <span class="cm">/* protects bitmap modifications */</span>
+    <span class="kw">unsigned long</span> hint;          <span class="cm">/* last allocation position (search hint) */</span>
+};
+</code></pre>
+
+<h3 id="4k-2m-slots">3.2 4K and 2M Slot Sizes</h3>
+
+<p>The allocator maintains <strong>two separate bitmaps</strong> &mdash; one for 4K slots and one for 2M slots.
+The 2M bitmap manages contiguous 512-slot regions. When a 2M hugepage needs to be swapped out,
+a single bit in the 2M bitmap is set, reserving 512 contiguous 4K-aligned slots on NVMe.</p>
+
+<div class="note">
+<strong>Design choice:</strong> Separate bitmaps avoid fragmentation between 4K and 2M allocations.
+The NVMe partition is divided at initialization: e.g., 80% for 4K slots, 20% for 2M slots.
+</div>
+
+<h3 id="alloc-free">3.3 Allocation &amp; Free</h3>
+
+<pre><code><span class="cm">/* Allocate a swap slot. Returns slot index or -ENOSPC. */</span>
+<span class="kw">int</span> <span class="fn">smap_swap_alloc_slot</span>(<span class="kw">struct</span> smap_swap_map *map)
+{
+    <span class="kw">unsigned long</span> idx;
+    <span class="kw">int</span> ret = -ENOSPC;
+
+    spin_lock(&amp;map-&gt;lock);
+    idx = find_next_zero_bit(map-&gt;bitmap, map-&gt;total_slots, map-&gt;hint);
+    <span class="kw">if</span> (idx >= map-&gt;total_slots)
+        idx = find_first_zero_bit(map-&gt;bitmap, map-&gt;total_slots);
+    <span class="kw">if</span> (idx < map-&gt;total_slots) {
+        set_bit(idx, map-&gt;bitmap);
+        map-&gt;hint = idx + <span class="num">1</span>;
+        atomic_dec(&amp;map-&gt;free_slots);
+        ret = idx;
+    }
+    spin_unlock(&amp;map-&gt;lock);
+    <span class="kw">return</span> ret;
+}
+
+<span class="cm">/* Free a swap slot. */</span>
+<span class="kw">void</span> <span class="fn">smap_swap_free_slot</span>(<span class="kw">struct</span> smap_swap_map *map, <span class="kw">unsigned long</span> idx)
+{
+    BUG_ON(idx >= map-&gt;total_slots);
+    BUG_ON(!test_bit(idx, map-&gt;bitmap));
+    clear_bit(idx, map-&gt;bitmap);
+    atomic_inc(&amp;map-&gt;free_slots);
+}
+</code></pre>
+
+<pre><code><span class="cm">/* Initialize the swap map for a device. */</span>
+<span class="kw">struct</span> smap_swap_map *<span class="fn">smap_swap_map_create</span>(<span class="kw">uint64_t</span> capacity_bytes,
+                                           <span class="kw">uint32_t</span> slot_size)
+{
+    <span class="kw">struct</span> smap_swap_map *map;
+    <span class="kw">uint32_t</span> total;
+
+    map = kzalloc(<span class="kw">sizeof</span>(*map), GFP_KERNEL);
+    <span class="kw">if</span> (!map)
+        <span class="kw">return</span> ERR_PTR(-ENOMEM);
+
+    total = capacity_bytes / slot_size;
+    map-&gt;bitmap = bitmap_zalloc(total, GFP_KERNEL);
+    <span class="kw">if</span> (!map-&gt;bitmap) {
+        kfree(map);
+        <span class="kw">return</span> ERR_PTR(-ENOMEM);
+    }
+
+    map-&gt;total_slots = total;
+    map-&gt;slot_size   = slot_size;
+    atomic_set(&amp;map-&gt;free_slots, total);
+    spin_lock_init(&amp;map-&gt;lock);
+    map-&gt;hint = <span class="num">0</span>;
+
+    <span class="kw">return</span> map;
+}
+</code></pre>
+
+
+<!-- ============================================================ -->
+<h2 id="bio-engine">4. Block I/O Engine</h2>
+
+<p>The block I/O engine (<code>smap_swap_bio.c</code>) provides asynchronous page read/write to NVMe
+via the kernel&rsquo;s <code>submit_bio()</code> interface.</p>
+
+<h3 id="bio-submit">4.1 submit_bio Mechanics</h3>
+
+<pre><code><span class="kw">struct</span> <span class="fn">smap_swap_bio_ctx</span> {
+    <span class="kw">struct</span> page       *page;       <span class="cm">/* page being transferred */</span>
+    <span class="kw">unsigned long</span>      slot_idx;   <span class="cm">/* NVMe swap slot index */</span>
+    <span class="kw">struct</span> completion   done;       <span class="cm">/* completion for sync wait */</span>
+    <span class="kw">int</span>                error;      <span class="cm">/* bio error code */</span>
+    <span class="kw">bool</span>               is_write;   <span class="cm">/* direction */</span>
+};
+
+<span class="cm">/* Submit a single page bio to NVMe. */</span>
+<span class="kw">int</span> <span class="fn">smap_swap_bio_submit</span>(<span class="kw">struct</span> smap_swap_device *dev,
+                        <span class="kw">struct</span> page *page,
+                        <span class="kw">unsigned long</span> slot_idx,
+                        <span class="kw">enum</span> req_op op,
+                        <span class="kw">struct</span> smap_swap_bio_ctx *ctx)
+{
+    <span class="kw">struct</span> bio *bio;
+    <span class="kw">sector_t</span> sector;
+
+    sector = (<span class="kw">sector_t</span>)slot_idx * (dev-&gt;map-&gt;slot_size / <span class="num">512</span>);
+
+    bio = bio_alloc(dev-&gt;bdev, <span class="num">1</span>, op, GFP_NOIO);
+    <span class="kw">if</span> (!bio)
+        <span class="kw">return</span> -ENOMEM;
+
+    bio-&gt;bi_iter.bi_sector = sector;
+    bio_add_page(bio, page, dev-&gt;map-&gt;slot_size, <span class="num">0</span>);
+    bio-&gt;bi_end_io = smap_swap_bio_end;
+    bio-&gt;bi_private = ctx;
+
+    ctx-&gt;page     = page;
+    ctx-&gt;slot_idx = slot_idx;
+    ctx-&gt;error    = <span class="num">0</span>;
+    ctx-&gt;is_write = (op == REQ_OP_WRITE);
+    init_completion(&amp;ctx-&gt;done);
+
+    submit_bio(bio);
+    <span class="kw">return</span> <span class="num">0</span>;
+}
+</code></pre>
+
+<h3 id="bio-completion">4.2 Completion Callbacks</h3>
+
+<pre><code><span class="kw">static void</span> <span class="fn">smap_swap_bio_end</span>(<span class="kw">struct</span> bio *bio)
+{
+    <span class="kw">struct</span> smap_swap_bio_ctx *ctx = bio-&gt;bi_private;
+
+    ctx-&gt;error = blk_status_to_errno(bio-&gt;bi_status);
+    <span class="kw">if</span> (ctx-&gt;error)
+        pr_warn(<span class="str">"smap_swap: bio %s error %d slot %lu\n"</span>,
+                ctx-&gt;is_write ? <span class="str">"write"</span> : <span class="str">"read"</span>,
+                ctx-&gt;error, ctx-&gt;slot_idx);
+
+    complete(&amp;ctx-&gt;done);
+    bio_put(bio);
+}
+</code></pre>
+
+<h3 id="bio-batch">4.3 Batched I/O</h3>
+
+<p>For swap-out of multiple pages, the engine supports batched submission using <code>bio_list</code>.
+This amortizes per-bio overhead and allows the NVMe device to optimize its internal scheduling.</p>
+
+<pre><code><span class="cm">/* Submit a batch of pages for write. Returns number successfully submitted. */</span>
+<span class="kw">int</span> <span class="fn">smap_swap_bio_batch_write</span>(<span class="kw">struct</span> smap_swap_device *dev,
+                              <span class="kw">struct</span> page **pages,
+                              <span class="kw">unsigned long</span> *slots,
+                              <span class="kw">int</span> count,
+                              <span class="kw">struct</span> smap_swap_bio_ctx *ctxs)
+{
+    <span class="kw">int</span> i, submitted = <span class="num">0</span>;
+
+    <span class="kw">for</span> (i = <span class="num">0</span>; i &lt; count; i++) {
+        <span class="kw">int</span> ret = smap_swap_bio_submit(dev, pages[i], slots[i],
+                                       REQ_OP_WRITE, &amp;ctxs[i]);
+        <span class="kw">if</span> (ret == <span class="num">0</span>)
+            submitted++;
+        <span class="kw">else</span>
+            ctxs[i].error = ret;
+    }
+    <span class="kw">return</span> submitted;
+}
+
+<span class="cm">/* Wait for all bios in batch to complete. */</span>
+<span class="kw">int</span> <span class="fn">smap_swap_bio_batch_wait</span>(<span class="kw">struct</span> smap_swap_bio_ctx *ctxs,
+                             <span class="kw">int</span> count)
+{
+    <span class="kw">int</span> i, errors = <span class="num">0</span>;
+    <span class="kw">for</span> (i = <span class="num">0</span>; i &lt; count; i++) {
+        wait_for_completion(&amp;ctxs[i].done);
+        <span class="kw">if</span> (ctxs[i].error)
+            errors++;
+    }
+    <span class="kw">return</span> errors;
+}
+</code></pre>
+
+<h3 id="bio-error">4.4 Error Handling &amp; Retry</h3>
+
+<div class="warn">
+<strong>Retry policy:</strong> NVMe I/O errors are retried up to 3 times with exponential backoff (1ms, 4ms, 16ms).
+If all retries fail, the page is marked as failed in the result array and the swap slot is freed.
+On read failure during swap-in, the process receives SIGBUS.
+</div>
+
+
+<!-- ============================================================ -->
+<h2 id="swapout">5. Swap-Out Path</h2>
+
+<p>The swap-out path moves cold pages from L2 (CXL) to L3 (NVMe). It is triggered by user-space
+via <code>ioctl(SMAP_SWAP_OUT)</code> and executes entirely in kernel context.</p>
+
+<div class="svg-wrap">
+<svg viewBox="0 0 960 620" xmlns="http://www.w3.org/2000/svg" font-family="monospace" font-size="12">
+  <defs>
+    <marker id="arr-g" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <path d="M0,0 L8,3 L0,6" fill="#3fb950"/>
+    </marker>
+    <marker id="arr-b" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <path d="M0,0 L8,3 L0,6" fill="#58a6ff"/>
+    </marker>
+    <marker id="arr-r" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <path d="M0,0 L8,3 L0,6" fill="#f85149"/>
+    </marker>
+    <marker id="arr-o" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <path d="M0,0 L8,3 L0,6" fill="#d29922"/>
+    </marker>
+  </defs>
+
+  <!-- Step boxes -->
+  <rect x="30" y="20" width="260" height="45" rx="6" fill="#1a2332" stroke="#3fb950"/>
+  <text x="40" y="38" fill="#3fb950" font-size="10" font-weight="bold">STEP 1</text>
+  <text x="40" y="54" fill="#e6edf3" font-size="11">User: strategy selects cold L2 pages</text>
+
+  <line x1="160" y1="65" x2="160" y2="85" stroke="#3fb950" stroke-width="1.5" marker-end="url(#arr-g)"/>
+
+  <rect x="30" y="85" width="260" height="45" rx="6" fill="#1a2332" stroke="#3fb950"/>
+  <text x="40" y="103" fill="#3fb950" font-size="10" font-weight="bold">STEP 2</text>
+  <text x="40" y="119" fill="#e6edf3" font-size="11">ioctl(SMAP_SWAP_OUT, &amp;swap_msg)</text>
+
+  <line x1="160" y1="130" x2="160" y2="150" stroke="#58a6ff" stroke-width="1.5" marker-end="url(#arr-b)"/>
+
+  <rect x="30" y="150" width="260" height="45" rx="6" fill="#1a2332" stroke="#58a6ff"/>
+  <text x="40" y="168" fill="#58a6ff" font-size="10" font-weight="bold">STEP 3</text>
+  <text x="40" y="184" fill="#e6edf3" font-size="11">__ioctl_swap_out(): copy_from_user</text>
+
+  <line x1="160" y1="195" x2="160" y2="215" stroke="#58a6ff" stroke-width="1.5" marker-end="url(#arr-b)"/>
+
+  <rect x="30" y="215" width="260" height="45" rx="6" fill="#1a2332" stroke="#58a6ff"/>
+  <text x="40" y="233" fill="#58a6ff" font-size="10" font-weight="bold">STEP 4</text>
+  <text x="40" y="249" fill="#e6edf3" font-size="11">do_swap_out(): iterate page list</text>
+
+  <line x1="160" y1="260" x2="160" y2="280" stroke="#58a6ff" stroke-width="1.5" marker-end="url(#arr-b)"/>
+
+  <!-- Inner loop box -->
+  <rect x="20" y="280" width="920" height="320" rx="8" fill="none" stroke="#30363d" stroke-dasharray="4"/>
+  <text x="40" y="300" fill="#8b949e" font-size="10">FOR EACH PAGE IN swap_msg.addrs[]</text>
+
+  <rect x="50" y="310" width="250" height="40" rx="6" fill="#1a2332" stroke="#f85149"/>
+  <text x="60" y="326" fill="#f85149" font-size="10" font-weight="bold">STEP 5</text>
+  <text x="60" y="340" fill="#e6edf3" font-size="11">Alloc swap slot from bitmap</text>
+
+  <line x1="175" y1="350" x2="175" y2="365" stroke="#f85149" stroke-width="1.5" marker-end="url(#arr-r)"/>
+
+  <rect x="50" y="365" width="250" height="40" rx="6" fill="#1a2332" stroke="#f85149"/>
+  <text x="60" y="381" fill="#f85149" font-size="10" font-weight="bold">STEP 6</text>
+  <text x="60" y="395" fill="#e6edf3" font-size="11">try_to_unmap(folio, TTU_MIGRATION)</text>
+
+  <line x1="175" y1="405" x2="175" y2="420" stroke="#f85149" stroke-width="1.5" marker-end="url(#arr-r)"/>
+
+  <rect x="50" y="420" width="250" height="52" rx="6" fill="#1a2332" stroke="#f85149"/>
+  <text x="60" y="438" fill="#f85149" font-size="10" font-weight="bold">STEP 7</text>
+  <text x="60" y="454" fill="#e6edf3" font-size="11">Encode swap entry:</text>
+  <text x="60" y="466" fill="#39d2c0" font-size="10">swp_entry(SMAP_TYPE, slot_idx)</text>
+
+  <line x1="175" y1="472" x2="175" y2="487" stroke="#f85149" stroke-width="1.5" marker-end="url(#arr-r)"/>
+
+  <rect x="50" y="487" width="250" height="40" rx="6" fill="#1a2332" stroke="#f85149"/>
+  <text x="60" y="503" fill="#f85149" font-size="10" font-weight="bold">STEP 8</text>
+  <text x="60" y="519" fill="#e6edf3" font-size="11">set_pte_at(swp_entry_to_pte())</text>
+
+  <line x1="175" y1="527" x2="175" y2="542" stroke="#f85149" stroke-width="1.5" marker-end="url(#arr-r)"/>
+
+  <rect x="50" y="542" width="250" height="40" rx="6" fill="#1a2332" stroke="#d29922"/>
+  <text x="60" y="558" fill="#d29922" font-size="10" font-weight="bold">STEP 9</text>
+  <text x="60" y="574" fill="#e6edf3" font-size="11">submit_bio(REQ_OP_WRITE) async</text>
+
+  <!-- Right side: detail annotations -->
+  <rect x="380" y="310" width="540" height="50" rx="6" fill="#161b22" stroke="#30363d"/>
+  <text x="395" y="330" fill="#8b949e" font-size="11">smap_swap_alloc_slot(&amp;dev->map_4k) returns slot_idx</text>
+  <text x="395" y="347" fill="#8b949e" font-size="11">If ENOSPC: skip page, set result[i] = -ENOSPC</text>
+
+  <rect x="380" y="370" width="540" height="50" rx="6" fill="#161b22" stroke="#30363d"/>
+  <text x="395" y="390" fill="#8b949e" font-size="11">Removes all PTEs mapping this folio across all mm's</text>
+  <text x="395" y="407" fill="#8b949e" font-size="11">Page is now unmapped but still in memory</text>
+
+  <rect x="380" y="430" width="540" height="50" rx="6" fill="#161b22" stroke="#30363d"/>
+  <text x="395" y="450" fill="#8b949e" font-size="11">SWP_TYPE = SMAP_SWAP_TYPE (custom type ID)</text>
+  <text x="395" y="467" fill="#8b949e" font-size="11">SWP_OFFSET = slot_idx | (is_huge &lt;&lt; 63)</text>
+
+  <rect x="380" y="490" width="540" height="45" rx="6" fill="#161b22" stroke="#30363d"/>
+  <text x="395" y="510" fill="#8b949e" font-size="11">Install swap PTE in place of removed mapping</text>
+  <text x="395" y="525" fill="#8b949e" font-size="11">Future access triggers page fault &rarr; swap-in path</text>
+
+  <rect x="380" y="545" width="540" height="45" rx="6" fill="#161b22" stroke="#30363d"/>
+  <text x="395" y="565" fill="#8b949e" font-size="11">Async write page content to NVMe at sector = slot_idx * 8</text>
+  <text x="395" y="580" fill="#8b949e" font-size="11">Completion callback frees the old page</text>
+
+  <!-- Connecting lines -->
+  <line x1="300" y1="330" x2="380" y2="330" stroke="#30363d" stroke-width="1"/>
+  <line x1="300" y1="390" x2="380" y2="390" stroke="#30363d" stroke-width="1"/>
+  <line x1="300" y1="450" x2="380" y2="450" stroke="#30363d" stroke-width="1"/>
+  <line x1="300" y1="510" x2="380" y2="510" stroke="#30363d" stroke-width="1"/>
+  <line x1="300" y1="560" x2="380" y2="560" stroke="#30363d" stroke-width="1"/>
+</svg>
+</div>
+
+<h4>Step 10: Update Accounting</h4>
+<p>After all bios complete (or fail), update <code>atomic64_t pages_swapped_out</code> and write per-page
+results to <code>swap_msg.results[]</code> via <code>copy_to_user()</code>.</p>
+
+
+<!-- ============================================================ -->
+<h2 id="swapin">6. Swap-In / Page Fault Path</h2>
+
+<p>When user-space accesses a swapped-out page, the CPU triggers a page fault. The kernel&rsquo;s
+<code>do_swap_page()</code> sees a swap PTE. A kprobe intercepts the call to handle SMAP swap entries.</p>
+
+<div class="svg-wrap">
+<svg viewBox="0 0 960 560" xmlns="http://www.w3.org/2000/svg" font-family="monospace" font-size="12">
+  <defs>
+    <marker id="af-g" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <path d="M0,0 L8,3 L0,6" fill="#3fb950"/>
+    </marker>
+    <marker id="af-b" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <path d="M0,0 L8,3 L0,6" fill="#58a6ff"/>
+    </marker>
+    <marker id="af-p" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <path d="M0,0 L8,3 L0,6" fill="#bc8cff"/>
+    </marker>
+  </defs>
+
+  <!-- Flow steps -->
+  <rect x="30" y="20" width="280" height="50" rx="6" fill="#1a2332" stroke="#f85149"/>
+  <text x="45" y="40" fill="#f85149" font-size="10" font-weight="bold">1. PAGE FAULT</text>
+  <text x="45" y="56" fill="#e6edf3" font-size="11">CPU accesses VA with swap PTE installed</text>
+
+  <line x1="170" y1="70" x2="170" y2="90" stroke="#f85149" stroke-width="1.5" marker-end="url(#arr-r)"/>
+
+  <rect x="30" y="90" width="280" height="50" rx="6" fill="#1a2332" stroke="#58a6ff"/>
+  <text x="45" y="110" fill="#58a6ff" font-size="10" font-weight="bold">2. do_swap_page()</text>
+  <text x="45" y="126" fill="#e6edf3" font-size="11">Kernel reads swap entry from PTE</text>
+
+  <line x1="170" y1="140" x2="170" y2="160" stroke="#58a6ff" stroke-width="1.5" marker-end="url(#af-b)"/>
+
+  <rect x="30" y="160" width="280" height="50" rx="6" fill="#1a2332" stroke="#bc8cff"/>
+  <text x="45" y="180" fill="#bc8cff" font-size="10" font-weight="bold">3. KPROBE INTERCEPT</text>
+  <text x="45" y="196" fill="#e6edf3" font-size="11">Check if SWP_TYPE == SMAP_SWAP_TYPE</text>
+
+  <!-- Branch: not ours -->
+  <line x1="310" y1="185" x2="410" y2="185" stroke="#8b949e" stroke-width="1" stroke-dasharray="4"/>
+  <text x="420" y="190" fill="#8b949e" font-size="10">If not SMAP type: return, let kernel handle</text>
+
+  <line x1="170" y1="210" x2="170" y2="230" stroke="#bc8cff" stroke-width="1.5" marker-end="url(#af-p)"/>
+
+  <rect x="30" y="230" width="280" height="65" rx="6" fill="#1a2332" stroke="#3fb950"/>
+  <text x="45" y="250" fill="#3fb950" font-size="10" font-weight="bold">4. smap_swap_readpage()</text>
+  <text x="45" y="266" fill="#e6edf3" font-size="11">Decode entry: slot_idx = SWP_OFFSET</text>
+  <text x="45" y="282" fill="#e6edf3" font-size="11">Check is_huge flag in offset</text>
+
+  <line x1="170" y1="295" x2="170" y2="315" stroke="#3fb950" stroke-width="1.5" marker-end="url(#af-g)"/>
+
+  <!-- Branch: 4K vs 2M -->
+  <rect x="30" y="315" width="280" height="50" rx="6" fill="#1a2332" stroke="#3fb950"/>
+  <text x="45" y="335" fill="#3fb950" font-size="10" font-weight="bold">5. ALLOCATE PAGE</text>
+  <text x="45" y="351" fill="#e6edf3" font-size="11">alloc_pages_node(faulting_nid, ...)</text>
+
+  <!-- Right branch: 2M path -->
+  <rect x="420" y="230" width="300" height="130" rx="8" fill="#161b22" stroke="#d29922"/>
+  <text x="435" y="252" fill="#d29922" font-size="11" font-weight="bold">2M HUGEPAGE PATH</text>
+  <text x="435" y="272" fill="#e6edf3" font-size="11">1. alloc_pages_node(nid, order=9)</text>
+  <text x="435" y="292" fill="#e6edf3" font-size="11">2. Submit 512 bio READs (contiguous slots)</text>
+  <text x="435" y="312" fill="#e6edf3" font-size="11">3. Wait all completions</text>
+  <text x="435" y="332" fill="#e6edf3" font-size="11">4. set_pmd_at() with huge PTE</text>
+  <text x="435" y="352" fill="#8b949e" font-size="10">Fallback: if hugepage alloc fails, split</text>
+
+  <line x1="310" y1="260" x2="420" y2="260" stroke="#d29922" stroke-width="1.5"/>
+
+  <line x1="170" y1="365" x2="170" y2="385" stroke="#3fb950" stroke-width="1.5" marker-end="url(#af-g)"/>
+
+  <rect x="30" y="385" width="280" height="50" rx="6" fill="#1a2332" stroke="#d29922"/>
+  <text x="45" y="405" fill="#d29922" font-size="10" font-weight="bold">6. BIO READ</text>
+  <text x="45" y="421" fill="#e6edf3" font-size="11">submit_bio(REQ_OP_READ) + wait</text>
+
+  <line x1="170" y1="435" x2="170" y2="455" stroke="#d29922" stroke-width="1.5" marker-end="url(#arr-o)"/>
+
+  <rect x="30" y="455" width="280" height="50" rx="6" fill="#1a2332" stroke="#3fb950"/>
+  <text x="45" y="475" fill="#3fb950" font-size="10" font-weight="bold">7. INSTALL PTE</text>
+  <text x="45" y="491" fill="#e6edf3" font-size="11">set_pte_at(mm, addr, pte, mk_pte(page))</text>
+
+  <line x1="170" y1="505" x2="170" y2="525" stroke="#3fb950" stroke-width="1.5" marker-end="url(#af-g)"/>
+
+  <rect x="30" y="525" width="280" height="30" rx="6" fill="#1a2332" stroke="#8b949e"/>
+  <text x="45" y="545" fill="#8b949e" font-size="11">8. Free swap slot in bitmap, update stats</text>
+
+  <!-- NUMA detail -->
+  <rect x="420" y="385" width="500" height="80" rx="6" fill="#161b22" stroke="#3fb950"/>
+  <text x="435" y="405" fill="#3fb950" font-size="11" font-weight="bold">NUMA-Aware Allocation</text>
+  <text x="435" y="425" fill="#e6edf3" font-size="11">faulting_nid = numa_node_id()  // CPU that faulted</text>
+  <text x="435" y="445" fill="#e6edf3" font-size="11">Page allocated on L1 (local DRAM), not L2 (CXL)</text>
+  <text x="435" y="460" fill="#8b949e" font-size="10">Key advantage: swap-in always promotes to fastest tier</text>
+
+  <line x1="310" y1="410" x2="420" y2="420" stroke="#3fb950" stroke-width="1"/>
+</svg>
+</div>
+
+
+<!-- ============================================================ -->
+<h2 id="pte-encoding">7. PTE Swap Entry Encoding</h2>
+
+<p>On aarch64, a non-present PTE has bits [63:2] available for software use.
+SMAP uses a custom swap type ID to distinguish its entries from kernel-managed swap.</p>
+
+<h3>aarch64 Swap PTE Layout</h3>
+
+<pre><code> 63       58 57                                   2  1  0
++----------+--------------------------------------+--+--+
+| SWP_TYPE |          SWP_OFFSET                   |  | 0|
+|  (6 bits)|          (56 bits)                    |  |  |
++----------+--------------------------------------+--+--+
+                                                    ^
+                                                    |
+                                              Present=0 (swap)
+</code></pre>
+
+<h3>Encoding Functions</h3>
+
+<pre><code><span class="kw">#define</span> SMAP_SWAP_TYPE    <span class="num">30</span>   <span class="cm">/* custom type, avoids kernel swap types 0-5 */</span>
+<span class="kw">#define</span> SMAP_HUGE_FLAG    (<span class="num">1UL</span> &lt;&lt; <span class="num">55</span>)   <span class="cm">/* bit 55 = hugepage indicator */</span>
+
+<span class="kw">static inline</span> swp_entry_t <span class="fn">smap_encode_swap_entry</span>(<span class="kw">unsigned long</span> slot_idx,
+                                                  <span class="kw">bool</span> is_huge)
+{
+    <span class="kw">unsigned long</span> offset = slot_idx;
+    <span class="kw">if</span> (is_huge)
+        offset |= SMAP_HUGE_FLAG;
+    <span class="kw">return</span> swp_entry(SMAP_SWAP_TYPE, offset);
+}
+
+<span class="kw">static inline void</span> <span class="fn">smap_decode_swap_entry</span>(swp_entry_t entry,
+                                           <span class="kw">unsigned long</span> *slot_idx,
+                                           <span class="kw">bool</span> *is_huge)
+{
+    <span class="kw">unsigned long</span> offset = swp_offset(entry);
+    *is_huge  = !!(offset &amp; SMAP_HUGE_FLAG);
+    *slot_idx = offset &amp; ~SMAP_HUGE_FLAG;
+}
+</code></pre>
+
+<div class="note">
+<strong>Type ID selection:</strong> <code>SMAP_SWAP_TYPE = 30</code> is chosen to avoid collision with
+kernel swap types (typically 0&ndash;5 for swap partitions/files). The kprobe on <code>do_swap_page</code>
+checks <code>swp_type(entry) == SMAP_SWAP_TYPE</code> to intercept only SMAP entries.
+</div>
+
+<h3>Hugepage Encoding Detail</h3>
+
+<p>For 2M hugepages, the swap entry stores the <strong>base slot index</strong> (the first of 512 contiguous slots)
+with bit 55 set. On swap-in, the fault handler reads bit 55, then reads all 512 slots starting
+from the base index to reconstruct the full 2M page.</p>
+
+
+<!-- ============================================================ -->
+<h2 id="hugepage">8. 2M Hugepage Swap (Option A Key Advantage)</h2>
+
+<div class="good">
+<strong>This is Option A&rsquo;s primary advantage over Option B.</strong> The standard kernel swap path
+(<code>MADV_PAGEOUT</code>) calls <code>split_huge_page()</code> before swapping, destroying THP mappings.
+Option A preserves hugepage granularity end-to-end.
+</div>
+
+<h3>Swap-Out: 2M Page</h3>
+<ol>
+<li>Allocate <strong>one 2M slot</strong> from the 2M bitmap (equivalent to 512 contiguous 4K slots on NVMe)</li>
+<li>Encode swap entry with <code>SMAP_HUGE_FLAG</code> set and base slot index</li>
+<li>Write full 2M as a single large bio: <code>bio_add_page(bio, page, PMD_SIZE, 0)</code></li>
+<li>Or split into 512 individual 4K bios for devices with smaller max request size</li>
+<li>Install swap PMD entry via <code>set_pmd_at()</code></li>
+</ol>
+
+<h3>Swap-In: 2M Page</h3>
+<ol>
+<li>Fault handler detects <code>SMAP_HUGE_FLAG</code> in swap entry</li>
+<li>Attempt: <code>alloc_pages_node(nid, GFP_HIGHUSER_MOVABLE | __GFP_COMP, 9)</code> &mdash; order-9 = 2M</li>
+<li>If hugepage allocation succeeds: read all 512 slots into the compound page</li>
+<li>Install PMD entry &mdash; no THP splitting, full hugepage restored</li>
+<li><strong>Fallback:</strong> if hugepage unavailable (fragmented), split read into 512 individual 4K pages</li>
+</ol>
+
+<pre><code><span class="cm">/* Swap-in a 2M hugepage from NVMe. */</span>
+<span class="kw">static int</span> <span class="fn">smap_swap_in_huge</span>(<span class="kw">struct</span> mm_struct *mm,
+                              <span class="kw">unsigned long</span> addr,
+                              <span class="kw">unsigned long</span> base_slot,
+                              <span class="kw">int</span> nid)
+{
+    <span class="kw">struct</span> page *hpage;
+    <span class="kw">int</span> i, ret;
+
+    <span class="cm">/* Try to allocate a 2M compound page on the faulting NUMA node */</span>
+    hpage = alloc_pages_node(nid,
+        GFP_HIGHUSER_MOVABLE | __GFP_COMP | __GFP_NOWARN, <span class="num">9</span>);
+
+    <span class="kw">if</span> (!hpage) {
+        <span class="cm">/* Fallback: split into 512 x 4K reads */</span>
+        <span class="kw">return</span> smap_swap_in_split(mm, addr, base_slot, nid);
+    }
+
+    <span class="cm">/* Submit 512 bio reads for contiguous NVMe slots */</span>
+    <span class="kw">for</span> (i = <span class="num">0</span>; i &lt; <span class="num">512</span>; i++) {
+        <span class="kw">struct</span> page *subpage = hpage + i;
+        ret = smap_swap_bio_submit(dev, subpage,
+                                    base_slot + i,
+                                    REQ_OP_READ, &amp;ctxs[i]);
+        <span class="kw">if</span> (ret)
+            <span class="kw">goto</span> err_free;
+    }
+
+    <span class="cm">/* Wait for all 512 reads */</span>
+    smap_swap_bio_batch_wait(ctxs, <span class="num">512</span>);
+
+    <span class="cm">/* Install PMD entry */</span>
+    set_pmd_at(mm, addr &amp; PMD_MASK,
+               pmd_offset(pud, addr),
+               mk_pmd(hpage, vma-&gt;vm_page_prot));
+
+    <span class="cm">/* Free all 512 swap slots */</span>
+    smap_swap_free_slot(&amp;dev-&gt;map_2m, base_slot / <span class="num">512</span>);
+
+    <span class="kw">return</span> <span class="num">0</span>;
+
+err_free:
+    __free_pages(hpage, <span class="num">9</span>);
+    <span class="kw">return</span> -EIO;
+}
+</code></pre>
+
+
+<!-- ============================================================ -->
+<h2 id="data-structures">9. New Data Structures (Kernel-Side)</h2>
+
+<pre><code><span class="cm">/* Top-level swap device descriptor. */</span>
+<span class="kw">struct</span> <span class="fn">smap_swap_device</span> {
+    <span class="kw">struct</span> block_device  *bdev;           <span class="cm">/* NVMe block device */</span>
+    <span class="kw">struct</span> smap_swap_map *map_4k;         <span class="cm">/* 4K slot bitmap */</span>
+    <span class="kw">struct</span> smap_swap_map *map_2m;         <span class="cm">/* 2M slot bitmap */</span>
+    <span class="kw">uint64_t</span>             capacity_bytes; <span class="cm">/* total device capacity */</span>
+    <span class="kw">uint64_t</span>             offset_4k;      <span class="cm">/* byte offset of 4K region */</span>
+    <span class="kw">uint64_t</span>             offset_2m;      <span class="cm">/* byte offset of 2M region */</span>
+    atomic64_t           pages_swapped_out;
+    atomic64_t           pages_swapped_in;
+    atomic64_t           huge_swapped_out;
+    atomic64_t           huge_swapped_in;
+    atomic64_t           io_errors;
+    <span class="kw">spinlock_t</span>           lock;
+};
+
+<span class="cm">/* Bitmap-based swap slot allocator. */</span>
+<span class="kw">struct</span> <span class="fn">smap_swap_map</span> {
+    <span class="kw">unsigned long</span> *bitmap;
+    <span class="kw">uint32_t</span>      total_slots;
+    <span class="kw">uint32_t</span>      slot_size;      <span class="cm">/* PAGE_SIZE or PMD_SIZE */</span>
+    atomic_t      free_slots;
+    <span class="kw">spinlock_t</span>    lock;
+    <span class="kw">unsigned long</span> hint;           <span class="cm">/* next-fit search start */</span>
+};
+
+<span class="cm">/* User &rarr; kernel: swap-out request. */</span>
+<span class="kw">struct</span> <span class="fn">swap_msg</span> {
+    <span class="kw">int</span>        cnt;              <span class="cm">/* number of pages */</span>
+    pid_t      pid;              <span class="cm">/* target process */</span>
+    <span class="kw">uint64_t</span>  *addrs;            <span class="cm">/* physical addresses to swap out */</span>
+    <span class="kw">uint64_t</span>  *results;          <span class="cm">/* per-page result: 0=ok, &lt;0=error */</span>
+};
+
+<span class="cm">/* Swap-in request (manual, not fault-driven). */</span>
+<span class="kw">struct</span> <span class="fn">swap_in_msg</span> {
+    pid_t      pid;              <span class="cm">/* target process */</span>
+    <span class="kw">uint64_t</span>   addr;             <span class="cm">/* faulting virtual address */</span>
+    <span class="kw">int</span>        dest_nid;         <span class="cm">/* destination NUMA node */</span>
+};
+
+<span class="cm">/* Device configuration from user space. */</span>
+<span class="kw">struct</span> <span class="fn">swap_dev_config</span> {
+    <span class="kw">char</span>       path[<span class="num">256</span>];       <span class="cm">/* e.g., "/dev/nvme0n1p3" */</span>
+    <span class="kw">uint64_t</span>   capacity;        <span class="cm">/* usable bytes */</span>
+    <span class="kw">uint32_t</span>   pct_4k;          <span class="cm">/* % of space for 4K slots (0-100) */</span>
+};
+
+<span class="cm">/* Statistics returned to user space. */</span>
+<span class="kw">struct</span> <span class="fn">swap_stats</span> {
+    <span class="kw">uint64_t</span>   total_4k_slots;
+    <span class="kw">uint64_t</span>   free_4k_slots;
+    <span class="kw">uint64_t</span>   total_2m_slots;
+    <span class="kw">uint64_t</span>   free_2m_slots;
+    <span class="kw">uint64_t</span>   pages_swapped_out;
+    <span class="kw">uint64_t</span>   pages_swapped_in;
+    <span class="kw">uint64_t</span>   huge_swapped_out;
+    <span class="kw">uint64_t</span>   huge_swapped_in;
+    <span class="kw">uint64_t</span>   io_errors;
+};
+</code></pre>
+
+
+<!-- ============================================================ -->
+<h2 id="ioctl">10. Ioctl Interface</h2>
+
+<p>Four new ioctl commands are added to the existing SMAP device node (<code>/dev/smap_migrate</code>):</p>
+
+<table>
+<tr><th>Command</th><th>Direction</th><th>Number</th><th>Struct</th><th>Purpose</th></tr>
+<tr><td><code>SMAP_SWAP_OUT</code></td><td><code>_IOW</code></td><td><code>0xB9, 4</code></td><td><code>struct swap_msg</code></td><td>Swap out cold pages to NVMe</td></tr>
+<tr><td><code>SMAP_SWAP_IN</code></td><td><code>_IOW</code></td><td><code>0xB9, 5</code></td><td><code>struct swap_in_msg</code></td><td>Manual swap-in (prefetch)</td></tr>
+<tr><td><code>SMAP_SWAP_DEV_SET</code></td><td><code>_IOW</code></td><td><code>0xB9, 6</code></td><td><code>struct swap_dev_config</code></td><td>Configure NVMe swap device</td></tr>
+<tr><td><code>SMAP_SWAP_STATS</code></td><td><code>_IOR</code></td><td><code>0xB9, 7</code></td><td><code>struct swap_stats</code></td><td>Read swap statistics</td></tr>
+</table>
+
+<pre><code><span class="cm">/* ioctl definitions — added to mig_init.h */</span>
+<span class="kw">#define</span> SMAP_SWAP_OUT      _IOW(<span class="num">0xB9</span>, <span class="num">4</span>, <span class="kw">struct</span> swap_msg)
+<span class="kw">#define</span> SMAP_SWAP_IN       _IOW(<span class="num">0xB9</span>, <span class="num">5</span>, <span class="kw">struct</span> swap_in_msg)
+<span class="kw">#define</span> SMAP_SWAP_DEV_SET  _IOW(<span class="num">0xB9</span>, <span class="num">6</span>, <span class="kw">struct</span> swap_dev_config)
+<span class="kw">#define</span> SMAP_SWAP_STATS    _IOR(<span class="num">0xB9</span>, <span class="num">7</span>, <span class="kw">struct</span> swap_stats)
+</code></pre>
+
+<h3>Ioctl Dispatch (mig_init.c addition)</h3>
+
+<pre><code><span class="kw">static long</span> <span class="fn">smap_ioctl</span>(<span class="kw">struct</span> file *filp, <span class="kw">unsigned int</span> cmd,
+                       <span class="kw">unsigned long</span> arg)
+{
+    <span class="kw">switch</span> (cmd) {
+    <span class="cm">/* ... existing migrate ioctls ... */</span>
+    <span class="kw">case</span> SMAP_SWAP_OUT:
+        <span class="kw">return</span> __ioctl_swap_out((<span class="kw">void</span> __user *)arg);
+    <span class="kw">case</span> SMAP_SWAP_IN:
+        <span class="kw">return</span> __ioctl_swap_in((<span class="kw">void</span> __user *)arg);
+    <span class="kw">case</span> SMAP_SWAP_DEV_SET:
+        <span class="kw">return</span> __ioctl_swap_dev_set((<span class="kw">void</span> __user *)arg);
+    <span class="kw">case</span> SMAP_SWAP_STATS:
+        <span class="kw">return</span> __ioctl_swap_stats((<span class="kw">void</span> __user *)arg);
+    <span class="kw">default</span>:
+        <span class="kw">return</span> -EINVAL;
+    }
+}
+</code></pre>
+
+
+<!-- ============================================================ -->
+<h2 id="userspace">11. User-Space Changes</h2>
+
+<p>User-space changes are minimal and largely shared with Option B. The key difference is that
+<code>DoSwapOut()</code> calls <code>ioctl(SMAP_SWAP_OUT)</code> instead of <code>process_madvise(MADV_PAGEOUT)</code>.</p>
+
+<h3>Shared with Option B (identical code)</h3>
+<ul>
+<li><code>strategy/cold_tracker.c/.h</code> &mdash; multi-window cold page detection</li>
+<li><code>manage/swap_account.c/.h</code> &mdash; swap statistics tracking</li>
+<li><code>manage/swap_types.h</code> &mdash; swap type definitions</li>
+<li><code>manage/swap_device.c/.h</code> &mdash; swap device configuration</li>
+</ul>
+
+<h3>Modified: migration.c &mdash; DoSwapOut()</h3>
+
+<pre><code><span class="cm">/* Option A: swap out via ioctl (not process_madvise) */</span>
+<span class="kw">int</span> <span class="fn">DoSwapOut</span>(<span class="kw">struct</span> ManageInfo *info, <span class="kw">struct</span> PageBatch *batch)
+{
+    <span class="kw">struct</span> swap_msg msg = {
+        .cnt   = batch-&gt;count,
+        .pid   = batch-&gt;pid,
+        .addrs = batch-&gt;phys_addrs,
+    };
+    <span class="kw">int</span> ret;
+
+    msg.results = calloc(batch-&gt;count, <span class="kw">sizeof</span>(<span class="kw">uint64_t</span>));
+    <span class="kw">if</span> (!msg.results)
+        <span class="kw">return</span> -ENOMEM;
+
+    ret = ioctl(info-&gt;swap_fd, SMAP_SWAP_OUT, &amp;msg);
+
+    <span class="cm">/* Check per-page results */</span>
+    <span class="kw">for</span> (<span class="kw">int</span> i = <span class="num">0</span>; i &lt; batch-&gt;count; i++) {
+        <span class="kw">if</span> (msg.results[i] &lt; <span class="num">0</span>)
+            swap_account_error(info-&gt;acct, msg.results[i]);
+        <span class="kw">else</span>
+            swap_account_out(info-&gt;acct, <span class="num">1</span>);
+    }
+
+    free(msg.results);
+    <span class="kw">return</span> ret;
+}
+</code></pre>
+
+<h3>Modified: manage.h</h3>
+
+<pre><code><span class="cm">/* New directions for three-tier migration */</span>
+<span class="kw">enum</span> <span class="fn">MigDirection</span> {
+    MIG_PROMOTE,       <span class="cm">/* L2 &rarr; L1 (existing) */</span>
+    MIG_DEMOTE,        <span class="cm">/* L1 &rarr; L2 (existing) */</span>
+    SWAP_OUT,          <span class="cm">/* L2 &rarr; L3 (new) */</span>
+    SWAP_IN,           <span class="cm">/* L3 &rarr; L1 (new, manual prefetch) */</span>
+};
+
+<span class="cm">/* Added to ManageInfo */</span>
+<span class="kw">struct</span> <span class="fn">ManageInfo</span> {
+    <span class="cm">/* ... existing fields ... */</span>
+    <span class="kw">int</span>                swap_fd;       <span class="cm">/* fd for /dev/smap_migrate */</span>
+    <span class="kw">struct</span> SwapAccount *acct;         <span class="cm">/* swap statistics */</span>
+    <span class="kw">struct</span> SwapDevice  *swap_dev;     <span class="cm">/* NVMe swap device config */</span>
+};
+</code></pre>
+
+
+<!-- ============================================================ -->
+<h2 id="code-map">12. Code Change Map</h2>
+
+<h3>New Kernel Files</h3>
+
+<table>
+<tr><th>File</th><th>Lines</th><th>Description</th></tr>
+<tr><td><code>tiering/smap_swap.c</code></td><td>~600</td><td>Swap-out/swap-in core logic: <code>do_swap_out()</code>, <code>smap_swap_readpage()</code>, PTE manipulation, kprobe registration</td></tr>
+<tr><td><code>tiering/smap_swap_bio.c</code></td><td>~400</td><td>Block I/O engine: <code>smap_swap_bio_submit()</code>, completion callback, batch write/read, retry logic</td></tr>
+<tr><td><code>tiering/smap_swap_map.c</code></td><td>~300</td><td>Bitmap allocator: <code>smap_swap_alloc_slot()</code>, <code>smap_swap_free_slot()</code>, <code>smap_swap_map_create()</code>, 4K/2M dual bitmap</td></tr>
+<tr><td><code>tiering/smap_swap.h</code></td><td>~150</td><td>Shared headers: struct definitions, ioctl numbers, constants, inline encode/decode functions</td></tr>
+</table>
+
+<h3>Modified Kernel Files</h3>
+
+<table>
+<tr><th>File</th><th>Change</th><th>Description</th></tr>
+<tr><td><code>tiering/mig_init.c</code></td><td>+40 lines</td><td>Add 4 new ioctl case handlers in <code>smap_ioctl()</code>, init/cleanup for swap device</td></tr>
+<tr><td><code>tiering/mig_init.h</code></td><td>+10 lines</td><td>Add <code>SMAP_SWAP_OUT/IN/DEV_SET/STATS</code> ioctl defines</td></tr>
+<tr><td><code>tiering/Makefile</code></td><td>+1 line</td><td>Add <code>smap_swap.o smap_swap_bio.o smap_swap_map.o</code></td></tr>
+<tr><td><code>tiering/common.h</code></td><td>+30 lines</td><td>Add <code>struct swap_msg</code>, <code>swap_in_msg</code>, <code>swap_dev_config</code>, <code>swap_stats</code></td></tr>
+</table>
+
+<h3>New User-Space Files (Same as Option B)</h3>
+
+<table>
+<tr><th>File</th><th>Lines</th><th>Description</th></tr>
+<tr><td><code>strategy/cold_tracker.c/.h</code></td><td>~400</td><td>Multi-window cold page detection</td></tr>
+<tr><td><code>manage/swap_types.h</code></td><td>~50</td><td>Swap type definitions and constants</td></tr>
+<tr><td><code>manage/swap_device.c/.h</code></td><td>~200</td><td>Swap device configuration and management</td></tr>
+<tr><td><code>manage/swap_account.c/.h</code></td><td>~150</td><td>Swap statistics tracking</td></tr>
+</table>
+
+<h3>Modified User-Space Files</h3>
+
+<table>
+<tr><th>File</th><th>Change</th><th>Description</th></tr>
+<tr><td><code>manage/manage.h</code></td><td>+20 lines</td><td><code>SWAP_OUT/SWAP_IN</code> enum values, swap-related fields in <code>ManageInfo</code></td></tr>
+<tr><td><code>manage/manage.c</code></td><td>+30 lines</td><td>Init/cleanup for swap device and accounting</td></tr>
+<tr><td><code>strategy/migration.c</code></td><td>+80 lines</td><td>Phase 2: <code>DoSwapOut()</code> implementation using <code>ioctl(SMAP_SWAP_OUT)</code></td></tr>
+</table>
+
+
+<!-- ============================================================ -->
+<h2 id="build">13. Kernel Module Build Integration</h2>
+
+<p>Add the new object files to the existing SMAP kernel module Makefile:</p>
+
+<pre><code><span class="cm"># tiering/Makefile — existing line:</span>
+obj-m += smap_tiering.o
+smap_tiering-objs := mig_init.o mig_policy.o smap_migrate_wrapper.o \
+                     page_hot.o
+
+<span class="cm"># Add swap support:</span>
+smap_tiering-objs += smap_swap.o smap_swap_bio.o smap_swap_map.o
+</code></pre>
+
+<div class="note">
+<strong>Build dependency:</strong> <code>smap_swap.c</code> includes <code>&lt;linux/bio.h&gt;</code>, <code>&lt;linux/blkdev.h&gt;</code>,
+<code>&lt;linux/swap.h&gt;</code>, <code>&lt;linux/swapops.h&gt;</code>, <code>&lt;linux/huge_mm.h&gt;</code>.
+These are all standard kernel headers available in openEuler 22.03 LTS.
+</div>
+
+
+<!-- ============================================================ -->
+<h2 id="fault-hook">14. Fault Hook Strategy</h2>
+
+<p>The swap-in path requires intercepting page faults for SMAP swap entries.
+Two approaches are considered:</p>
+
+<h3>Approach A: Register Custom swap_type</h3>
+<ul>
+<li>Register <code>SMAP_SWAP_TYPE</code> with the kernel swap subsystem via <code>swap_info_struct</code></li>
+<li>Provide custom <code>swap_readpage()</code> and <code>swap_writepage()</code> ops</li>
+<li><strong>Pro:</strong> Cleanest integration, kernel calls our readpage automatically</li>
+<li><strong>Con:</strong> Requires kernel source patch to <code>mm/swap_state.c</code> &mdash; not possible with out-of-tree module</li>
+</ul>
+
+<h3>Approach B: Kprobe on do_swap_page (Recommended)</h3>
+<ul>
+<li>Register a kprobe on <code>do_swap_page()</code> in <code>mm/memory.c</code></li>
+<li>In the pre-handler, check if <code>swp_type(entry) == SMAP_SWAP_TYPE</code></li>
+<li>If yes: handle the fault ourselves, set return value, skip original function</li>
+<li>If no: return 0 to let kernel handle normally</li>
+<li><strong>Pro:</strong> Consistent with existing <code>smap_migrate_wrapper.c</code> kprobe pattern</li>
+<li><strong>Con:</strong> Fragile across kernel versions (function signature may change)</li>
+</ul>
+
+<div class="good">
+<strong>Recommendation:</strong> Use Approach B (kprobe) for consistency with the existing SMAP codebase.
+The <code>smap_migrate_wrapper.c</code> module already uses kprobes to intercept kernel migration paths,
+so the pattern is well-established and tested.
+</div>
+
+<h3>Kprobe Implementation Sketch</h3>
+
+<div class="svg-wrap">
+<svg viewBox="0 0 880 320" xmlns="http://www.w3.org/2000/svg" font-family="monospace" font-size="12">
+  <!-- do_swap_page box -->
+  <rect x="30" y="20" width="200" height="50" rx="6" fill="#1a2332" stroke="#58a6ff"/>
+  <text x="130" y="42" fill="#58a6ff" text-anchor="middle" font-size="12" font-weight="bold">do_swap_page()</text>
+  <text x="130" y="58" fill="#8b949e" text-anchor="middle" font-size="10">mm/memory.c</text>
+
+  <!-- Kprobe intercept -->
+  <line x1="230" y1="45" x2="310" y2="45" stroke="#bc8cff" stroke-width="2" marker-end="url(#af-p)"/>
+  <text x="270" y="38" fill="#bc8cff" font-size="10">kprobe</text>
+
+  <rect x="310" y="20" width="240" height="50" rx="6" fill="#1a2332" stroke="#bc8cff"/>
+  <text x="430" y="42" fill="#bc8cff" text-anchor="middle" font-size="12" font-weight="bold">smap_swap_fault_handler()</text>
+  <text x="430" y="58" fill="#8b949e" text-anchor="middle" font-size="10">tiering/smap_swap.c</text>
+
+  <!-- Decision diamond -->
+  <polygon points="430,100 510,140 430,180 350,140" fill="#1a2332" stroke="#d29922" stroke-width="1.5"/>
+  <text x="430" y="138" fill="#d29922" text-anchor="middle" font-size="10">swp_type ==</text>
+  <text x="430" y="152" fill="#d29922" text-anchor="middle" font-size="10">SMAP_TYPE?</text>
+
+  <line x1="430" y1="70" x2="430" y2="100" stroke="#bc8cff" stroke-width="1.5"/>
+
+  <!-- Yes branch -->
+  <line x1="510" y1="140" x2="610" y2="140" stroke="#3fb950" stroke-width="1.5" marker-end="url(#af-g)"/>
+  <text x="550" y="133" fill="#3fb950" font-size="10">YES</text>
+
+  <rect x="610" y="110" width="250" height="120" rx="6" fill="#1a2332" stroke="#3fb950"/>
+  <text x="625" y="135" fill="#3fb950" font-size="11" font-weight="bold">SMAP Swap-In Handler</text>
+  <text x="625" y="155" fill="#e6edf3" font-size="10">1. Decode swap entry (slot, huge?)</text>
+  <text x="625" y="172" fill="#e6edf3" font-size="10">2. Alloc page on faulting NUMA node</text>
+  <text x="625" y="189" fill="#e6edf3" font-size="10">3. submit_bio(REQ_OP_READ) + wait</text>
+  <text x="625" y="206" fill="#e6edf3" font-size="10">4. set_pte_at() / set_pmd_at()</text>
+  <text x="625" y="223" fill="#e6edf3" font-size="10">5. Free swap slot, return VM_FAULT_*</text>
+
+  <!-- No branch -->
+  <line x1="430" y1="180" x2="430" y2="240" stroke="#f85149" stroke-width="1.5" marker-end="url(#arr-r)"/>
+  <text x="440" y="210" fill="#f85149" font-size="10">NO</text>
+
+  <rect x="330" y="240" width="200" height="40" rx="6" fill="#1a2332" stroke="#8b949e"/>
+  <text x="430" y="265" fill="#8b949e" text-anchor="middle" font-size="11">Return 0: let kernel handle</text>
+</svg>
+</div>
+
+<pre><code><span class="kw">static int</span> <span class="fn">smap_swap_fault_pre</span>(<span class="kw">struct</span> kprobe *p, <span class="kw">struct</span> pt_regs *regs)
+{
+    <span class="kw">struct</span> vm_fault *vmf = (<span class="kw">struct</span> vm_fault *)regs-&gt;regs[<span class="num">0</span>];
+    swp_entry_t entry;
+    <span class="kw">unsigned long</span> slot_idx;
+    <span class="kw">bool</span> is_huge;
+
+    entry = pte_to_swp_entry(vmf-&gt;orig_pte);
+    <span class="kw">if</span> (swp_type(entry) != SMAP_SWAP_TYPE)
+        <span class="kw">return</span> <span class="num">0</span>;  <span class="cm">/* not ours, let kernel handle */</span>
+
+    smap_decode_swap_entry(entry, &amp;slot_idx, &amp;is_huge);
+
+    <span class="kw">if</span> (is_huge)
+        vmf-&gt;ret = smap_swap_in_huge(vmf-&gt;vma-&gt;vm_mm,
+                                      vmf-&gt;address, slot_idx,
+                                      numa_node_id());
+    <span class="kw">else</span>
+        vmf-&gt;ret = smap_swap_in_page(vmf-&gt;vma-&gt;vm_mm,
+                                      vmf-&gt;address, slot_idx,
+                                      numa_node_id());
+
+    <span class="cm">/* Skip the original do_swap_page */</span>
+    instruction_pointer_set(regs, ((<span class="kw">unsigned long</span>)p-&gt;addr) + p-&gt;size);
+    <span class="kw">return</span> <span class="num">1</span>;
+}
+</code></pre>
+
+
+<!-- ============================================================ -->
+<h2 id="impl-plan">15. Implementation Plan</h2>
+
+<div class="phase">
+<div class="phase-title">Phase 1: Swap Map Allocator + Block I/O Engine + Device Setup (1 week)</div>
+<ul>
+<li>Implement <code>smap_swap_map.c</code>: bitmap create/destroy, alloc/free for 4K and 2M</li>
+<li>Implement <code>smap_swap_bio.c</code>: single bio submit, completion callback, batch API</li>
+<li>Add <code>SMAP_SWAP_DEV_SET</code> ioctl to open NVMe block device and initialize bitmaps</li>
+<li>Unit test: allocate/free slots, write/read test pages to NVMe</li>
+</ul>
+</div>
+
+<div class="phase">
+<div class="phase-title">Phase 2: Swap-Out Path (1 week)</div>
+<ul>
+<li>Implement <code>do_swap_out()</code> in <code>smap_swap.c</code></li>
+<li>PTE manipulation: <code>try_to_unmap()</code>, swap entry encoding, <code>set_pte_at()</code></li>
+<li>Add <code>SMAP_SWAP_OUT</code> ioctl handler in <code>mig_init.c</code></li>
+<li>Test: swap out pages, verify swap PTE installed, verify data written to NVMe</li>
+</ul>
+</div>
+
+<div class="phase">
+<div class="phase-title">Phase 3: Swap-In Fault Hook (1.5 weeks)</div>
+<ul>
+<li>Implement kprobe on <code>do_swap_page()</code></li>
+<li>Implement <code>smap_swap_readpage()</code>: bio read, page allocation, PTE install</li>
+<li>NUMA-aware allocation: <code>alloc_pages_node(numa_node_id(), ...)</code></li>
+<li>Test: access swapped-out page, verify fault handler triggers, data correct</li>
+</ul>
+</div>
+
+<div class="phase">
+<div class="phase-title">Phase 4: 2M Hugepage Swap (1 week)</div>
+<ul>
+<li>2M bitmap and contiguous slot allocation</li>
+<li>Hugepage swap-out: large bio or 512-bio batch write</li>
+<li>Hugepage swap-in: compound page alloc, batch read, PMD install</li>
+<li>Fallback path: split to 4K if hugepage unavailable</li>
+<li>Test: swap 2M page, verify hugepage preserved on swap-in</li>
+</ul>
+</div>
+
+<div class="phase">
+<div class="phase-title">Phase 5: User-Space Integration (1 week)</div>
+<ul>
+<li>Integrate cold_tracker with swap-out path</li>
+<li>Implement <code>DoSwapOut()</code> in <code>migration.c</code> using ioctl</li>
+<li>Add swap stats to monitoring output</li>
+<li>Add <code>SMAP_SWAP_STATS</code> ioctl and user-space reader</li>
+<li>Config: NVMe device path, 4K/2M split ratio</li>
+</ul>
+</div>
+
+<div class="phase">
+<div class="phase-title">Phase 6: Testing, Debugging, Performance Tuning (1.5 weeks)</div>
+<ul>
+<li>Stress test: concurrent swap-out and fault-driven swap-in</li>
+<li>Correctness: verify data integrity after swap round-trip</li>
+<li>Performance: measure swap-out throughput, swap-in latency (P50/P99)</li>
+<li>Edge cases: out-of-space, NVMe errors, process exit during swap</li>
+<li>Memory leak check: verify all pages freed, all slots returned</li>
+<li>Compare vs Option B: latency, throughput, hugepage preservation</li>
+</ul>
+</div>
+
+<div class="warn">
+<strong>Total estimated effort: ~7&ndash;8 weeks</strong> for a single developer.
+Phase 3 (kprobe fault handler) and Phase 4 (2M hugepage) are the highest-risk phases
+due to direct PTE manipulation in fault context.
+</div>
+
+
+<!-- ============================================================ -->
+<h2 id="references">16. References</h2>
+
+<table>
+<tr><th>Resource</th><th>Path / URL</th><th>Relevance</th></tr>
+<tr><td>Linux swap core</td><td><code>mm/swap.c</code>, <code>mm/swap_state.c</code></td><td>Swap entry management, swap cache</td></tr>
+<tr><td>Page fault handler</td><td><code>mm/memory.c</code> &mdash; <code>do_swap_page()</code></td><td>Swap-in fault path, PTE installation</td></tr>
+<tr><td>Block I/O</td><td><code>block/bio.c</code>, <code>include/linux/bio.h</code></td><td>bio allocation, submission, completion</td></tr>
+<tr><td>Swap PTE encoding</td><td><code>include/linux/swapops.h</code></td><td><code>swp_entry()</code>, <code>swp_offset()</code>, <code>swp_type()</code></td></tr>
+<tr><td>aarch64 PTE format</td><td><code>arch/arm64/include/asm/pgtable.h</code></td><td>PTE bit layout, swap PTE format</td></tr>
+<tr><td>THP / hugepage</td><td><code>include/linux/huge_mm.h</code>, <code>mm/huge_memory.c</code></td><td>Compound pages, PMD entries, THP splitting</td></tr>
+<tr><td>Kprobe API</td><td><code>include/linux/kprobes.h</code>, <code>kernel/kprobes.c</code></td><td>Kprobe registration, pre-handler, regs access</td></tr>
+<tr><td>SMAP Option B design</td><td><code>smap_nvme_swap_option_b.html</code></td><td>Comparison reference, shared user-space code</td></tr>
+<tr><td>SMAP architecture</td><td><code>smap_architecture.html</code></td><td>Overall SMAP three-tier design</td></tr>
+<tr><td>openEuler 22.03 kernel</td><td>kernel 5.10 (openEuler fork)</td><td>Target kernel version, available APIs</td></tr>
+</table>
+
+<p style="margin-top: 40px; color: var(--muted); font-size: 0.85em; border-top: 1px solid var(--border); padding-top: 16px;">
+SMAP NVMe Swap Option A &mdash; Custom Kernel Swap Design Document<br>
+ubturbo/SMAP &mdash; April 2026<br>
+~1000 lines &middot; 4 SVG diagrams &middot; 12 code listings
+</p>
+
+</body>
+</html>
