@@ -32,3 +32,11 @@ Additional research pass:
   - `umdk-component-architecture.md`
   - `urma-udma-working-flows.md`
 - Updated `README.md` and `source-map.md` to reflect the current local repo layout instead of the older pre-`src/` layout.
+
+Specification deep-dive pass:
+
+- Re-read the full local `UB-Base-Specification-2.0-zh.pdf` extraction with focus on UB architecture, data-link reliability, network addressing/routing, transport services, transaction services, function-layer URMA, UBoE, and Ethernet interop.
+- Cross-checked the OS reference design sections for UMDK functional architecture and URMA module/usage model.
+- Cross-checked public IANA, IEEE, and NVIDIA/InfiniBand/RoCE references for comparison with Ethernet, InfiniBand RDMA, and RoCEv2.
+- Added `unifiedbus-spec-umdk-urma-udma.md` with a spec-first explanation of UB, URMA, UMDK, UDMA, UBoE, and comparison with Ethernet/RDMA/RoCE.
+- Updated `README.md` and `source-map.md` with the new spec deep-dive entry and source map.

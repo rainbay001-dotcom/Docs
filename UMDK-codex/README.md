@@ -26,6 +26,7 @@ Two local document directories were found:
 ## Contents
 
 - [UnifiedBus and UMDK research findings](./unifiedbus-umdk-research.md)
+- [UnifiedBus spec deep dive for UMDK, URMA, and UDMA](./unifiedbus-spec-umdk-urma-udma.md)
 - [UMDK component architecture](./umdk-component-architecture.md)
 - [URMA/UDMA working flows](./urma-udma-working-flows.md)
 - [URMA/UDMA architecture](./urma-udma-architecture.md) - older snapshot, kept for continuity
@@ -61,6 +62,19 @@ application
   -> ubcore resource APIs
   -> kernel UDMA ubcore_ops implementation
   -> UBASE/UMMU/UDMA hardware
+```
+
+The spec-side interpretation is:
+
+```text
+UB Base Specification
+  -> defines UB protocol stack, transaction layer, and URMA programming model
+UB OS Software Reference Design
+  -> maps that model into UMDK, liburma, uburma, ubcore, and UDMA drivers
+UMDK source tree
+  -> implements the user-space API and provider ABI
+UDMA user/kernel drivers
+  -> implement provider-specific queues, doorbells, contexts, segments, and TP support
 ```
 
 ## Follow-up Questions

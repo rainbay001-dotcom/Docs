@@ -16,6 +16,57 @@ Observed branch/commit:
 master @ d04677a
 ```
 
+## Local UnifiedBus Specification PDFs
+
+Primary local paths:
+
+| Path | Role |
+| --- | --- |
+| `/Users/ray/Documents/docs/unifiedbus/UB-Base-Specification-2.0-zh.pdf` | Full Chinese UB base specification; primary source for UB stack, transaction layer, URMA functional model, UBoE, and Ethernet interop |
+| `/Users/ray/Documents/docs/unifiedbus/UB-Base-Specification-2.0-preview-en.pdf` | English preview of UB base specification |
+| `/Users/ray/UnifiedBus-docs-2.0/UB-Base-Specification-2.0-preview-en.pdf` | Duplicate/local English preview set |
+| `/Users/ray/UnifiedBus-docs-2.0/UB-Software-Reference-Design-for-OS-2.0-en.pdf` | English OS reference design; primary source for UMDK functional architecture and URMA module architecture |
+| `/Users/ray/Documents/docs/unifiedbus/UB-Software-Reference-Design-for-OS-2.0-zh.pdf` | Chinese OS reference design cross-check |
+| `/Users/ray/UnifiedBus-docs-2.0/UB-Service-Core-SW-Arch-RD-2.0-en.pdf` | Service Core reference; source for HCOM, Socket-over-UB, HCAL, RoUB positioning |
+
+Extracted text used for search:
+
+| Path | Role |
+| --- | --- |
+| `/tmp/unifiedbus-text/UB-Base-Specification-2.0-zh.txt` | Full base-spec text extraction |
+| `/tmp/unifiedbus-text/UB-Software-Reference-Design-for-OS-2.0-en.txt` | English OS reference extraction |
+| `/tmp/unifiedbus-text/UB-Software-Reference-Design-for-OS-2.0-zh.txt` | Chinese OS reference extraction |
+| `/tmp/unifiedbus-text/UB-Service-Core-SW-Arch-RD-2.0-en.txt` | English Service Core extraction |
+
+Spec sections most relevant to UMDK/URMA/UDMA:
+
+| Source | Section | Relevance |
+| --- | --- | --- |
+| UB Base Specification 2.0 | Section 2 | UB architecture, UBPU, UB Controller, UMMU, UB Link, UB Domain, UBoE, protocol stack |
+| UB Base Specification 2.0 | Section 4 | Data-link reliability, credit flow control, virtual lanes, retry buffer |
+| UB Base Specification 2.0 | Section 5 | Network addressing, CNA/IP formats, routing, multipath, service level, congestion marking |
+| UB Base Specification 2.0 | Section 6 | RTP/CTP/UTP/TP Bypass, TP Channel, TPG, PSN, acknowledgements, retransmission, congestion control |
+| UB Base Specification 2.0 | Section 7 | Transaction layer, ROI/ROT/ROL/UNO, memory/message/maintenance/management transactions |
+| UB Base Specification 2.0 | Section 8.2-8.4 | Segment, Jetty, JFC/JFCE/JFAE, transaction queues, access credentials, URMA async flow |
+| UB Base Specification 2.0 | Appendix B | IP/CNA UB packet formats, UPIH/EIDH, IP-based URMA packet formats |
+| UB Base Specification 2.0 | Appendix E | Ethernet interop and UBoE |
+| UB Base Specification 2.0 | Appendix F | Network management over UB links and ARP hardware type context |
+| UB OS Software Reference Design | Section 5.2 | UMDK functional architecture |
+| UB OS Software Reference Design | Section 5.3 | URMA overview, module architecture, Jetty/Segment/two-sided/one-sided/atomic/completion behavior |
+| UB Service Core Reference | Section 5 | HCOM, Socket-over-UB, HCAL, RoUB compatibility layer positioning |
+
+External comparison references:
+
+| Link | Role |
+| --- | --- |
+| https://www.iana.org/assignments/service-names-port-numbers/service-names-port-numbers.xhtml?search=4792 | `unified-bus` TCP/UDP port 4792 |
+| https://www.iana.org/assignments/arp-parameters/arp-parameters.xhtml | ARP hardware type 38 for Unified Bus |
+| https://standards.ieee.org/ieee/802.3/10422/ | IEEE 802.3-2022 Ethernet scope |
+| https://1.ieee802.org/dcb/802-3bd/ | IEEE PFC/Data Center Bridging context |
+| https://docs.nvidia.com/networking/display/RDMAAwareProgrammingv17/RDMA-Aware%2BProgramming%2BOverview | RDMA verbs/QP baseline |
+| https://docs.nvidia.com/networking/display/RDMAAwareProgrammingv17/InfiniBand | InfiniBand native RDMA baseline |
+| https://docs.nvidia.com/networking/display/MLNXENv23100550/RDMA%2Bover%2BConverged%2BEthernet%2B%28RoCE%29 | RoCEv1/RoCEv2 encapsulation baseline |
+
 Top-level layout:
 
 | Path | Role |
