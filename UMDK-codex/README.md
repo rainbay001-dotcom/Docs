@@ -27,6 +27,7 @@ Two local document directories were found:
 
 - [UnifiedBus and UMDK research findings](./unifiedbus-umdk-research.md)
 - [UnifiedBus spec deep dive for UMDK, URMA, and UDMA](./unifiedbus-spec-umdk-urma-udma.md)
+- [UMDK/RDMA terminology mapping and comparison](./umdk-rdma-terminology-and-comparison.md)
 - [UMDK component architecture](./umdk-component-architecture.md)
 - [URMA/UDMA working flows](./urma-udma-working-flows.md)
 - [URMA/UDMA architecture](./urma-udma-architecture.md) - older snapshot, kept for continuity
@@ -42,6 +43,11 @@ UMDK is the user-space portion of the UnifiedBus memory-semantics software stack
 - `src/cam`: communication acceleration code for AI/MoE workloads.
 - `src/ulock`: distributed lock implementation.
 - `src/usock`: socket compatibility support through UMS.
+
+The terminology guide maps UMDK/URMA objects to familiar RDMA and Ethernet
+concepts. The short version is: `ubcore_device` is closest to `ib_device`,
+`ubcore_ops` to `ib_device_ops`, `Jetty` to `QP`, `JFS/JFR/JFC` to
+`SQ/RQ/CQ`, and `Segment` to `MR`, with important UB-specific differences.
 
 The kernel repo provides the matching kernel-side UB/URMA components:
 

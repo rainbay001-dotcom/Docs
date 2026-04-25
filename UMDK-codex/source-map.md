@@ -67,6 +67,15 @@ External comparison references:
 | https://docs.nvidia.com/networking/display/RDMAAwareProgrammingv17/InfiniBand | InfiniBand native RDMA baseline |
 | https://docs.nvidia.com/networking/display/MLNXENv23100550/RDMA%2Bover%2BConverged%2BEthernet%2B%28RoCE%29 | RoCEv1/RoCEv2 encapsulation baseline |
 
+Terminology mapping code anchors:
+
+| Local symbol family | Local file |
+| --- | --- |
+| `urma_device_t`, `urma_context_t`, `urma_jfs_t`, `urma_jfr_t`, `urma_jfc_t`, `urma_jetty_t`, `urma_seg_t` | `/Users/ray/Documents/Repo/ub-stack/umdk/src/urma/lib/urma/core/include/urma_types.h` |
+| `urma_create_jfc`, `urma_create_jfs`, `urma_create_jfr`, `urma_create_jetty`, `urma_register_seg`, post/poll APIs | `/Users/ray/Documents/Repo/ub-stack/umdk/src/urma/lib/urma/core/include/urma_api.h` |
+| `ubcore_device`, `ubcore_ops`, `ubcore_jfs`, `ubcore_jfr`, `ubcore_jfc`, `ubcore_jetty`, `ubcore_target_seg` | `/Users/ray/Documents/Repo/kernel/include/ub/urma/ubcore_types.h` |
+| `ib_device`, `ib_device_ops`, `ib_qp`, `ib_cq`, `ib_mr`, `ib_pd`, `ib_ucontext` | `/Users/ray/Documents/Repo/kernel/include/rdma/ib_verbs.h` |
+
 Top-level layout:
 
 | Path | Role |

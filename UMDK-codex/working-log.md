@@ -40,3 +40,10 @@ Specification deep-dive pass:
 - Cross-checked public IANA, IEEE, and NVIDIA/InfiniBand/RoCE references for comparison with Ethernet, InfiniBand RDMA, and RoCEv2.
 - Added `unifiedbus-spec-umdk-urma-udma.md` with a spec-first explanation of UB, URMA, UMDK, UDMA, UBoE, and comparison with Ethernet/RDMA/RoCE.
 - Updated `README.md` and `source-map.md` with the new spec deep-dive entry and source map.
+
+Terminology/comparison pass:
+
+- Added `umdk-rdma-terminology-and-comparison.md`.
+- Mapped UB/UMDK/URMA/UDMA terms to Ethernet, InfiniBand, RDMA verbs, and Linux RDMA-core terms.
+- Compared UMDK/URMA/UDMA against Ethernet, InfiniBand, RoCE, and RDMA from spec, design, implementation, interface, wire, reliability, ordering, memory, endpoint, and migration perspectives.
+- Added code anchors for local UB and RDMA kernel/user-space type definitions.
