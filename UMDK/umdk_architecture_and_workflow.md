@@ -175,7 +175,7 @@ Five kernel subdirectories: `ubcore/`, `uburma/`, `ubagg/`, `ulp/ipourma/`, `hw/
 #define UBURMA_CMD _IOWR(UBURMA_CMD_MAGIC, 1, struct uburma_cmd_hdr)
 ```
 
-Single ioctl entrypoint; the specific operation is discriminated by an enum in the header. A `grep -c 'UBURMA_CMD_[A-Z]'` counts **101 tokens** (verified) covering the full uAPI surface — context lifecycle (CREATE_CTX, DESTROY_CTX), memory (REGISTER/UNREGISTER/IMPORT_SEG, ALLOC/FREE_TOKEN_ID), work queues (CREATE_JFS/JFR/JFC, ARM_JFC), jetty (CREATE/MODIFY/DELETE/BIND/IMPORT_JETTY, CREATE_JETTY_GRP), EID (ADD/DELETE_EID, GET_EID_LIST), device (QUERY_DEV_ATTR, QUERY_STATS), and MMAP.
+Single ioctl entrypoint; the specific operation is discriminated by an enum in the header. The `enum uburma_cmd` has **85 entries** (`UBURMA_CMD_CREATE_CTX = 1` through `UBURMA_CMD_MAX` sentinel) — i.e. **84 actual sub-commands** (verified at `uburma_cmd.h:35-123`, 2026-04-25). Earlier "~101" estimates came from a `grep -c` that over-counted by including non-enum `#define`s like `UBURMA_CMD_MAX_ARGS_SIZE`. Coverage spans: context lifecycle (CREATE_CTX), memory (REGISTER/UNREGISTER/IMPORT_SEG, ALLOC/FREE_TOKEN_ID), work queues (CREATE_JFS/JFR/JFC, MODIFY_JFC, CREATE_JFCE), jetty (CREATE/MODIFY/QUERY/DELETE/IMPORT/BIND/UNBIND/ADVISE_JETTY, CREATE_JETTY_GRP), batch deletes, EID (GET_EID_LIST, GET_EID_BY_IP), device queries (QUERY_DEV_ATTR, GET_TP_LIST), TP config (MODIFY_TP, EXCHANGE_TP_INFO, SET/GET_TP_ATTR), async variants (`*_ASYNC`), and an alloc-based parallel lifecycle (ALLOC/ACTIVE/DEACTIVE/FREE_*) for hot-rebind use cases. Per-ioctl argument-struct catalogue in [`umdk_user_kernel_boundary.md`](umdk_user_kernel_boundary.md). A second magic `'E'` (`UBURMA_EVENT_CMD_MAGIC`, `uburma_cmd.h:1369`) carries 3 event-poll ioctls (`WAIT_JFC`, `GET_ASYNC_EVENT`, `WAIT_NOTIFY`) all using `nr=0` differentiated by struct sizeof.
 
 **mmap path.** `uburma_mmap.c` maps doorbell pages, WQ/CQ rings; tracks VMAs per-fd for teardown on close. `uburma_main.c:20` installs the mmap file op.
 
@@ -586,7 +586,7 @@ app → liburma → WQE into ring → wmb → doorbell MMIO
 
 ## 6. User-kernel boundary at a glance
 
-Consolidated view of every interface that crosses the user↔kernel boundary in URMA-land, pulling together material from §2 (kernel) + §3 (userspace) + §4 (workflows). For the **per-ioctl argument-struct catalogue** (which struct each of the ~101 sub-commands carries), see [`umdk_user_kernel_boundary.md`](umdk_user_kernel_boundary.md).
+Consolidated view of every interface that crosses the user↔kernel boundary in URMA-land, pulling together material from §2 (kernel) + §3 (userspace) + §4 (workflows). For the **per-ioctl argument-struct catalogue** (which struct each of the 84 sub-commands carries), see [`umdk_user_kernel_boundary.md`](umdk_user_kernel_boundary.md).
 
 ### 6.1 The boundary, drawn
 
@@ -603,7 +603,7 @@ USERSPACE
 │   │                                                                   │
 │   ├── ioctl(/dev/ub_uburma_<n>)  magic 'U' cmd 1                      │
 │   │     uburma_cmd_hdr { command, args_len, args_addr }               │
-│   │     → ~101 UBURMA_CMD_* sub-commands                              │
+│   │     → 84 UBURMA_CMD_* sub-commands                              │
 │   │                                                                   │
 │   ├── netlink genl (ubcore_genl_admin) — stats, EID, res queries      │
 │   └── sysfs — config space, resource mmap, driver_override, …         │
@@ -645,7 +645,7 @@ KERNEL
 | **mmap'd JFS / JFR / JFC rings** | user ↔ HW (DMA) | WQE production, CQE consumption | §4.5–§4.6; ABI in `udma_abi.h` |
 | **`/dev/ub_uburma_<n>` ioctl** | user → kernel | context, segment, jetty, queue, EID, device-query lifecycle | `uburma_cmd.h:34-36` (`UBURMA_CMD` magic `'U'` cmd 1) |
 | `uburma_cmd_hdr` wrapper struct | user → kernel | carries `(command, args_len, args_addr)` | `uburma_cmd.h:24` |
-| ~101 `UBURMA_CMD_*` sub-commands | user → kernel | per-op dispatch | `uburma_cmd.h:38-100` enum |
+| 84 `UBURMA_CMD_*` sub-commands (85 enum entries with `UBURMA_CMD_MAX` sentinel) | user → kernel | per-op dispatch | `uburma_cmd.h:38-100` enum |
 | **eventfd** registered via uburma | kernel → user | async events: CQ armed, errors, port state, hot-remove | `uburma_event.c` |
 | **`/dev/ubcore` ioctl** | user → kernel | UVS topology / TP path queries | `umdk/src/urma/lib/uvs/core/tpsa_ioctl.h:30-31` (`TPSA_CMD` magic `'V'` cmd 1) |
 | **`/dev/ubagg` ioctl** | user → kernel | aggregator / bonding mgmt | `umdk/src/urma/lib/uvs/core/uvs_ubagg_ioctl.h:36` |
@@ -658,7 +658,7 @@ KERNEL
 
 **User → kernel (per syscall):**
 
-- Command ID (one of ~101 `UBURMA_CMD_*` values).
+- Command ID (one of 84 `UBURMA_CMD_*` values).
 - Per-command argument struct (varies by command).
 - Virtual addresses for kernel to pin (segment register).
 - Sizes, depths, capabilities (queue depth, segment length, jetty config).
