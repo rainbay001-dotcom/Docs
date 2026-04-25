@@ -41,7 +41,7 @@ Anchored to the UB Base Specification 2.0 preview (English) and the openEuler `k
 | **JFR** (Jetty Free Receive queue) | `struct ubcore_jfr` (types.h:1433) | Recv Queue (RQ) or **SRQ** | The "shareable" flavor maps to SRQ. |
 | **JFC** (Jetty Flush Completion queue) | `struct ubcore_jfc` (types.h:1506) | `ib_cq` | Completion queue. |
 | **Memory segment** + **UBMD** | `struct ubcore_target_seg` | `ib_mr` + rkey | Spec term is "segment"; identifier is the **UBMD** = (EID, TokenID, UBA). Segment **and** key are decoupled. |
-| **Token** (TokenID + TokenValue) | `struct ubcore_token_id` | rkey | **Independently allocable from the segment** — enables rotating revocation without re-registering memory. |
+| **Token** (TokenID + TokenValue) | `struct ubcore_token_id` | rkey | **Independently allocable from the segment** — enables rotating revocation without re-registering memory. **Two-granularity per UB-Base-Spec §11.4.4**: group-wide (Home invalidates TokenID/TokenValue → all Users lose access) or per-User (Home generates B-TokenValue, sends only to surviving Users; transition window keeps both A+B; then promote B and generate C as new backup → un-updated User is revoked). See [`umdk_spec_deep_dive.md`](umdk_spec_deep_dive.md) §4.3 for the full protocol. |
 | **UBA** (UB Address) | (logical) | virtual addr in MR | The address the User uses to reach into the Home's segment. |
 | **UB memory descriptor (UBMD)** | (logical) | rkey + virtual addr | The 3-tuple `(EID, TokenID, UBA)` identifying a memory access. |
 | **UContext** (per-process kernel context) | `struct ubcore_ucontext` (types.h:1231) | `ib_ucontext` | Per-process kernel state. |

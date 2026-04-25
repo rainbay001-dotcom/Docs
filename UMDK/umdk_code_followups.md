@@ -8,7 +8,7 @@ Targeted code reads to resolve specific questions left open by earlier docs in t
 
 ## Q1. `udma_mue` — what is "UE"?
 
-**Answer.** UE = **User Engine**. MUE = **Management User Engine**. The module is the kernel↔microcontroller control-plane for transport-path lifecycle.
+**Answer.** UE = **(managed) UB Entity**; MUE = **Management UB Entity** (per UB Base Spec §10.2.3 p. 291). The module is the kernel↔Entity-management control plane for transport-path lifecycle. (Earlier reading from message-flow names suggested "User Engine" — that's plausible at the HW microcontroller level, but the **spec name and architectural role** is "Management UB Entity": the leading Entity in a UBPU that owns shared TP-channel resources for the other Entities in the same UBPU. See [`umdk_spec_deep_dive.md`](umdk_spec_deep_dive.md) §3.3.)
 
 **Evidence.**
 
