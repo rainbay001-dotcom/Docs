@@ -11,6 +11,11 @@ This note traces how URMA and UDMA work from application calls down to the kerne
 - Local UMDK source.
 - Local UB kernel source.
 
+For the platform lifecycle before liburma discovery, see
+`end-to-end-platform-workflow.md` and
+`ub-root-bus-udev-device-enumeration.md`. For the detailed UMMU/TID/token and
+Segment memory-management path, see `ummu-memory-management-deep-dive.md`.
+
 ## Core Runtime Objects
 
 | Object | User-space type | Kernel/common role | UDMA/provider role |

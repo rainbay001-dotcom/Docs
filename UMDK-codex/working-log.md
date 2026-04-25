@@ -47,3 +47,11 @@ Terminology/comparison pass:
 - Mapped UB/UMDK/URMA/UDMA terms to Ethernet, InfiniBand, RDMA verbs, and Linux RDMA-core terms.
 - Compared UMDK/URMA/UDMA against Ethernet, InfiniBand, RoCE, and RDMA from spec, design, implementation, interface, wire, reliability, ordering, memory, endpoint, and migration perspectives.
 - Added code anchors for local UB and RDMA kernel/user-space type definitions.
+
+Refinement pass for root bus, udev, UMMU, and full end-to-end workflow:
+
+- Added `00-index-and-coverage.md` as the reading order and coverage matrix.
+- Added `end-to-end-platform-workflow.md` to connect firmware, UBRT/UBIOS, UB bus, ubase, UDMA, ubcore, uburma, liburma, Segment, data path, and teardown.
+- Added `ub-root-bus-udev-device-enumeration.md` with detailed source-derived coverage of UB root table parsing, `struct ub_bus_controller`, `ub_bus_type`, `ub_entity` topology enumeration, uevents, udev-visible state, `/dev/ubcore`, and `/dev/uburma/<device>`.
+- Added `ummu-memory-management-deep-dive.md` with detailed source-derived coverage of UMMU firmware nodes, UBC-to-UMMU mapping, UB bus DMA/IOMMU configuration, UDMA IOPF/SVA/KSVA setup, user-context TID allocation, token ID/TID handling, Segment registration, page pinning, UMMU grant/ungrant, MATT map/unmap, EID sync, queue buffer mapping, and teardown.
+- Updated `README.md` and `source-map.md` to link and index the new docs and source anchors.

@@ -25,13 +25,18 @@ Two local document directories were found:
 
 ## Contents
 
+- [Documentation index and coverage matrix](./00-index-and-coverage.md)
 - [UnifiedBus and UMDK research findings](./unifiedbus-umdk-research.md)
 - [UnifiedBus spec deep dive for UMDK, URMA, and UDMA](./unifiedbus-spec-umdk-urma-udma.md)
 - [UMDK/RDMA terminology mapping and comparison](./umdk-rdma-terminology-and-comparison.md)
 - [UMDK component architecture](./umdk-component-architecture.md)
+- [End-to-end platform workflow](./end-to-end-platform-workflow.md)
+- [UB root bus, udev, and device enumeration](./ub-root-bus-udev-device-enumeration.md)
+- [UMMU memory-management deep dive](./ummu-memory-management-deep-dive.md)
 - [URMA/UDMA working flows](./urma-udma-working-flows.md)
 - [URMA/UDMA architecture](./urma-udma-architecture.md) - older snapshot, kept for continuity
 - [Source map](./source-map.md)
+- [Documentation refinement TODO](./refinement-todo.md)
 - [Working log](./working-log.md)
 
 ## Current Understanding
@@ -70,6 +75,18 @@ application
   -> UBASE/UMMU/UDMA hardware
 ```
 
+The full platform path starts earlier than the user API:
+
+```text
+firmware UBRT/UBIOS
+  -> ubfi parses UBC and UMMU tables
+  -> ub_bus_type enumerates ub_entity devices
+  -> ubase binds UB entities and creates auxiliary devices
+  -> UDMA registers ubcore_device objects
+  -> ubcore/uburma publish sysfs and /dev nodes
+  -> liburma discovers and opens /dev/uburma/<device>
+```
+
 The spec-side interpretation is:
 
 ```text
@@ -87,4 +104,6 @@ UDMA user/kernel drivers
 
 - Confirm the exact branch/tag pairing between `/Users/ray/Documents/Repo/ub-stack/umdk` and `/Users/ray/Documents/Repo/ub-stack/kernel-ub`.
 - Compare current `src/urma/hw/udma/udma_u_abi.h` with the kernel-side ABI in both kernel trees.
-- Continue tracing complete operations end to end, especially `create_context`, `create_jetty`, `register/import segment`, `post_jfs_wr`, and `poll_jfc`.
+- Capture real UB hardware output for `/sys/bus/ub`, `/sys/class/ubcore`, `/sys/class/uburma`, `/dev/ubcore`, `/dev/uburma`, and `udevadm info`.
+- Continue line-by-line tracing for the highest-value user API paths:
+  `create_context`, `create_jetty`, `register/import segment`, `post_jfs_wr`, and `poll_jfc`.

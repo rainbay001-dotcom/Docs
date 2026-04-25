@@ -184,15 +184,29 @@ Key files:
 
 | Path | Role |
 | --- | --- |
+| `drivers/ub/ubfi/ub_fi.c` | UB firmware-interface module entry; selects ACPI UBRT or DTS UBIOS table |
+| `drivers/ub/ubfi/ubrt.c` | Parses UB root table and dispatches UBC/UMMU subtables |
+| `drivers/ub/ubfi/ubc.c` | Creates `struct ub_bus_controller`, resources, IRQs, MSI domain, and `ubc_list` |
+| `drivers/ub/ubfi/ubc.h` | Firmware `struct ubc_node`; includes `ummu_mapping`, CNA/EID ranges, DMA CCA |
+| `drivers/ub/ubfi/ummu.c` | Parses UMMU table, matches ACPI/DTS platform devices, renames `ummu.N`, attaches resources |
+| `include/ub/ubfi/ubfi.h` | UMMU node and UBRT fwnode definitions |
+| `drivers/ub/ubus/ub-driver.c` | Defines and registers `ub_bus_type`; DMA/IOMMU configuration hook |
+| `drivers/ub/ubus/ubus_driver.c` | UB bus match/probe/remove/uevent callbacks and host-probe sequence |
+| `drivers/ub/ubus/enum.c` | UBC-rooted topology scan, `ub_entity` creation, route calculation, activation |
+| `include/ub/ubus/ubus.h` | `struct ub_entity`, `struct ub_driver`, UB bus API |
+| `drivers/ub/ubus/vendor/hisilicon/hisi-ubus.c` | Hisilicon management subsystem registration and platform-driver match |
+| `drivers/ub/ubase/ubase_main.c` | UBASE module init and UB driver registration |
+| `drivers/ub/ubase/ubase_ubus.c` | UBASE `struct ub_driver` probe/remove and UB entity initialization |
 | `drivers/ub/urma/hw/udma/Kconfig` | Defines `CONFIG_UB_UDMA` and dependencies |
 | `drivers/ub/urma/hw/udma/Makefile` | Builds the `udma` module objects |
 | `drivers/ub/urma/hw/udma/udma_main.c` | module entry, auxiliary driver, ubcore ops, caps |
 | `drivers/ub/urma/hw/udma/udma_dev.h` | main `struct udma_dev` |
-| `drivers/ub/urma/hw/udma/udma_common.c` | memory pinning, UMMU map/unmap, ID allocation |
+| `drivers/ub/urma/hw/udma/udma_common.c` | memory pinning, UMMU MATT map/unmap, ID allocation |
 | `drivers/ub/urma/hw/udma/udma_ctl.c` | extended/user-control paths |
-| `drivers/ub/urma/hw/udma/udma_ctx.c` | user context and mmap support |
+| `drivers/ub/urma/hw/udma/udma_ctx.c` | user context, SVA/separated TID allocation, mmap support |
 | `drivers/ub/urma/hw/udma/udma_db.c` | doorbell management |
-| `drivers/ub/urma/hw/udma/udma_segment.c` | segment register/import |
+| `drivers/ub/urma/hw/udma/udma_tid.c` | token ID/TID allocation and KSVA table management |
+| `drivers/ub/urma/hw/udma/udma_segment.c` | segment register/import, UMMU grant/ungrant, MATT mapping |
 | `drivers/ub/urma/hw/udma/udma_jfc.c` | completion queue |
 | `drivers/ub/urma/hw/udma/udma_jfs.c` | send queue |
 | `drivers/ub/urma/hw/udma/udma_jfr.c` | receive queue |
@@ -255,8 +269,19 @@ kernel-ub:
 
 OLK-6.6 kernel:
 
+- `ubfi_init()`: loads UBRT/UBIOS firmware information.
+- `handle_ubc_table()`: creates firmware-reported UB controllers.
+- `handle_ummu_table()`: links firmware UMMU records to platform devices.
+- `ub_bus_type`: Linux bus named `ub`.
+- `ub_uevent()`: emits `UB_ID`, `UB_MODULE`, `UB_TYPE`, `UB_CLASS`, `UB_VERSION`, `UB_SEQ_NUM`, `UB_ENTITY_NAME`, and `MODALIAS=ub:*`.
+- `ub_enum_probe()`: scans and activates UB topology.
+- `ubase_ubus_probe()`: binds a UB entity to UBASE.
 - `g_dev_ops`: UDMA implementation of `struct ubcore_ops`.
 - `udma_probe()`: auxiliary-device probe path.
 - `udma_set_ubcore_dev()`: configures and registers the ubcore device.
+- `udma_alloc_dev_tid()`: enables IOPF/SVA/KSVA and obtains a device TID.
+- `udma_alloc_ucontext()`: obtains per-user-context UMMU TID.
+- `udma_alloc_tid()`: maps ubcore token IDs to UMMU TIDs.
+- `udma_register_seg()`: UDMA Segment registration and UMMU grant/map path.
 - `query_caps_from_firmware()`: queries hardware/firmware resources.
 - `udma_query_device_attr()`: exposes device capabilities to ubcore/user space.
