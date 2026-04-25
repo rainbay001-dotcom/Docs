@@ -273,7 +273,7 @@ Approximate, anecdotal — for orientation only:
 
 | Metric | URMA + UDMA | IB EDR/HDR/NDR (verbs) | RoCEv2 over 100/200 GbE | TCP/IP over 100 GbE |
 |---|---|---|---|---|
-| Best-case one-way latency | ~1–5 µs (per UMDK perftest README; HW-dependent) | ~0.7–1 µs (NDR ConnectX-7 best case) | ~2–4 µs (with PFC tuning) | ~10–50 µs |
+| Best-case one-way latency | ~1–5 µs (per UMDK perftest README; HW-dependent). Aggregate: CloudMatrix384 sustains 538 tok/s/NPU under a 15 ms TPOT cap — see [`umdk_web_research_addenda.md`](umdk_web_research_addenda.md) §5 | ~0.7–1 µs (NDR ConnectX-7 best case) | ~2–4 µs (with PFC tuning) | ~10–50 µs |
 | Bandwidth | Up to fabric line rate (200/400 Gb/s class HW) | Up to fabric line rate | Up to NIC line rate | NIC line rate minus TCP overhead |
 | Lossless? | Yes (credit-based, link-layer) | Yes (credit-based, link-layer) | Conditional (PFC) | No |
 | Memory access | First-class (transaction layer) | First-class (verbs) | First-class | Synthesized via TCP+app |
@@ -324,6 +324,9 @@ Approximate, anecdotal — for orientation only:
 3. **"UVS = UBFM."** Not exactly. UBFM is a spec-level logical fabric manager; UVS is a userspace library wrapping ioctls on a single host.
 4. **"UB is RoCEv3."** No. UB is its own protocol stack; UBoE is the UB-over-Ethernet encapsulation, but UB itself is not Ethernet-derived.
 5. **"URMA is just IB verbs renamed."** Mostly true at the API level, but several semantic differences are deliberate (token rotation, jetty groups, ordering modes, UMMU permission model).
+6. **"UVS is a daemon like opensm."** **No** — UVS is a userspace **library** (`libuvs`); applications link it and call ioctls themselves. Topology state lives in the kernel (in `ubcore` and `ubagg`). Verified 2026-04-25 — see [`umdk_code_followups.md`](umdk_code_followups.md) §Q8.
+7. **"UMS is its own AF_UB socket family."** No — UMS **takes over `AF_SMC`** from the upstream Linux SMC-R subsystem; it `sock_unregister(AF_SMC)` and re-registers its own handlers. CONFIG_SMC must be present for the fallback path. See [`umdk_cam_dlock_usock.md`](umdk_cam_dlock_usock.md) §3.
+8. **"CloudMatrix384 numbers above are theoretical."** No — they're peer-reviewed measurements on DeepSeek-R1 with EP320; see [`umdk_web_research_addenda.md`](umdk_web_research_addenda.md) §5 and [arXiv:2506.12708](https://arxiv.org/abs/2506.12708).
 
 ---
 

@@ -147,17 +147,35 @@ The dec-if-one pattern guards against concurrent removal while users hold refs.
 
 **NUMA + reclaim.** Hooks `memory_hotplug.h`, owns mmu_notifier callbacks for invalidation when remote pages are removed.
 
+**Coherence mechanism (verified 2026-04-25).** `obmm_cache.c` drives HiSilicon SoC-cache HW primitives:
+
+| OBMM op | HW primitive (from `obmm_cache.c:60-66`) |
+|---|---|
+| invalidate | `HISI_CACHE_MAINT_MAKEINVALID` |
+| write-back only | `HISI_CACHE_MAINT_CLEANSHARED` |
+| write-back + invalidate | `HISI_CACHE_MAINT_CLEANINVALID` |
+
+`flush_cache_by_pa()` (`obmm_cache.c:57-119`) batches up to **1 GB per call** (`MAX_FLUSH_SIZE`) and retries on `-EBUSY`. `obmm_region_flush_range()` (`obmm_cache.c:121-159`) dispatches by ownership (import vs export region). TLB invalidation is broadcast across the inner-shareable domain via `__tlbi(aside1is, asid)` (`obmm_cache.c:162-171`). A semaphore serializes calls into the HW maintenance primitive to avoid contention. Cache-coherence is HW-enforced at the SoC fabric layer; software just drives the maintenance op. See [`umdk_code_followups.md`](umdk_code_followups.md) §Q4.
+
 **Why this matters.** OBMM is a parallel mechanism to URMA's segment_register: URMA segments are accessed via verb-level operations (post_send WRITE/READ), while OBMM regions are accessed via plain CPU loads/stores backed by the HW coherence fabric. The two are different programming models — message-passing vs shared-memory — over the same underlying UB.
 
 ---
 
 ## 5. UBMEMPFD + UBDEVSHM — virtualization & shared-mem contexts
 
-**UBMEMPFD** (`drivers/ub/ubmempfd/`). memfd-style fd for user-allocated memory pinning. Registers with UMMU for IOMMU translation. Small (~5 files); wraps `memfd_create()` so QEMU can hand a guest's memfd to host-side UMMU virtualization.
+**UBMEMPFD** (`drivers/ub/ubmempfd/`). The **vUMMU backend that QEMU plugs into** for guest memory translation (verified 2026-04-25).
+
+- Registers `/dev/ubmempfd` as a misc device (`ubmempfd_main.c:29`).
+- **Unusual choice:** uses a **`write()`-based command interface**, not `ioctl` (`ubmempfd_main.c:303-349`). Each `write()` carries a structured payload `{tid, opcode, uba, areas[], size}`.
+- Two opcodes: `UBMEMPFD_OPCODE_MAP` → `ubmempfd_do_map()`, and `UBMEMPFD_OPCODE_UNMAP`.
+- `ubmempfd_do_iommu_map()` (`ubmempfd_main.c:106-152`) calls `iommu_map()` for each coalesced HPA range, mapping guest HVA → UB Address.
+- Allocates / caches a UMMU TDEV (Tagged Device) per context via `ummu_core_alloc_tdev()` (`ubmempfd_main.c:222-259`).
+
+When a guest updates its page tables, QEMU writes the new mapping to `/dev/ubmempfd`; UBMEMPFD programs the real UMMU/IOMMU so HW DMA from UBPUs targets guest memory correctly. See [`umdk_code_followups.md`](umdk_code_followups.md) §Q5.
 
 **UBDEVSHM** (`drivers/ub/ubdevshm/`). Shared-memory device contexts. Lets multiple "user engines" share segment tables and page tables for zero-copy. Exports `/dev/ubdevshm`. ~8 files; integrates with OBMM for cross-process memory sharing.
 
-Both are glue layers; the heavy lifting is in OBMM and UMMU.
+Both are kernel glue layers; the heavy lifting is in OBMM and UMMU.
 
 ---
 
@@ -432,9 +450,9 @@ The `ipver=609` recurring parameter is a UB silicon revision tag (suspected — 
 
 1. **`ipver=609` semantics.** Almost certainly a silicon revision selector. Confirm in `drivers/ub/ubus/vendor/hisi/`.
 2. **UDMA MUE — RESOLVED.** UE = **User Engine** (an on-device microcontroller). MUE = Management User Engine. The module is a kernel↔User-Engine control plane for transport-path lifecycle (`GET_TP_LIST`, `ACTIVE/DEACTIVE_TP`, `SET/GET_TP_ATTR`). Carrier is the UBASE control queue. Cited in [`umdk_code_followups.md`](umdk_code_followups.md) §Q1.
-3. **`udma_dfx`.** DFx (Design For x — debug, telemetry, fault injection) helpers. Map the sysfs / debugfs surface they expose.
-4. **OBMM cross-supernode coherence.** What HW mechanism ensures cache consistency on remote-page invalidation? Selects `HISI_SOC_CACHE` so likely a HiSilicon-specific cache-coherency domain.
-5. **UBMEMPFD virtualization.** What does the QEMU-side counterpart look like? Where in QEMU does a guest UMMU (vUMMU) source fd-backed memory?
+3. **`udma_dfx` — RESOLVED.** Query-only context inspection (jfr/jfs/jetty/res via mailbox `UDMA_CMD_QUERY_*_CONTEXT`). No sysfs / debugfs / proc surface; no counters or fault injection. See [`umdk_code_followups.md`](umdk_code_followups.md) §Q2.
+4. **OBMM cross-supernode coherence — RESOLVED.** `hisi_soc_cache_maintain()` HW primitives + ASID-broadcast TLB invalidation; see §4 above and [`umdk_code_followups.md`](umdk_code_followups.md) §Q4.
+5. **UBMEMPFD virtualization — RESOLVED.** Misc device `/dev/ubmempfd` with `write()`-based command interface; QEMU writes guest HVA → UBA mappings on guest page-table updates. See §5 above and [`umdk_code_followups.md`](umdk_code_followups.md) §Q5.
 6. **Why two UMMU drivers?** `ummu-core` vs `logic_ummu` split. Are there other `logic_*` siblings planned?
 7. **DCA/HEM removal rationale.** Confirm via Huawei release notes or commit logs.
 8. **UNIC offload quirks.** Any UB-specific offloads (e.g. compression, tag-list) not exposed via standard `ethtool -k`?

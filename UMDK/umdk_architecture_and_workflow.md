@@ -84,6 +84,8 @@ This is the UB virtualization piece: host-side translation for a guest's vUMMU.
 
 **This is the cache-coherent distributed shared memory layer.** "Supernode" is the UB term for a coherency domain. OBMM lets processes on different supernodes share memory with proper invalidation — it's the memory-side analogue of URMA's jetty-based messaging.
 
+**Coherence mechanism (verified 2026-04-25):** OBMM uses HiSilicon SoC-cache HW primitives via `hisi_soc_cache_maintain()` (op codes `MAKEINVALID`, `CLEANSHARED`, `CLEANINVALID`), with `flush_cache_by_pa()` batching up to 1 GB per call (`obmm_cache.c:57-119`); TLB invalidation is broadcast via ASID using `__tlbi(aside1is, asid)` (`obmm_cache.c:162-171`). A semaphore serializes calls into the HW primitive. See [`umdk_code_followups.md`](umdk_code_followups.md) §Q4 for full citations.
+
 ### 1.7 `sentry/` — kernel→userspace event relay
 
 `drivers/ub/sentry/Kconfig` — `CONFIG_UB_SENTRY` (tristate, default `m`, depends on `UB && ACPI_POWER_NOTIFIER_CHAIN`).
@@ -179,9 +181,9 @@ Single ioctl entrypoint; the specific operation is discriminated by an enum in t
 
 **Key structs:** `uburma_cmd_hdr` (command, args_len, args_addr) at `uburma_cmd.h:24`; `uburma_file` per-fd state.
 
-### 2.3 `ubagg/` — aggregator (stub)
+### 2.3 `ubagg/` — aggregator (working)
 
-**Location:** `drivers/ub/urma/ubagg/`. Thin on OLK-6.6, effectively a stub. Intent is to aggregate across providers or EIDs, but the heavy lifting is done in userspace by the `bondp_*` bond provider. **(TODO: read the few ubagg files to confirm what's actually implemented kernel-side.)**
+**Location:** `drivers/ub/urma/ubagg/`. **Working module, not a stub** — ~3,479 LOC across 16 files (verified 2026-04-25). Largest is `ubagg_ioctl.c` (1,886 LOC). Exposes `/dev/ubagg` char device for management; `ubagg_main.c:148` calls `ubagg_delete_topo_map()` and `ubagg_clear_dev_list()` on exit, confirming topology + device-list management is real. Userspace UVS calls into UBAGG via ioctl. Replica-side bonding paths are the only stubbed parts; primary functionality is fully wired. See [`umdk_code_followups.md`](umdk_code_followups.md) §Q6.
 
 ### 2.4 `ulp/ipourma/` — IP-over-URMA ULP
 
@@ -582,17 +584,26 @@ app → liburma → WQE into ring → wmb → doorbell MMIO
 
 ## 6. Open questions / code-reading TODOs
 
-1. **UVS daemon.** The `libuvs` library is present; a daemon with topology logic is not. Is it closed-source? In another openEuler package? Or is `urma_admin` effectively the daemon?
-2. **DCA / HEM in UDMA.** Both present in OLK-5.10 hns3 provider but absent from OLK-6.6 `hw/udma`. Assume simpler HW or offloaded? Find Huawei's release notes.
-3. **UNIC + CDMA.** Two sibling aux-bus upper modules. UNIC at `drivers/net/ub/unic/` (NIC-style). CDMA at `drivers/ub/cdma/`. Both worth a focused survey — they explain what UDMA is _not_.
-4. **OBMM vs URMA segments.** OBMM is a whole distributed shared memory framework for cross-supernode cache coherence. Is it used by URMA segment_register under the hood, or is it a parallel mechanism (for non-URMA apps)?
-5. **`ubagg/` stub status.** Few files on OLK-6.6; bond/aggregation logic is in userspace `bondp_*`. What's the kernel plan?
-6. **Bond provider in liburma.** The `bondp_*` files drive multipath, but the specific policy (hash function, failure detection timing) needs a code read.
-7. **UMS kernel module.** `src/usock/ums/kmod/` — does it register an `AF_UB` family? Out-of-tree vs in-tree?
-8. **CAM Ascend kernels.** Are `src/cam/comm_operator/ascend_kernels/` template code, stubs, or real compiled kernels? Build pipeline not obvious from CMake files alone.
-9. **MUE event channel in UDMA.** `udma_mue.{c,h}` registers `udma_register_ue_msg_req_event` and `_rsp_event` against the auxiliary device. UE = User Entity? Message Unit? Confirm.
-10. **ipourma per-jetty vs per-CPU scaling.** Does ipourma use one jetty per netdev or one per CPU? Impacts throughput.
-11. **Atomicity of hot-remove.** URMA supports hot-remove; the interplay between in-flight WQEs, mmu_notifier, and uobj tracking is complex. Full guarantees need a targeted read.
+_Several previously-listed questions have been resolved — see [`umdk_code_followups.md`](umdk_code_followups.md) for the answers._
+
+**Resolved in follow-up rounds:**
+
+- ~~UVS daemon~~ → confirmed **library-only**; topology state is in the kernel. (See §3.2 above.)
+- ~~ubagg/ stub status~~ → confirmed **working module** (~3,479 LOC), only replica-side paths stubbed. (See §2.3 above.)
+- ~~MUE event channel~~ → confirmed **UE = User Engine** (microcontroller); MUE is a kernel↔User-Engine control plane for transport-path lifecycle.
+- ~~CAM Ascend kernels~~ → confirmed **real AscendC kernels** (not stubs), built via `add_kernels_compile()` CMake macro with `__global__ __aicore__` signatures.
+- ~~OBMM vs URMA segments~~ → OBMM is a parallel mechanism (cross-supernode shared memory) using `hisi_soc_cache_maintain()` for coherence; URMA segments are independent (verb-level RDMA targets).
+- ~~UMS kernel module~~ → it's an out-of-tree module that **takes over the upstream `AF_SMC` family** (replaces SMC-R). Not `AF_UB`.
+
+**Still open:**
+
+1. **DCA / HEM in UDMA.** Both present in OLK-5.10 hns3 provider but absent from OLK-6.6 `hw/udma`. Assume simpler HW or offloaded? Find Huawei's release notes.
+2. **UNIC + CDMA depth dive.** Two sibling aux-bus upper modules. Worth focused surveys.
+3. **Bond provider in liburma.** The `bondp_*` files drive multipath, but specific policy (hash function, failure detection timing) needs a code read.
+4. **ipourma per-jetty vs per-CPU scaling.** Does ipourma use one jetty per netdev or one per CPU? Impacts throughput.
+5. **Atomicity of hot-remove.** URMA supports hot-remove; the interplay between in-flight WQEs, mmu_notifier, and uobj tracking is complex. Full guarantees need a targeted read.
+6. **`ipver=609`.** Lives outside the public openEuler tree (HAL / firmware blob). Needs Huawei vendor docs.
+7. **Live-migration story.** `ubcore_vtp` (virtual TP) hints at it; not yet traced.
 
 ---
 

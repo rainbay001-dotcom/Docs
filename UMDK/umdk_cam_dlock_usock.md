@@ -63,6 +63,8 @@ Each kernel has `op_kernel/*.h` (AscendC kernel code) and `op_host/*.cpp` (host-
 - `.run` — compiled AscendC kernels for installation under `/usr/local/Ascend/ascend-toolkit/latest/opp/vendors/CAM/`.
 - `.whl` — Python extension wrapping the `umdk_cam_op_lib` torch ops.
 
+**Build pipeline (verified 2026-04-25).** Custom CMake macro `add_kernels_compile()` orchestrates AscendC compilation. Invoked at `cmake_files/op_kernel/CMakeLists.txt:1-14`; macro definition lives in a parent / global CMake file outside the immediate dir. Kernels are real — `extern "C" __global__ __aicore__` signatures and `REGISTER_TILING_DEFAULT()` / `GET_TILING_DATA_WITH_STRUCT()` macros for parameterization (e.g. `comm_operator/ascend_kernels/moe_dispatch_normal_a2/op_kernel/dispatch_normal_a2.cpp:10, 29, 35-36`). Header files carry kernel implementation, not stubs. Toolchain is Huawei's proprietary AscendC compiler. See [`umdk_code_followups.md`](umdk_code_followups.md) §Q9.
+
 **Important caveat.** Per `src/cam/README.md`, `Ascend-SHMEM` is an **optional** dependency for SHMEM kernel paths. Without it, fall back to ring-based variants.
 
 ### 1.6 URMA integration — indirect

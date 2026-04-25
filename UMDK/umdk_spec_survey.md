@@ -38,9 +38,16 @@ What the **UnifiedBus 2.0 Base Specification** and the **UMDK** project's own do
 | `~/Documents/Repo/ub-stack/umdk/doc/ch/cam/CAM API Guide.ch.md` | CAM API (Chinese) |
 | `~/Documents/Repo/ub-stack/umdk/doc/ch/urma/{User, API, QuickStart}.ch.md` | URMA Chinese docs |
 
-### 1.3 Web sources (TBD)
+### 1.3 Web sources
 
-The Bojie Li essay "The Thinking Behind Unified Bus", openEuler doc center, and Huawei Compute developer portal are noted in earlier memory but were not freshly fetched for this revision. **Add them in a follow-up pass.**
+Web research has now been completed in [`umdk_web_research_addenda.md`](umdk_web_research_addenda.md) — that doc is the citation source for the design-philosophy and product-scale claims that show up in §2–§9 below. Highlights:
+
+- **Bojie Li (UMDK author), "The Thinking Behind Unified Bus"** at [01.me](https://01.me/en/2025/09/a-story-of-unified-bus/) (Sept 2025) — the canonical design-philosophy essay (jetty's O(NM) state vs IB's O(N²M²), weak ordering default, KV-cache as killer app).
+- **Bojie Li, APNet'21 keynote summary** at [01.me](https://01.me/en/2023/09/towards-compute-native-networking/) (Sept 2023) — earlier framing; mentions UBMMU integrated into CPUs and an Orchestrator engine. Note: the 2023 talk uses URMA address format `(Entity ID, UASID, offset)` while the current spec uses UBMD = `(EID, TokenID, UBA)` — UASID may have been renamed to TokenID, or the layout was reworked. **Confirm in Chinese spec §9.**
+- **Huawei Connect 2025 announcements** (`huawei.com/en/news/2025/9/hc-lingqu-ai-superpod`, `hc-superpod-innovation`) — UB 2.0 spec released as open standard at HC2025 (2025-09-18); Atlas 950 SuperPoD = 8,192 NPUs, Atlas 960 = 15,488; SuperClusters 500K and 1M+ NPUs.
+- **CloudMatrix384 paper** ([arXiv:2506.12708](https://arxiv.org/abs/2506.12708)) — first peer-reviewed UB benchmarks: prefill 6,688 tok/s/NPU and decode 1,943 tok/s/NPU at <50 ms TPOT on DeepSeek-R1.
+- **UB-Mesh paper** ([arXiv:2503.20377](https://arxiv.org/abs/2503.20377)) — research nD-FullMesh topology atop UB; 2.04× cost-efficiency vs Clos.
+- **Mainline status** — URMA is **only in openEuler kernel branches**; only smatch warnings appear on `lore.kernel.org`; no LKML upstream RFC yet.
 
 ---
 
@@ -306,7 +313,9 @@ GUID is a separate, manufacturing-stage globally-unique identifier (§1.6).
 
 ### 9.2 UBFM and UVS
 
-The spec describes **UBFM** (UB Fabric Manager) as the central resource manager for a UB domain (§2.2 p. 10). In code, the equivalent control-plane-from-userspace surface is **UVS** (Unified Vector Service) — see [`umdk_architecture_and_workflow.md`](umdk_architecture_and_workflow.md) §3.2 for the ioctl magic `'V'` and command set. _The mapping between UBFM (spec concept) and UVS (code) is plausible but not explicitly drawn in the preview — confirm in §10 Resource Management of the full spec._
+The spec describes **UBFM** (UB Fabric Manager) as the central resource manager for a UB domain (§2.2 p. 10). In code, the equivalent control-plane-from-userspace surface is **UVS** — see [`umdk_architecture_and_workflow.md`](umdk_architecture_and_workflow.md) §3.2 for the ioctl magic `'V'` and command set.
+
+**Important resolution (2026-04-25):** UVS is **library-only** — there is **no UVS daemon process** anywhere in the umdk tree. Topology / fabric-management state lives in the kernel (in `ubcore` and `ubagg`); UVS is a thin caller-driven userspace ioctl wrapper. So the "UBFM (spec)" / "UVS (code)" mapping is approximate at best — UBFM is logically centralized per spec, but the code distributes the same responsibilities between the kernel (state) and per-host UVS library calls (configuration channel). UVS canonical expansion is uncertain — neither "Unified Vector Service" nor "User-space Virtual Switch" is asserted in the repo headers. See [`umdk_code_followups.md`](umdk_code_followups.md) §Q8.
 
 ### 9.3 Network partitions and access control
 
@@ -396,7 +405,7 @@ Glossary expanded from spec §1.6, plus implementation labels.
 
 ## 11. Open questions
 
-1. **UBFM ↔ UVS mapping.** The spec describes UBFM as a logical fabric manager. In code, UVS appears to be the userspace half of that. Confirm the intended scope of UBFM via spec §10 Resource Management before treating them as equivalent.
+1. **UBFM ↔ UVS mapping (PARTIALLY RESOLVED).** UVS confirmed library-only (no daemon) — see §9.2 above. The spec describes UBFM as a logical fabric manager; the code distributes the same responsibilities between kernel state (in `ubcore`/`ubagg`) and per-host UVS library calls. Spec §10 Resource Management still needed for the canonical UBFM scope.
 2. **UBoE encapsulation specifics.** Appendix E covers Ethernet interworking; full layout (UDP/TCP? port allocation? packet headers?) needs to be read out of the Chinese spec or located in another doc.
 3. **TP bypass.** Mentioned in §2.2 as letting the transaction layer reach the network layer directly. Conditions and consequences not in the preview — read §6.8 Interaction Between the Transport Layer and Transaction Layer.
 4. **Token rotation.** Spec preview implies it but does not detail. Read the full §11.4 Access Control.
