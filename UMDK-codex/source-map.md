@@ -153,6 +153,9 @@ Key UMS/USOCK files:
 | `src/usock/ums/kmod/ums/cm` | UMS connection-management path |
 | `src/usock/ums/kmod/ums/llc` | UMS link-layer control path |
 | `src/usock/ums/kmod/ums/cdc` | UMS CDC path |
+| `src/usock/ums/kmod/ums/dev/ums_ubcore.c` | UMS ubcore client and URMA object lifecycle: EID selection, Jetty/JFR/JFC creation, import/bind, segment registration |
+| `src/usock/ums/kmod/ums/dev/ums_wr.c` | UMS ubcore WR post/poll/rearm path |
+| `src/usock/ums/kmod/ums/io/ums_tx.c` | UMS TX data path that posts Jetty send WRs |
 
 Discovered tool paths:
 
@@ -276,6 +279,11 @@ Key files:
 | `drivers/ub/urma/hw/udma/udma_jetty.c` | Jetty object |
 | `drivers/ub/urma/hw/udma/udma_ctrlq_tp.c` | control queue and TP |
 | `drivers/ub/urma/hw/udma/udma_eid.c` | EID/IP helpers |
+| `Documentation/ub/urma/ipourma/ipourma.rst` | IPoURMA documentation: socket API/TCP-IP stack over IPoURMA, UBCORE, and UDMA |
+| `drivers/ub/urma/ulp/ipourma/ipourma_main.c` | IPoURMA ubcore client, feature gating, netdev allocation, and registration |
+| `drivers/ub/urma/ulp/ipourma/ipourma_netdev.c` | IPoURMA netdev operations, including `ndo_start_xmit` from Linux TCP/IP into IPoURMA |
+| `drivers/ub/urma/ulp/ipourma/ipourma_ub.c` | IPoURMA ubcore/URMA send path, skb handling, EID resolution, Jetty import/use, and `ubcore_post_jetty_send_wr()` |
+| `drivers/ub/urma/ulp/ipourma/ipourma_netlink.c` | IPoURMA RTNL link kind and netdev setup behavior |
 | `drivers/net/ub/unic/unic_main.c` | UNIC module entry, auxiliary driver, probe/remove, IP/netdevice notifiers |
 | `drivers/net/ub/unic/unic_netdev.c` | UNIC netdev queue setup, traffic class mapping, NAPI/channel enable, net up/down, link status |
 | `drivers/net/ub/unic/unic_tx.c` | UNIC transmit path |
@@ -341,6 +349,18 @@ UMDK/UMS:
 - `ums_create`
 - `ums_sock_alloc`
 - `socket` in `ums-preload.c`
+- `ums_wr_tx_send`
+- `ums_wr_rx_post`
+- `ums_tx_ub_write`
+
+Kernel IPoURMA:
+
+- `ipourma_ubcore_add_device`
+- `ipourma_alloc_netdev`
+- `ipourma_register_netdev`
+- `ipourma_start_xmit`
+- `ipourma_xmit`
+- `ipourma_post_send`
 
 Kernel UNIC/CDMA:
 

@@ -6,8 +6,9 @@ This TODO tracks the refinement pass for the UMDK/URMA/UDMA documentation set.
 The current docs cover the major architecture, terminology, UnifiedBus
 specification interpretation, root-bus enumeration, udev exposure, UMMU memory
 management, end-to-end workflows, UB-Mesh context, UNIC/CDMA/URPC/UMS/tool
-coverage, UB-vs-PCIe probe comparison, URMA/UDMA user-kernel boundary, source
-evidence, diagrams, and runtime validation planning.
+coverage, socket API over UB/URMA transport, UB-vs-PCIe probe comparison,
+URMA/UDMA user-kernel boundary, source evidence, diagrams, and runtime
+validation planning.
 
 ## Execution Priority
 
@@ -24,6 +25,8 @@ Current order:
   targets.
 - P8: keep the dedicated URMA/UDMA user-kernel boundary doc current as source
   tracing and runtime validation improve.
+- P9: runtime-validate UMS/USOCK and IPoURMA socket compatibility when UB
+  hardware or a suitable lab environment is available.
 
 ## 1. Freeze and Push Current Baseline
 
@@ -668,3 +671,28 @@ Remaining improvements:
   `src/urma/hw/udma/kernel_headers/udma_abi.h`.
 - Add runtime evidence that user-space post/poll avoids per-WR ioctls after
   setup.
+
+## 28. Add Socket API Over UB/URMA Transport Note
+
+Status: completed in `socket-api-over-ub-urma-transport.md`
+
+The docs now include a dedicated answer for whether an application can use
+Linux socket APIs while the lower transport uses UB/URMA/UDMA.
+
+Covered paths:
+
+- UMS/USOCK: `ums_run` and `libums-preload.so` map eligible TCP stream sockets
+  to `AF_SMC`; the UMS kernel module registers AF_SMC/TCP ULP support and uses
+  ubcore Jetty/JFR/JFC/Segment resources internally.
+- IPoURMA: Linux TCP/IP sockets route through an IPoURMA netdev; the driver
+  converts skb transmit into ubcore/URMA send work requests.
+- Native `liburma`: still a separate API path; no local socket-backed URMA
+  provider or simulator was found.
+
+Next refinements:
+
+- Capture runtime evidence for `ums_run`, `AF_SMC`, TCP ULP `ums`, and fallback
+  behavior on a UB-capable host.
+- Capture runtime evidence for `ipourmaN` device creation, routing, counters,
+  and `dmesg` output.
+- Add packet/data-path diagrams after runtime behavior is confirmed.

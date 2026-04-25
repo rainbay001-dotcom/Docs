@@ -116,3 +116,17 @@ Executive summary pass:
   spec/paper interpretation boundaries, adjacent UNIC/CDMA/URPC/UMS/tools, and
   runtime validation gaps.
 - Updated README, index, and TODO status for the new summary.
+
+Socket API over UB/URMA transport pass:
+
+- Added `socket-api-over-ub-urma-transport.md`.
+- Separated UMS/USOCK, IPoURMA, native liburma/UDMA, and the missing
+  socket-backed URMA simulator/provider case.
+- Documented how `ums_run` and `libums-preload.so` preserve a socket API by
+  rewriting selected TCP stream sockets to `AF_SMC`.
+- Documented how the UMS kernel module registers AF_SMC, TCP ULP `ums`, and a
+  ubcore client, then uses Jetty/JFR/JFC/Segment resources and ubcore WR
+  posting internally.
+- Documented how IPoURMA exposes a netdev path under Linux TCP/IP and converts
+  skb transmit into ubcore/URMA Jetty send work requests.
+- Updated README, index, source map, and TODO status for the new note.

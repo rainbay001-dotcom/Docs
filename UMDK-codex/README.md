@@ -38,6 +38,7 @@ Two local document directories were found:
 - [UB and PCIe probe process comparison](./ub-vs-pcie-probe-process-comparison.md)
 - [UMMU memory-management deep dive](./ummu-memory-management-deep-dive.md)
 - [URMA/UDMA user-kernel boundary](./urma-udma-user-kernel-boundary.md)
+- [Socket API above a UB/URMA-backed transport](./socket-api-over-ub-urma-transport.md)
 - [UNIC, CDMA, URPC, UMS, and tool coverage](./unic-cdma-urpc-ums-tools-coverage.md)
 - [Runtime validation guide](./runtime-validation-guide.md)
 - [URMA/UDMA working flows](./urma-udma-working-flows.md)
@@ -159,6 +160,14 @@ RPC/queue path:
 Socket compatibility path:
   ums_run/libums-preload -> AF_SMC/UMS -> TCP ULP + ubcore client
 ```
+
+Socket API over UB/URMA-backed transport now has a dedicated note in
+`socket-api-over-ub-urma-transport.md`. The short version is that two local
+paths preserve a socket interface while using UB/URMA/UDMA below it:
+UMS/USOCK rewrites selected TCP stream sockets to `AF_SMC`/UMS and then uses
+ubcore resources internally, while IPoURMA exposes a Linux netdev over URMA so
+normal TCP/IP sockets can route through a UB-backed device. No socket-backed
+native `liburma` provider was found locally.
 
 ## Follow-up Questions
 
