@@ -6,7 +6,8 @@ This TODO tracks the refinement pass for the UMDK/URMA/UDMA documentation set.
 The current docs cover the major architecture, terminology, UnifiedBus
 specification interpretation, root-bus enumeration, udev exposure, UMMU memory
 management, end-to-end workflows, UB-Mesh context, UNIC/CDMA/URPC/UMS/tool
-coverage, source evidence, diagrams, and runtime validation planning.
+coverage, UB-vs-PCIe probe comparison, source evidence, diagrams, and runtime
+validation planning.
 
 ## Execution Priority
 
@@ -608,3 +609,27 @@ Next refinements:
 - Add command examples and expected output templates for all discovered tools.
 - Ask for or locate an external/vendor source if the intended `ubtool` is not
   one of the discovered local tools.
+
+## 26. Add UB vs PCIe Probe Process Comparison
+
+Status: completed in `ub-vs-pcie-probe-process-comparison.md`
+
+The docs now include a dedicated comparison between Linux PCIe probing and UB
+bring-up.
+
+Covered topics:
+
+- PCIe host bridge to root bus scan.
+- `pci_bus_type`, `pci_dev`, and `pci_driver` match/probe flow.
+- UB firmware root, UBC/UMMU, `ub_bus_type`, `ub_entity`, and `ub_driver`.
+- `ubase` as the first regular UB driver.
+- UBASE auxiliary fan-out to UDMA, UNIC, and CDMA.
+- Why UB leaf devices are not reached through a direct PCIe-like endpoint
+  probe.
+- Failure-stage mapping for PCIe and UB debugging.
+
+Remaining improvements:
+
+- Add runtime output from real hardware.
+- Add UB uevent vs PCI uevent/module-autoload comparison.
+- Add a rendered diagram for `ub_entity -> ubase -> auxiliary children`.

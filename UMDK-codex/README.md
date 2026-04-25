@@ -34,6 +34,7 @@ Two local document directories were found:
 - [End-to-end platform workflow](./end-to-end-platform-workflow.md)
 - [Architecture diagrams and workflows](./architecture-diagrams-and-workflows.md)
 - [UB root bus, udev, and device enumeration](./ub-root-bus-udev-device-enumeration.md)
+- [UB and PCIe probe process comparison](./ub-vs-pcie-probe-process-comparison.md)
 - [UMMU memory-management deep dive](./ummu-memory-management-deep-dive.md)
 - [UNIC, CDMA, URPC, UMS, and tool coverage](./unic-cdma-urpc-ums-tools-coverage.md)
 - [Runtime validation guide](./runtime-validation-guide.md)
@@ -97,6 +98,18 @@ firmware UBRT/UBIOS
   -> UDMA registers ubcore_device objects
   -> ubcore/uburma publish sysfs and /dev nodes
   -> liburma discovers and opens /dev/uburma/<device>
+```
+
+Compared with PCIe, the important difference is that UB has a two-level bind
+path:
+
+```text
+PCIe:
+  pci_dev -> pci_driver.probe() -> endpoint subsystem device
+
+UB:
+  ub_entity -> ub_driver.probe(ubase) -> UBASE auxiliary devices
+            -> udma/unic/cdma auxiliary probes -> subsystem devices
 ```
 
 The spec-side interpretation is:

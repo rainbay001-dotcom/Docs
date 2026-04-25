@@ -84,3 +84,14 @@ Side-component coverage pass:
 - Updated `README.md`, `00-index-and-coverage.md`, `source-map.md`, and
   `refinement-todo.md` to include the new coverage and remaining deep-dive
   tasks.
+
+UB vs PCIe probe comparison pass:
+
+- Added `ub-vs-pcie-probe-process-comparison.md`.
+- Compared Linux PCIe host bridge, root bus scan, `pci_dev`, `pci_driver`, and
+  endpoint probe flow against UB firmware root, UBC/UMMU, `ub_bus_type`,
+  `ub_entity`, `ub_driver`, UBASE, and auxiliary child driver flow.
+- Documented the main architectural difference: PCIe endpoint drivers often own
+  the device directly, while UB first binds `ub_entity` to `ubase` and then
+  UBASE creates auxiliary children such as UDMA, UNIC, and CDMA.
+- Updated README, index, source map, and TODO entries for the new comparison.

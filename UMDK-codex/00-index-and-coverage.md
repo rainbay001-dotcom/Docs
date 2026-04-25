@@ -32,24 +32,27 @@ research notes in this directory. It is meant to answer two questions quickly:
 9. `ub-root-bus-udev-device-enumeration.md`
    - Kernel device model, UB root bus, UBRT/UBIOS parsing, ub bus,
      ub_entity enumeration, uevents, and device-node exposure.
-10. `ummu-memory-management-deep-dive.md`
+10. `ub-vs-pcie-probe-process-comparison.md`
+   - Dedicated comparison between Linux PCIe host/device/driver probing and
+     UB root, `ub_entity`, `ub_driver`, UBASE, and auxiliary-device bring-up.
+11. `ummu-memory-management-deep-dive.md`
    - UMMU, TID/token, SVA/KSVA, MATT/MAPT, segment registration, page pinning,
      and teardown.
-11. `unic-cdma-urpc-ums-tools-coverage.md`
+12. `unic-cdma-urpc-ums-tools-coverage.md`
    - Side-component coverage for UNIC, CDMA, URPC/UMQ, UMS/USOCK, tools, and
      the absence of a local `ubtool` by that name.
-12. `urma-udma-working-flows.md`
+13. `urma-udma-working-flows.md`
    - Detailed URMA/UDMA API and operation-level flows.
-13. `runtime-validation-guide.md`
+14. `runtime-validation-guide.md`
    - Commands and expected observations for hardware/runtime validation.
-14. `source-map.md`
+15. `source-map.md`
    - Source anchors by component and operation.
-15. `08-source-evidence-map.md`
+16. `08-source-evidence-map.md`
    - Claim-to-source evidence table with concrete paths and line numbers.
-16. `refinement-todo.md`
+17. `refinement-todo.md`
    - Next refinement tasks for diagrams, evidence tables, workflow chapters,
      comparisons, terminology, runtime validation, and doc restructuring.
-17. `working-log.md`
+18. `working-log.md`
    - Chronological notes and unresolved follow-ups.
 
 `urma-udma-architecture.md` is an older architecture snapshot kept for
@@ -67,6 +70,7 @@ continuity. Prefer `umdk-component-architecture.md` and
 | UDMA provider and kernel path | Covered | `umdk-component-architecture.md`, `urma-udma-working-flows.md`, `source-map.md` | User/kernel ABI and provider responsibilities are mapped. |
 | End-to-end platform workflow | Newly covered | `end-to-end-platform-workflow.md` | Adds boot, firmware table, UB bus, udev, UMMU, URMA, data path, and teardown. |
 | UB root bus and enumeration | Newly covered | `ub-root-bus-udev-device-enumeration.md` | Adds `ub_bus_type`, `ub_entity`, UBRT/UBIOS, `ub_enum_probe`, and uevents. |
+| UB vs PCIe probe process | Newly covered | `ub-vs-pcie-probe-process-comparison.md` | Compares PCIe host bridge, `pci_dev`, and `pci_driver` probing with UB root, `ub_entity`, `ub_driver`, UBASE, and auxiliary child probes. |
 | udev and device-node exposure | Newly covered | `ub-root-bus-udev-device-enumeration.md` | Documents kernel devnode callbacks and uevent variables; no custom udev rules were found in source. |
 | UMMU memory management | Newly covered | `ummu-memory-management-deep-dive.md` | Covers firmware UMMU nodes, UMMU mapping, SVA/KSVA, TID, token, segment grant/map/unmap. |
 | UNIC network driver | Newly covered | `unic-cdma-urpc-ums-tools-coverage.md`, `source-map.md` | Covers auxiliary-device binding, netdev queue/channel/NAPI/link behavior, and open TX/RX trace gaps. |

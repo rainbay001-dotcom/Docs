@@ -67,6 +67,15 @@ External comparison references:
 | https://docs.nvidia.com/networking/display/RDMAAwareProgrammingv17/InfiniBand | InfiniBand native RDMA baseline |
 | https://docs.nvidia.com/networking/display/MLNXENv23100550/RDMA%2Bover%2BConverged%2BEthernet%2B%28RoCE%29 | RoCEv1/RoCEv2 encapsulation baseline |
 
+PCIe comparison source anchors:
+
+| Local file | Role |
+| --- | --- |
+| `/Users/ray/Documents/Repo/kernel/drivers/pci/pci-driver.c` | `pci_bus_type`, PCI driver registration, PCI match/probe/remove path |
+| `/Users/ray/Documents/Repo/kernel/drivers/pci/probe.c` | PCI host bridge registration, root bus scan, child bus scan, slot/function scan, `pci_setup_device`, `pci_device_add` |
+| `/Users/ray/Documents/Repo/kernel/drivers/pci/bus.c` | `pci_bus_add_device()` and `pci_bus_add_devices()` driver attach path |
+| `/Users/ray/Documents/Repo/kernel/include/linux/pci.h` | PCI public types and helper declarations |
+
 Terminology mapping code anchors:
 
 | Local symbol family | Local file |
