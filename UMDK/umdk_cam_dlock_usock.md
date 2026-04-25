@@ -156,7 +156,7 @@ On client death:
 
 Client may extend proactively via `lock_extend()` (line 267).
 
-**No consensus / replication** in the API — single server is a SPOF. HA would require external replication. Suitable for in-cluster coordination where the dlock server's failure domain is acceptable.
+**No working replication.** A primary-backup protocol is **declared** in the codebase (`SERVER_REPLICA` enum, `REPLICA_INIT_REQUEST` / `REPLICA_CTRL_CATCHUP_REQUEST` message types) but **handlers are nullptr** — at runtime the server logs "invalid peer type, replica server is not supported" (`dlock_server.cpp:721-722`). Only `init_as_primary()` is implemented; no `init_as_replica()` exists. Production deployments must treat the dlock server as a SPOF until the replica path is wired. See [`umdk_code_followups.md`](umdk_code_followups.md) §Q10.
 
 ### 2.6 Examples + tools
 

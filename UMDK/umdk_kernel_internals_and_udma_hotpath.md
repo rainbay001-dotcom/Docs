@@ -431,7 +431,7 @@ The `ipver=609` recurring parameter is a UB silicon revision tag (suspected — 
 ## 10. Open questions / follow-ups
 
 1. **`ipver=609` semantics.** Almost certainly a silicon revision selector. Confirm in `drivers/ub/ubus/vendor/hisi/`.
-2. **UDMA MUE.** `udma_mue.{c,h}` registers `udma_register_ue_msg_req_event` / `_rsp_event` against an auxiliary device. UE = "User Entity" or "User Engine"? Read top of `udma_mue.c`.
+2. **UDMA MUE — RESOLVED.** UE = **User Engine** (an on-device microcontroller). MUE = Management User Engine. The module is a kernel↔User-Engine control plane for transport-path lifecycle (`GET_TP_LIST`, `ACTIVE/DEACTIVE_TP`, `SET/GET_TP_ATTR`). Carrier is the UBASE control queue. Cited in [`umdk_code_followups.md`](umdk_code_followups.md) §Q1.
 3. **`udma_dfx`.** DFx (Design For x — debug, telemetry, fault injection) helpers. Map the sysfs / debugfs surface they expose.
 4. **OBMM cross-supernode coherence.** What HW mechanism ensures cache consistency on remote-page invalidation? Selects `HISI_SOC_CACHE` so likely a HiSilicon-specific cache-coherency domain.
 5. **UBMEMPFD virtualization.** What does the QEMU-side counterpart look like? Where in QEMU does a guest UMMU (vUMMU) source fd-backed memory?

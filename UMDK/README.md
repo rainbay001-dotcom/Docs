@@ -24,17 +24,22 @@ Canonical upstream lives on Huawei/openEuler forges; GitHub copies are auto-mirr
 - [`umdk_urpc_and_tools.md`](umdk_urpc_and_tools.md) — URPC framework (API, dispatch, wire format, marshalling, security), the three UMQ backends (`umq_ipc`, `umq_ub`, `umq_ubmm`) with their flow control + buffering, and the URMA control-plane CLIs (`urma_admin`, `urma_perftest`, `urma_ping`).
 - [`umdk_cam_dlock_usock.md`](umdk_cam_dlock_usock.md) — CAM (PyTorch operator library `umdk_cam_op_lib` for Ascend NPU collectives, MoE dispatch/combine), dlock (URMA-atomics-backed distributed locks with leases), and **USOCK / UMS** which takes over the upstream Linux `AF_SMC` socket family and substitutes URMA for SMC-R's RDMA backend.
 
+**Web research + open-question follow-ups:**
+- [`umdk_web_research_addenda.md`](umdk_web_research_addenda.md) — Web sources: Bojie Li's "The Thinking Behind Unified Bus" essay (design philosophy + tradeoffs), Huawei Connect 2025 announcements (Atlas 950/960 SuperPoD scale: 8K/15K NPUs, SuperCluster 500K/1M+), CloudMatrix384 arXiv paper (DeepSeek-R1 numbers: 6688 tok/s prefill, 1943 tok/s decode), UB-Mesh paper (2.04× cost-efficiency vs Clos), mainline-status check (URMA only in openEuler tree).
+- [`umdk_code_followups.md`](umdk_code_followups.md) — Code-side answers to 10 open questions: `udma_mue` is **kernel ↔ User Engine** microcontroller control plane (not "User Entity"); UVS is **library-only, no daemon**; OBMM uses HW `hisi_soc_cache_maintain()` for cross-supernode coherence; UBMEMPFD is the **vUMMU backend QEMU plugs into**; ubagg is a working module; dlock replica is **declared but stubbed** (handlers nullptr); userspace UDMA registers via `__attribute__((constructor))` confirmed; `udma_dfx` is query-only inspection; `ipver=609` lives outside the public tree.
+
 **Reference snapshot:**
 - [`umdk_repo_layout.md`](umdk_repo_layout.md) — Initial repo layout note. Largely superseded by the architecture doc; kept as a quick-reference jump-table.
 
 Still pending (next research batches):
 
-- Web research pass — Bojie Li "The Thinking Behind Unified Bus" essay, openEuler doc center, LWN / lore.kernel.org mentions, Huawei CloudMatrix whitepapers. Cite into the spec doc.
 - Full Chinese spec read (UB-Base-Specification-2.0-zh.pdf) — fill in details deferred from the English preview (full §6 Transport, §7 Transaction, §10 Resource Management, §11 Security).
-- UBFM ↔ UVS daemon mapping (where does the topology brain live?).
 - DCA / HEM removal rationale from OLK-5.10 → 6.6.
-- OBMM cross-supernode coherence implementation details.
-- `udma_mue` and `udma_dfx` purpose.
+- `ipver=609` definition (lives in HAL / firmware blob outside public tree — needs Huawei vendor docs).
+- UVS canonical expansion (User-space Virtual Switch vs Unified Vector Service — neither asserted).
+- OBMM multi-supernode topology programming (cache coherence is solved; cross-supernode routing path not yet traced).
+- Live-migration story (`ubcore_vtp` hints at it; not traced).
+- LWN / lore upstream activity on URMA (currently absent — track for first RFC submission).
 
 ## Style
 

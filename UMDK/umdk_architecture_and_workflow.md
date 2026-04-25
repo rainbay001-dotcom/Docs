@@ -218,7 +218,7 @@ Single ioctl entrypoint; the specific operation is discriminated by an enum in t
 | `udma_segment.{c,h}`, `udma_tid.{c,h}` | Segment registration, token ID (rkey) allocation |
 | `udma_cmd.{c,h}`, `udma_ctl.c`, `udma_ctrlq_tp.{c,h}` | Command-ring interface to HW; control-queue TP programming |
 | `udma_eid.{c,h}` | EID management at the provider level |
-| `udma_mue.{c,h}` | UE (User Entity?) message req/rsp events — handlers registered against auxiliary_device, `udma_mue.h:11-14` |
+| `udma_mue.{c,h}` | MUE = Management User Engine; kernel↔microcontroller control plane for transport-path lifecycle (GET/ACTIVE/DEACTIVE/SET/GET_TP_ATTR), `udma_mue.c:29, 262-280` |
 | `udma_def.h`, `udma_dev.h`, `udma_common.{c,h}` | Common defs, device struct, utilities |
 | `udma_dfx.{c,h}` | Debug/introspection (DFx) |
 | `Kconfig`, `Makefile` | `CONFIG_UB_UDMA`, depends on `UB_UBASE && UB_URMA && UB_UMMU_CORE` |
@@ -295,7 +295,7 @@ The umdk repo restructured between Nov 2024 and early 2026: old top-level (`comm
 - `tpsa_ioctl_ctx_t` at `tpsa_ioctl.h:33` — ioctl context (fd + session).
 - `uvs_route_t`, `uvs_route_list_t` — route descriptors.
 
-**Open question.** Is there a separate UVS daemon? The library wraps ioctls to the kernel, but topology computation / path selection would live in a daemon. Not present in the umdk tree — either closed-source, lives in a separate openEuler package, or not yet open-sourced. _(TODO)_
+**Resolved (2026-04-25):** UVS is **library-only** — no daemon process. Confirmed by direct code inspection (no `int main()` in `lib/uvs/`, no systemd unit, no init script). Topology / path-selection state is held by the kernel (in ubcore + ubagg); UVS is just the userspace caller-driven ioctl wrapper. See [`umdk_code_followups.md`](umdk_code_followups.md) §Q8.
 
 ### 3.3 `src/urma/hw/udma/` — userspace UDMA provider
 
