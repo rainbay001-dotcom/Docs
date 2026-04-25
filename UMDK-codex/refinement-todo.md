@@ -167,7 +167,8 @@ Proposed structure:
 - `06-workflows-end-to-end.md`
 - `07-terminology-and-comparison.md`
 - `08-source-evidence-map.md`
-- `09-open-questions.md`
+- `09-ub-mesh-context-and-topology.md`
+- `10-open-questions.md`
 
 Migration rules:
 
@@ -176,3 +177,199 @@ Migration rules:
 - Keep version differences explicit when OLK-5.10 and OLK-6.6 differ.
 - Preserve older snapshots only when they carry historical context not present
   in the new structure.
+
+## 9. Integrate the UB-Mesh Paper
+
+Status: pending
+
+Add a dedicated UB-Mesh context document that explains why the UMDK/URMA/UDMA
+stack exists in the larger AI datacenter architecture. Use the paper
+`UB-Mesh: a Hierarchically Localized nD-FullMesh Datacenter Network
+Architecture`, arXiv `2503.20377`, as the primary reference.
+
+Reference metadata:
+
+- Title: `UB-Mesh: a Hierarchically Localized nD-FullMesh Datacenter Network
+  Architecture`
+- arXiv: `2503.20377`
+- DOI: `10.48550/arXiv.2503.20377`
+- Current observed version during research: v3, revised 2025-05-17
+- URL: `https://arxiv.org/abs/2503.20377`
+- PDF: `https://arxiv.org/pdf/2503.20377`
+
+Topics to extract:
+
+- nD-FullMesh topology and hierarchical locality.
+- UB-Mesh-Pod and 4D-FullMesh physical realization.
+- NPU, CPU, NIC, LRS, and HRS building blocks.
+- Unified Bus as a single interconnect spanning CPU, NPU, switch, and NIC
+  roles.
+- Flexible IO bandwidth allocation and hardware resource pooling.
+- All-Path-Routing, source routing, structured addressing, table lookup, and
+  deadlock-free flow control.
+- 64+1 backup design and topology-aware fast-fault recovery.
+- Topology-aware collective communication and parallelization.
+- CCU, if relevant to CAM and collective-offload discussion.
+
+Expected output:
+
+- `ub-mesh-context-and-umdk-mapping.md`
+- A clear boundary between paper claims, local source evidence, and inferred
+  mapping.
+
+## 10. Map UB-Mesh Concepts to Local Source
+
+Status: pending
+
+Create a paper-to-source mapping table. This should connect UB-Mesh concepts to
+UMDK/UVS/ubcore/ubagg/UMMU implementation artifacts without overstating what
+the code proves.
+
+Initial mappings:
+
+- UB-Mesh topology model -> `ubcore_topo_info.h` and `uvs_api.h`.
+- `1D-fullmesh` and Clos topology with parallel planes -> `struct
+  ubcore_topo_node`, `enum ubcore_topo_type_t`, and `struct urma_topo_node`.
+- Topology push from user space -> `uvs_set_topo_info`.
+- Topology propagation -> `uvs_ubagg_ioctl_set_topo` and
+  `uvs_ubcore_ioctl_set_topo`.
+- Kernel topology map -> ubcore topology-map creation/update APIs.
+- Aggregation or bonding device model -> `ubagg` and UMDK `bond` provider
+  paths.
+- User inspection path -> `urma_admin show topo`.
+- Test or diagnostic path -> `urma_ping` topology helpers.
+- Fullmesh collective hints -> CAM `AlltoAll`, `BatchWrite`, and `MultiPut`
+  `level0:fullmesh` algorithm strings.
+
+Questions to resolve:
+
+- Whether current source models only 1D-fullmesh plus Clos, or whether nD and
+  4D UB-Mesh concepts are represented elsewhere by configuration tooling.
+- Whether APR is visible in this checkout or hidden in firmware, hardware,
+  management software, or unreleased components.
+- Whether LRS/HRS concepts appear as UB entities, topology links, route tables,
+  or external management-plane abstractions.
+
+## 11. Add Topology-Aware Workflows
+
+Status: pending
+
+Add workflows that start from topology input rather than device bring-up. The
+current workflow docs explain boot, device registration, memory management, and
+URMA operations; the next pass should explain how topology affects routing,
+aggregation, bonding, and provider path selection.
+
+Required workflows:
+
+- MXE or management plane provides topology information.
+- UVS accepts topology through `uvs_set_topo_info`.
+- UVS sends topology to ubagg and ubcore.
+- Kernel creates or updates the global topology map.
+- ubagg resolves aggregate EIDs to physical devices.
+- liburma bond provider loads topology and chooses aggregate or physical
+  datapath behavior.
+- ubcore returns path sets for source and destination bonding EIDs.
+- JFS/Jetty operations use selected path or provider routing data.
+- `urma_admin show topo` and `urma_ping` validate topology visibility.
+
+## 12. Extend Comparison Docs With UB-Mesh
+
+Status: pending
+
+Add UB-Mesh as a separate comparison axis in the existing Ethernet, InfiniBand,
+RoCE, RDMA, and UnifiedBus comparison docs.
+
+Required comparisons:
+
+- UB-Mesh vs Ethernet Clos: topology-localized AI fabric vs general-purpose
+  symmetric datacenter fabric.
+- UB-Mesh vs InfiniBand: topology/locality/resource-pooling model vs
+  subnet-managed RDMA fabric.
+- UB-Mesh vs RoCE: UB-native memory semantics and topology model vs Ethernet
+  lossless/RDMA overlay.
+- UB-Mesh vs NVLink/NVSwitch: datacenter-scale UB topology vs local GPU/NPU
+  high-bandwidth domain.
+- UB-Mesh vs Tofu or torus/mesh HPC networks: nD-fullmesh locality,
+  all-to-all suitability, and routing implications.
+- UB-Mesh and UMMU vs RDMA MR/lkey/rkey/ODP memory model.
+
+The comparison should separate:
+
+- topology design;
+- protocol semantics;
+- software interface;
+- memory-protection model;
+- routing and path selection;
+- failure recovery;
+- collective communication support;
+- operational observability.
+
+## 13. Tie UMMU and Resource Pooling Back to UB-Mesh
+
+Status: pending
+
+Add a cross-reference from the UMMU deep dive to UB-Mesh. The argument to make
+is that UB-Mesh's resource-pooling and direct UB memory semantics need explicit
+address-space isolation, TID/token management, and controlled memory grant/map
+behavior.
+
+Specific points:
+
+- Explain why topology-level resource pooling needs memory-domain boundaries.
+- Connect `token_id`, `TID`, SVA, KSVA, MAPT, and MATT to safe remote access.
+- Compare this to RDMA memory registration and ODP without claiming exact
+  equivalence.
+- Show where UDMA provider code turns URMA segment intent into UMMU mappings.
+- Note which parts are visible in source and which parts likely sit in
+  firmware/hardware.
+
+## 14. Add UB-Mesh Diagrams
+
+Status: pending
+
+Add diagrams that connect the paper's architecture to the local software stack.
+
+Required diagrams:
+
+- UB-Mesh paper layers:
+  `LLM workload -> topology-aware collectives -> UB-Mesh topology -> UB
+  interconnect -> UMDK/URMA/UDMA software -> UMMU`.
+- nD-FullMesh vs Clos:
+  local short-range paths, long-range paths, LRS/HRS role, and switch reduction
+  rationale.
+- Topology configuration path:
+  `management/MXE -> UVS -> ubagg -> ubcore -> path set -> provider`.
+- UMMU in resource pooling:
+  `application buffer -> Segment -> token/TID -> UMMU grant/map -> remote UB
+  access`.
+- CAM collective path:
+  `MoE/AllToAll -> CAM algorithm config -> fullmesh topology hint -> UB data
+  movement`.
+
+## 15. Add UB-Mesh Runtime and Source Validation
+
+Status: pending
+
+Add validation steps for machines or environments where UB topology is exposed.
+The goal is to confirm whether the runtime topology matches the paper-to-source
+mapping.
+
+Commands and checks:
+
+```bash
+urma_admin show topo
+urma_admin show topo <node_id>
+urma_ping <options>
+ls /sys/class/ubcore
+ls /sys/class/uburma
+dmesg | grep -iE 'ub|ubcore|ubagg|uvs|urma|udma|ummu|topo|mesh'
+```
+
+Evidence to capture:
+
+- topology type: fullmesh, Clos, or another configured value;
+- node ID, super-node ID, current-node marker;
+- aggregate EID to physical-device mapping;
+- path count and path endpoints if exposed;
+- whether LRS/HRS or switch-like elements appear in software-visible topology;
+- whether runtime output confirms or contradicts the UB-Mesh paper mapping.
