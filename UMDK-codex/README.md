@@ -26,6 +26,7 @@ Two local document directories were found:
 ## Contents
 
 - [Documentation index and coverage matrix](./00-index-and-coverage.md)
+- [UMDK executive summary](./01-summary.md)
 - [UnifiedBus and UMDK research findings](./unifiedbus-umdk-research.md)
 - [UnifiedBus spec deep dive for UMDK, URMA, and UDMA](./unifiedbus-spec-umdk-urma-udma.md)
 - [UMDK/RDMA terminology mapping and comparison](./umdk-rdma-terminology-and-comparison.md)

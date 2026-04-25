@@ -400,7 +400,7 @@ Evidence to capture:
 
 ## 16. Add a One-Page Executive Summary
 
-Status: pending
+Status: completed in `01-summary.md`
 
 Create `01-summary.md` as the first human-readable entry point. It should be
 short enough to read before any deep source tracing.

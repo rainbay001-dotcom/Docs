@@ -12,50 +12,54 @@ research notes in this directory. It is meant to answer two questions quickly:
 
 1. `README.md`
    - Scope, local repositories, and the shortest end-to-end call path.
-2. `unifiedbus-umdk-research.md`
+2. `01-summary.md`
+   - Short human-readable entry point for UB, UMDK, URMA, UDMA, UB-Mesh,
+     proven source facts, inferred architecture, side components, and runtime
+     validation gaps.
+3. `unifiedbus-umdk-research.md`
    - Initial research findings from local UnifiedBus documents and source.
-3. `unifiedbus-spec-umdk-urma-udma.md`
+4. `unifiedbus-spec-umdk-urma-udma.md`
    - Spec-side interpretation of UB, URMA, UDMA, UMMU, token, and memory semantics.
-4. `umdk-rdma-terminology-and-comparison.md`
+5. `umdk-rdma-terminology-and-comparison.md`
    - Mapping to Ethernet, InfiniBand, RoCE, RDMA verbs, and Linux RDMA core.
-5. `ub-mesh-context-and-umdk-mapping.md`
+6. `ub-mesh-context-and-umdk-mapping.md`
    - UB-Mesh paper context, source mapping, topology, resource pooling, and
      UMMU implications.
-6. `umdk-component-architecture.md`
+7. `umdk-component-architecture.md`
    - User-space and kernel component architecture.
-7. `urma-udma-user-kernel-boundary.md`
+8. `urma-udma-user-kernel-boundary.md`
    - Consolidated user-space vs kernel-space boundary for liburma, u-UDMA,
      `uburma`, `ubcore`, k-UDMA, mmap, ioctl, fast path, and debug workflow.
-8. `end-to-end-platform-workflow.md`
+9. `end-to-end-platform-workflow.md`
    - Full boot-to-application workflow, including the newly added root-bus,
      udev, UMMU, and URMA/UDMA paths.
-9. `architecture-diagrams-and-workflows.md`
+10. `architecture-diagrams-and-workflows.md`
    - Mermaid diagrams and workflow chapters for boot, udev, UMMU, topology,
      CAM, data path, and teardown.
-10. `ub-root-bus-udev-device-enumeration.md`
+11. `ub-root-bus-udev-device-enumeration.md`
    - Kernel device model, UB root bus, UBRT/UBIOS parsing, ub bus,
      ub_entity enumeration, uevents, and device-node exposure.
-11. `ub-vs-pcie-probe-process-comparison.md`
+12. `ub-vs-pcie-probe-process-comparison.md`
    - Dedicated comparison between Linux PCIe host/device/driver probing and
      UB root, `ub_entity`, `ub_driver`, UBASE, and auxiliary-device bring-up.
-12. `ummu-memory-management-deep-dive.md`
+13. `ummu-memory-management-deep-dive.md`
    - UMMU, TID/token, SVA/KSVA, MATT/MAPT, segment registration, page pinning,
      and teardown.
-13. `unic-cdma-urpc-ums-tools-coverage.md`
+14. `unic-cdma-urpc-ums-tools-coverage.md`
    - Side-component coverage for UNIC, CDMA, URPC/UMQ, UMS/USOCK, tools, and
      the absence of a local `ubtool` by that name.
-14. `urma-udma-working-flows.md`
+15. `urma-udma-working-flows.md`
    - Detailed URMA/UDMA API and operation-level flows.
-15. `runtime-validation-guide.md`
+16. `runtime-validation-guide.md`
    - Commands and expected observations for hardware/runtime validation.
-16. `source-map.md`
+17. `source-map.md`
    - Source anchors by component and operation.
-17. `08-source-evidence-map.md`
+18. `08-source-evidence-map.md`
    - Claim-to-source evidence table with concrete paths and line numbers.
-18. `refinement-todo.md`
+19. `refinement-todo.md`
    - Next refinement tasks for diagrams, evidence tables, workflow chapters,
      comparisons, terminology, runtime validation, and doc restructuring.
-19. `working-log.md`
+20. `working-log.md`
    - Chronological notes and unresolved follow-ups.
 
 `urma-udma-architecture.md` is an older architecture snapshot kept for
@@ -66,6 +70,7 @@ continuity. Prefer `umdk-component-architecture.md` and
 
 | Area | Status | Primary docs | Notes |
 | --- | --- | --- | --- |
+| Executive summary | Newly covered | `01-summary.md` | Short entry point covering UB, UMDK, URMA, UDMA, UB-Mesh, proven facts, inferences, side components, and validation gaps. |
 | UB concept and spec model | Covered | `unifiedbus-spec-umdk-urma-udma.md` | Explains UB protocol, memory semantics, URMA model, and relation to RDMA. |
 | UMDK component architecture | Covered | `umdk-component-architecture.md` | Covers liburma, UDMA provider, UVS/TPSA, uburma, ubcore, and UDMA driver. |
 | URMA/UDMA user-kernel boundary | Newly covered | `urma-udma-user-kernel-boundary.md` | Consolidates liburma/u-UDMA, `/dev/uburma`, ioctl, mmap, uburma, ubcore, k-UDMA, fast path, kernel-client path, teardown, and debug boundaries. |

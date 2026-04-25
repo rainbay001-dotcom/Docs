@@ -108,3 +108,11 @@ URMA/UDMA user-kernel boundary pass:
   `ubcore` resource creation, UDMA `ubcore_ops`, mmap/doorbell handling, and
   user-space fast-path post/poll functions.
 - Updated README, index, and TODO entries for the new boundary note.
+
+Executive summary pass:
+
+- Added `01-summary.md` as the first short human-readable entry point.
+- Summarized UB, UMDK, URMA, UDMA, UB-Mesh context, local source evidence,
+  spec/paper interpretation boundaries, adjacent UNIC/CDMA/URPC/UMS/tools, and
+  runtime validation gaps.
+- Updated README, index, and TODO status for the new summary.
