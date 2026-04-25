@@ -6,8 +6,8 @@ This TODO tracks the refinement pass for the UMDK/URMA/UDMA documentation set.
 The current docs cover the major architecture, terminology, UnifiedBus
 specification interpretation, root-bus enumeration, udev exposure, UMMU memory
 management, end-to-end workflows, UB-Mesh context, UNIC/CDMA/URPC/UMS/tool
-coverage, UB-vs-PCIe probe comparison, source evidence, diagrams, and runtime
-validation planning.
+coverage, UB-vs-PCIe probe comparison, URMA/UDMA user-kernel boundary, source
+evidence, diagrams, and runtime validation planning.
 
 ## Execution Priority
 
@@ -22,6 +22,8 @@ Current order:
 - P6: do final file renames/book restructuring after review.
 - P7: deepen side-component docs if UNIC, CDMA, URPC, or UMS become debugging
   targets.
+- P8: keep the dedicated URMA/UDMA user-kernel boundary doc current as source
+  tracing and runtime validation improve.
 
 ## 1. Freeze and Push Current Baseline
 
@@ -633,3 +635,36 @@ Remaining improvements:
 - Add runtime output from real hardware.
 - Add UB uevent vs PCI uevent/module-autoload comparison.
 - Add a rendered diagram for `ub_entity -> ubase -> auxiliary children`.
+
+## 27. Consolidate the URMA/UDMA User-Kernel Boundary
+
+Status: completed in `urma-udma-user-kernel-boundary.md`
+
+The docs now have a dedicated note for the relationship between user-space
+URMA, the UDMA user provider, `uburma`, `ubcore`, and the kernel UDMA provider.
+
+Covered topics:
+
+- `liburma` discovery through `/sys/class/ubcore`, fallback
+  `/sys/class/uburma`, and `/dev/uburma/<device>`.
+- Provider loading and UDMA user-provider registration.
+- `urma_create_context()` open path and `URMA_CMD_CREATE_CTX` flow.
+- Generic control-plane pattern from `liburma` to `uburma` to `ubcore` to
+  k-UDMA.
+- `mmap()` path for doorbells, JFC pages, Jetty DSQE pages, reserved SQ,
+  kernel buffers, and huge pages.
+- User-space post/poll fast path through u-UDMA mapped queues and doorbells.
+- Kernel-client path through `ubcore_post_jfs_wr()` and `ubcore_poll_jfc()`.
+- Object ownership table for device, context, token/TID, Segment, JFC, JFS,
+  JFR, Jetty, and event/notifier objects.
+- Debug checklist by boundary.
+
+Remaining improvements:
+
+- Capture live `/sys/class/ubcore`, `/sys/class/uburma`, and `/dev/uburma`
+  output on UB hardware.
+- Capture a successful context creation trace with kernel logs.
+- Compare the deployed kernel UDMA ABI against
+  `src/urma/hw/udma/kernel_headers/udma_abi.h`.
+- Add runtime evidence that user-space post/poll avoids per-WR ioctls after
+  setup.

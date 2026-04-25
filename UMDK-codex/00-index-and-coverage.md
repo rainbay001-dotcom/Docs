@@ -23,36 +23,39 @@ research notes in this directory. It is meant to answer two questions quickly:
      UMMU implications.
 6. `umdk-component-architecture.md`
    - User-space and kernel component architecture.
-7. `end-to-end-platform-workflow.md`
+7. `urma-udma-user-kernel-boundary.md`
+   - Consolidated user-space vs kernel-space boundary for liburma, u-UDMA,
+     `uburma`, `ubcore`, k-UDMA, mmap, ioctl, fast path, and debug workflow.
+8. `end-to-end-platform-workflow.md`
    - Full boot-to-application workflow, including the newly added root-bus,
      udev, UMMU, and URMA/UDMA paths.
-8. `architecture-diagrams-and-workflows.md`
+9. `architecture-diagrams-and-workflows.md`
    - Mermaid diagrams and workflow chapters for boot, udev, UMMU, topology,
      CAM, data path, and teardown.
-9. `ub-root-bus-udev-device-enumeration.md`
+10. `ub-root-bus-udev-device-enumeration.md`
    - Kernel device model, UB root bus, UBRT/UBIOS parsing, ub bus,
      ub_entity enumeration, uevents, and device-node exposure.
-10. `ub-vs-pcie-probe-process-comparison.md`
+11. `ub-vs-pcie-probe-process-comparison.md`
    - Dedicated comparison between Linux PCIe host/device/driver probing and
      UB root, `ub_entity`, `ub_driver`, UBASE, and auxiliary-device bring-up.
-11. `ummu-memory-management-deep-dive.md`
+12. `ummu-memory-management-deep-dive.md`
    - UMMU, TID/token, SVA/KSVA, MATT/MAPT, segment registration, page pinning,
      and teardown.
-12. `unic-cdma-urpc-ums-tools-coverage.md`
+13. `unic-cdma-urpc-ums-tools-coverage.md`
    - Side-component coverage for UNIC, CDMA, URPC/UMQ, UMS/USOCK, tools, and
      the absence of a local `ubtool` by that name.
-13. `urma-udma-working-flows.md`
+14. `urma-udma-working-flows.md`
    - Detailed URMA/UDMA API and operation-level flows.
-14. `runtime-validation-guide.md`
+15. `runtime-validation-guide.md`
    - Commands and expected observations for hardware/runtime validation.
-15. `source-map.md`
+16. `source-map.md`
    - Source anchors by component and operation.
-16. `08-source-evidence-map.md`
+17. `08-source-evidence-map.md`
    - Claim-to-source evidence table with concrete paths and line numbers.
-17. `refinement-todo.md`
+18. `refinement-todo.md`
    - Next refinement tasks for diagrams, evidence tables, workflow chapters,
      comparisons, terminology, runtime validation, and doc restructuring.
-18. `working-log.md`
+19. `working-log.md`
    - Chronological notes and unresolved follow-ups.
 
 `urma-udma-architecture.md` is an older architecture snapshot kept for
@@ -65,6 +68,7 @@ continuity. Prefer `umdk-component-architecture.md` and
 | --- | --- | --- | --- |
 | UB concept and spec model | Covered | `unifiedbus-spec-umdk-urma-udma.md` | Explains UB protocol, memory semantics, URMA model, and relation to RDMA. |
 | UMDK component architecture | Covered | `umdk-component-architecture.md` | Covers liburma, UDMA provider, UVS/TPSA, uburma, ubcore, and UDMA driver. |
+| URMA/UDMA user-kernel boundary | Newly covered | `urma-udma-user-kernel-boundary.md` | Consolidates liburma/u-UDMA, `/dev/uburma`, ioctl, mmap, uburma, ubcore, k-UDMA, fast path, kernel-client path, teardown, and debug boundaries. |
 | RDMA/IB/RoCE/Ethernet comparison | Covered | `umdk-rdma-terminology-and-comparison.md` | Includes terminology mapping and design comparison. |
 | URMA API workflows | Covered | `urma-udma-working-flows.md` | Context, JFC/JFS/JFR/Jetty, Segment, remote import/bind, WR post, poll, teardown. |
 | UDMA provider and kernel path | Covered | `umdk-component-architecture.md`, `urma-udma-working-flows.md`, `source-map.md` | User/kernel ABI and provider responsibilities are mapped. |
@@ -87,7 +91,7 @@ continuity. Prefer `umdk-component-architecture.md` and
 
 ## What Was Missing Before This Refinement
 
-The earlier document set was already broad, but it had three important gaps:
+The earlier document set was already broad, but it had several important gaps:
 
 1. The "first mile" from firmware-reported UB hardware to Linux devices was
    not described. The new root-bus doc covers UBRT/UBIOS parsing, UBC and UMMU
@@ -102,6 +106,10 @@ The earlier document set was already broad, but it had three important gaps:
 4. Side components were named but not traced. The new UNIC/CDMA/URPC/UMS/tools
    doc maps those components, records concrete source anchors, separates them
    from UDMA/liburma, and documents that `ubtool` was not found locally.
+5. The URMA/UDMA user-kernel boundary was covered across several documents but
+   not in one place. The new boundary doc consolidates the split between
+   `liburma`, u-UDMA, `uburma`, `ubcore`, k-UDMA, ioctl setup, mmap setup, and
+   user-space fast path behavior.
 
 ## Scope Boundaries
 

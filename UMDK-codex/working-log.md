@@ -95,3 +95,16 @@ UB vs PCIe probe comparison pass:
   the device directly, while UB first binds `ub_entity` to `ubase` and then
   UBASE creates auxiliary children such as UDMA, UNIC, and CDMA.
 - Updated README, index, source map, and TODO entries for the new comparison.
+
+URMA/UDMA user-kernel boundary pass:
+
+- Added `urma-udma-user-kernel-boundary.md`.
+- Consolidated the split between `liburma`, u-UDMA, `/dev/uburma/<device>`,
+  `uburma`, `ubcore`, k-UDMA, UMMU, UBASE, and hardware.
+- Documented which operations cross `ioctl()`, which cross `mmap()`, and why
+  normal user-space post/poll avoids per-work-request ioctls after setup.
+- Added source anchors for provider loading, UDMA provider registration,
+  `urma_create_context()`, `URMA_CMD_CREATE_CTX`, `uburma` command dispatch,
+  `ubcore` resource creation, UDMA `ubcore_ops`, mmap/doorbell handling, and
+  user-space fast-path post/poll functions.
+- Updated README, index, and TODO entries for the new boundary note.

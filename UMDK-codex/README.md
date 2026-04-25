@@ -36,6 +36,7 @@ Two local document directories were found:
 - [UB root bus, udev, and device enumeration](./ub-root-bus-udev-device-enumeration.md)
 - [UB and PCIe probe process comparison](./ub-vs-pcie-probe-process-comparison.md)
 - [UMMU memory-management deep dive](./ummu-memory-management-deep-dive.md)
+- [URMA/UDMA user-kernel boundary](./urma-udma-user-kernel-boundary.md)
 - [UNIC, CDMA, URPC, UMS, and tool coverage](./unic-cdma-urpc-ums-tools-coverage.md)
 - [Runtime validation guide](./runtime-validation-guide.md)
 - [URMA/UDMA working flows](./urma-udma-working-flows.md)
@@ -87,6 +88,12 @@ application
   -> kernel UDMA ubcore_ops implementation
   -> UBASE/UMMU/UDMA hardware
 ```
+
+The user-kernel boundary is now consolidated in
+`urma-udma-user-kernel-boundary.md`. The key split is that setup/control
+operations cross `/dev/uburma/<device>` through `ioctl()` and `mmap()`, while
+the normal user-space post/poll datapath runs through the UDMA user provider
+using mapped queue and doorbell pages after setup.
 
 The full platform path starts earlier than the user API:
 
