@@ -19,3 +19,16 @@ Commit/push policy requested by user:
 
 - Keep notes under `Docs-repo/UMDK-codex`.
 - Push regularly after meaningful updates.
+
+Additional research pass:
+
+- Located local UnifiedBus documents under `/Users/ray/Documents/docs/unifiedbus` and `/Users/ray/UnifiedBus-docs-2.0`.
+- Extracted text from key PDFs into `/tmp/unifiedbus-text` for local analysis.
+- Confirmed the local UMDK checkout uses the newer `src/` layout with `src/urma`, `src/urpc`, `src/cam`, `src/ulock`, and `src/usock`.
+- Found a paired local kernel tree at `/Users/ray/Documents/Repo/ub-stack/kernel-ub`, branch `OLK-5.10`, commit `5ae3d7d`.
+- Compared that with the newer local openEuler kernel tree at `/Users/ray/Documents/Repo/kernel`, branch `OLK-6.6`, commit `8f8378999`.
+- Added extensive research and architecture docs:
+  - `unifiedbus-umdk-research.md`
+  - `umdk-component-architecture.md`
+  - `urma-udma-working-flows.md`
+- Updated `README.md` and `source-map.md` to reflect the current local repo layout instead of the older pre-`src/` layout.
