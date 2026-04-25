@@ -29,13 +29,17 @@ Two local document directories were found:
 - [UnifiedBus and UMDK research findings](./unifiedbus-umdk-research.md)
 - [UnifiedBus spec deep dive for UMDK, URMA, and UDMA](./unifiedbus-spec-umdk-urma-udma.md)
 - [UMDK/RDMA terminology mapping and comparison](./umdk-rdma-terminology-and-comparison.md)
+- [UB-Mesh context and UMDK mapping](./ub-mesh-context-and-umdk-mapping.md)
 - [UMDK component architecture](./umdk-component-architecture.md)
 - [End-to-end platform workflow](./end-to-end-platform-workflow.md)
+- [Architecture diagrams and workflows](./architecture-diagrams-and-workflows.md)
 - [UB root bus, udev, and device enumeration](./ub-root-bus-udev-device-enumeration.md)
 - [UMMU memory-management deep dive](./ummu-memory-management-deep-dive.md)
+- [Runtime validation guide](./runtime-validation-guide.md)
 - [URMA/UDMA working flows](./urma-udma-working-flows.md)
 - [URMA/UDMA architecture](./urma-udma-architecture.md) - older snapshot, kept for continuity
 - [Source map](./source-map.md)
+- [Source evidence map](./08-source-evidence-map.md)
 - [Documentation refinement TODO](./refinement-todo.md)
 - [Working log](./working-log.md)
 
@@ -98,6 +102,16 @@ UMDK source tree
   -> implements the user-space API and provider ABI
 UDMA user/kernel drivers
   -> implement provider-specific queues, doorbells, contexts, segments, and TP support
+```
+
+The UB-Mesh interpretation adds the datacenter topology layer:
+
+```text
+LLM workload locality
+  -> UB-Mesh nD-FullMesh / UB-Mesh-Pod architecture
+  -> topology-aware UVS, ubagg, and ubcore path selection
+  -> URMA/UDMA data path
+  -> UMMU-protected UB memory access
 ```
 
 ## Follow-up Questions

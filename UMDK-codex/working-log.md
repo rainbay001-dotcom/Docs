@@ -55,3 +55,17 @@ Refinement pass for root bus, udev, UMMU, and full end-to-end workflow:
 - Added `ub-root-bus-udev-device-enumeration.md` with detailed source-derived coverage of UB root table parsing, `struct ub_bus_controller`, `ub_bus_type`, `ub_entity` topology enumeration, uevents, udev-visible state, `/dev/ubcore`, and `/dev/uburma/<device>`.
 - Added `ummu-memory-management-deep-dive.md` with detailed source-derived coverage of UMMU firmware nodes, UBC-to-UMMU mapping, UB bus DMA/IOMMU configuration, UDMA IOPF/SVA/KSVA setup, user-context TID allocation, token ID/TID handling, Segment registration, page pinning, UMMU grant/ungrant, MATT map/unmap, EID sync, queue buffer mapping, and teardown.
 - Updated `README.md` and `source-map.md` to link and index the new docs and source anchors.
+
+UB-Mesh and source-evidence refinement:
+
+- Added `ub-mesh-context-and-umdk-mapping.md` to connect the UB-Mesh paper to
+  local UVS, ubcore, ubagg, bond provider, CAM, UDMA, and UMMU source evidence.
+- Added `08-source-evidence-map.md` with file and line anchors for the main
+  firmware, UB bus, udev, ubase, UDMA, UMMU, topology, and CAM claims.
+- Added `architecture-diagrams-and-workflows.md` with Mermaid diagrams and
+  workflow chapters for boot, udev, UMMU, topology, CAM, data path, and
+  teardown.
+- Added `runtime-validation-guide.md` with commands and expected observations
+  for systems with UB hardware or emulation.
+- Updated the TODO status so completed docs are distinguished from runtime
+  validation that still needs hardware output.

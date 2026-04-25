@@ -18,25 +18,35 @@ research notes in this directory. It is meant to answer two questions quickly:
    - Spec-side interpretation of UB, URMA, UDMA, UMMU, token, and memory semantics.
 4. `umdk-rdma-terminology-and-comparison.md`
    - Mapping to Ethernet, InfiniBand, RoCE, RDMA verbs, and Linux RDMA core.
-5. `umdk-component-architecture.md`
+5. `ub-mesh-context-and-umdk-mapping.md`
+   - UB-Mesh paper context, source mapping, topology, resource pooling, and
+     UMMU implications.
+6. `umdk-component-architecture.md`
    - User-space and kernel component architecture.
-6. `end-to-end-platform-workflow.md`
+7. `end-to-end-platform-workflow.md`
    - Full boot-to-application workflow, including the newly added root-bus,
      udev, UMMU, and URMA/UDMA paths.
-7. `ub-root-bus-udev-device-enumeration.md`
+8. `architecture-diagrams-and-workflows.md`
+   - Mermaid diagrams and workflow chapters for boot, udev, UMMU, topology,
+     CAM, data path, and teardown.
+9. `ub-root-bus-udev-device-enumeration.md`
    - Kernel device model, UB root bus, UBRT/UBIOS parsing, ub bus,
      ub_entity enumeration, uevents, and device-node exposure.
-8. `ummu-memory-management-deep-dive.md`
+10. `ummu-memory-management-deep-dive.md`
    - UMMU, TID/token, SVA/KSVA, MATT/MAPT, segment registration, page pinning,
      and teardown.
-9. `urma-udma-working-flows.md`
+11. `urma-udma-working-flows.md`
    - Detailed URMA/UDMA API and operation-level flows.
-10. `source-map.md`
+12. `runtime-validation-guide.md`
+   - Commands and expected observations for hardware/runtime validation.
+13. `source-map.md`
    - Source anchors by component and operation.
-11. `refinement-todo.md`
+14. `08-source-evidence-map.md`
+   - Claim-to-source evidence table with concrete paths and line numbers.
+15. `refinement-todo.md`
    - Next refinement tasks for diagrams, evidence tables, workflow chapters,
      comparisons, terminology, runtime validation, and doc restructuring.
-12. `working-log.md`
+16. `working-log.md`
    - Chronological notes and unresolved follow-ups.
 
 `urma-udma-architecture.md` is an older architecture snapshot kept for
@@ -56,8 +66,11 @@ continuity. Prefer `umdk-component-architecture.md` and
 | UB root bus and enumeration | Newly covered | `ub-root-bus-udev-device-enumeration.md` | Adds `ub_bus_type`, `ub_entity`, UBRT/UBIOS, `ub_enum_probe`, and uevents. |
 | udev and device-node exposure | Newly covered | `ub-root-bus-udev-device-enumeration.md` | Documents kernel devnode callbacks and uevent variables; no custom udev rules were found in source. |
 | UMMU memory management | Newly covered | `ummu-memory-management-deep-dive.md` | Covers firmware UMMU nodes, UMMU mapping, SVA/KSVA, TID, token, segment grant/map/unmap. |
+| UB-Mesh paper context | Newly covered | `ub-mesh-context-and-umdk-mapping.md` | Maps the UB-Mesh paper to UVS, ubcore topology, ubagg, bond provider, CAM fullmesh hints, and UMMU. |
+| Source evidence map | Newly covered | `08-source-evidence-map.md` | Claim-to-source table with file and line anchors. |
+| Diagrams and workflow chapters | Newly covered | `architecture-diagrams-and-workflows.md` | Adds Mermaid diagrams for boot, udev, UMMU, topology, CAM, data path, and teardown. |
 | Failure, teardown, hot-remove | Partially covered | `end-to-end-platform-workflow.md`, `ummu-memory-management-deep-dive.md` | Major paths are covered; line-level failure matrices can still be expanded. |
-| Debug and observability | Partially covered | `ub-root-bus-udev-device-enumeration.md`, `ummu-memory-management-deep-dive.md`, `source-map.md` | Commands and source probes are listed; runtime examples need real hardware output. |
+| Debug and observability | Partially covered | `runtime-validation-guide.md`, `ub-root-bus-udev-device-enumeration.md`, `ummu-memory-management-deep-dive.md`, `source-map.md` | Commands and source probes are listed; runtime examples need real hardware output. |
 | Test/smoke validation | Partial | `urma-udma-working-flows.md` | Existing commands are source-derived. Hardware-dependent output is not validated here. |
 
 ## What Was Missing Before This Refinement

@@ -2,15 +2,27 @@
 
 Last updated: 2026-04-25
 
-This TODO tracks the next refinement pass for the UMDK/URMA/UDMA documentation
-set. The current docs already cover the major architecture, terminology,
-UnifiedBus specification interpretation, root-bus enumeration, udev exposure,
-UMMU memory management, and end-to-end workflows. The next pass should turn the
-research notes into a source-anchored technical reference.
+This TODO tracks the refinement pass for the UMDK/URMA/UDMA documentation set.
+The current docs cover the major architecture, terminology, UnifiedBus
+specification interpretation, root-bus enumeration, udev exposure, UMMU memory
+management, end-to-end workflows, UB-Mesh context, source evidence, diagrams,
+and runtime validation planning.
+
+## Execution Priority
+
+Current order:
+
+- P0: freeze baseline and keep pushing regularly.
+- P1: integrate UB-Mesh paper context.
+- P2: map paper/source claims to concrete line anchors.
+- P3: add diagrams and end-to-end workflows.
+- P4: refine comparisons and terminology.
+- P5: add runtime validation commands and capture output when hardware exists.
+- P6: do final file renames/book restructuring after review.
 
 ## 1. Freeze and Push Current Baseline
 
-Status: in progress
+Status: completed
 
 Commit the current `UMDK-codex` documentation state before deeper restructuring.
 This preserves the root-bus, udev, UMMU, workflow, terminology, and comparison
@@ -23,7 +35,7 @@ Expected output:
 
 ## 2. Add Source-Anchored Diagrams
 
-Status: pending
+Status: completed in `architecture-diagrams-and-workflows.md`
 
 Add Mermaid diagrams that are tied to concrete source files and function names.
 The diagrams should make the architecture readable without hiding the source
@@ -42,7 +54,7 @@ Required diagrams:
 
 ## 3. Create a Line-Referenced Evidence Table
 
-Status: pending
+Status: completed in `08-source-evidence-map.md`
 
 Create a table that maps each major claim in the docs to source evidence. Each
 row should include repository, file path, function or struct, role, and the
@@ -64,7 +76,7 @@ Initial evidence targets:
 
 ## 4. Add End-to-End Workflow Chapters
 
-Status: pending
+Status: completed in `architecture-diagrams-and-workflows.md`
 
 Expand the workflow documentation into full sequence chapters. Each chapter
 should describe trigger, actors, source path, kernel/user boundary, expected
@@ -84,7 +96,8 @@ Required workflows:
 
 ## 5. Strengthen Comparisons
 
-Status: pending
+Status: completed initially in `ub-mesh-context-and-umdk-mapping.md`; can be
+expanded further after review
 
 Split the current comparison material into sharper spec, design,
 implementation, and interface comparisons.
@@ -103,7 +116,8 @@ Required comparison tables:
 
 ## 6. Add Canonical Terminology Mapping
 
-Status: pending
+Status: covered by `umdk-rdma-terminology-and-comparison.md` and extended by
+`ub-mesh-context-and-umdk-mapping.md`
 
 Create one authoritative glossary for UB/URMA/UDMA terms and their nearest
 RDMA/Ethernet concepts. The table should explicitly distinguish exact matches,
@@ -125,7 +139,8 @@ Initial canonical mappings:
 
 ## 7. Add Runtime Validation Section
 
-Status: pending
+Status: guide completed in `runtime-validation-guide.md`; hardware output still
+pending
 
 Add a runtime validation guide for systems with UB hardware or emulation. The
 current docs are source-derived; runtime captures are still needed to confirm
@@ -150,7 +165,8 @@ Expected output:
 
 ## 8. Refactor into a Cleaner Book Structure
 
-Status: pending
+Status: partially completed as additive structure; physical file renames
+deferred until after review
 
 After the evidence tables and diagrams are added, reorganize the docs into a
 stable book-like structure. Preserve the research history, but make the primary
@@ -180,7 +196,7 @@ Migration rules:
 
 ## 9. Integrate the UB-Mesh Paper
 
-Status: pending
+Status: completed in `ub-mesh-context-and-umdk-mapping.md`
 
 Add a dedicated UB-Mesh context document that explains why the UMDK/URMA/UDMA
 stack exists in the larger AI datacenter architecture. Use the paper
@@ -219,7 +235,8 @@ Expected output:
 
 ## 10. Map UB-Mesh Concepts to Local Source
 
-Status: pending
+Status: completed in `ub-mesh-context-and-umdk-mapping.md` and
+`08-source-evidence-map.md`
 
 Create a paper-to-source mapping table. This should connect UB-Mesh concepts to
 UMDK/UVS/ubcore/ubagg/UMMU implementation artifacts without overstating what
@@ -252,7 +269,7 @@ Questions to resolve:
 
 ## 11. Add Topology-Aware Workflows
 
-Status: pending
+Status: completed in `architecture-diagrams-and-workflows.md`
 
 Add workflows that start from topology input rather than device bring-up. The
 current workflow docs explain boot, device registration, memory management, and
@@ -274,7 +291,8 @@ Required workflows:
 
 ## 12. Extend Comparison Docs With UB-Mesh
 
-Status: pending
+Status: completed initially in `ub-mesh-context-and-umdk-mapping.md`; deeper
+table expansion can be done after review
 
 Add UB-Mesh as a separate comparison axis in the existing Ethernet, InfiniBand,
 RoCE, RDMA, and UnifiedBus comparison docs.
@@ -306,7 +324,7 @@ The comparison should separate:
 
 ## 13. Tie UMMU and Resource Pooling Back to UB-Mesh
 
-Status: pending
+Status: completed in `ub-mesh-context-and-umdk-mapping.md`
 
 Add a cross-reference from the UMMU deep dive to UB-Mesh. The argument to make
 is that UB-Mesh's resource-pooling and direct UB memory semantics need explicit
@@ -325,7 +343,7 @@ Specific points:
 
 ## 14. Add UB-Mesh Diagrams
 
-Status: pending
+Status: completed in `architecture-diagrams-and-workflows.md`
 
 Add diagrams that connect the paper's architecture to the local software stack.
 
@@ -348,7 +366,8 @@ Required diagrams:
 
 ## 15. Add UB-Mesh Runtime and Source Validation
 
-Status: pending
+Status: guide completed in `runtime-validation-guide.md`; runtime capture still
+pending on UB hardware
 
 Add validation steps for machines or environments where UB topology is exposed.
 The goal is to confirm whether the runtime topology matches the paper-to-source

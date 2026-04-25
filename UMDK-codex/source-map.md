@@ -106,6 +106,19 @@ Key URMA user-space files:
 | `src/urma/lib/urma/bond` | bonding/multipath provider |
 | `src/urma/lib/uvs` | UVS/TPSA APIs and ioctls |
 
+Key UB-Mesh/topology user-space files:
+
+| Path | Role |
+| --- | --- |
+| `src/urma/lib/uvs/core/include/uvs_api.h` | UVS topology types, path sets, topology nodes, aggregate devices, set/get topology APIs |
+| `src/urma/lib/uvs/core/tpsa_api.c` | `uvs_set_topo_info()` and topology propagation into ubagg and ubcore |
+| `src/urma/lib/uvs/core/uvs_ubagg_ioctl.c` | user-space ioctl path for ubagg and ubcore topology set/get |
+| `src/urma/lib/urma/bond/bondp_provider_ops.c` | bond provider topology fetch and fallback behavior |
+| `src/urma/lib/urma/bond/utils/topo_info.c` | bond provider topology-map helpers |
+| `src/urma/tools/urma_admin/admin_cmd_show.c` | `urma_admin show topo` implementation |
+| `src/urma/tools/urma_ping/ping_run.c` | topology-aware ping helper logic |
+| `src/cam/comm_operator/ascend_kernels` | CAM/MoE tiling code with `level0:fullmesh` collective hints |
+
 Key UDMA user provider files:
 
 | Path | Role |
@@ -213,6 +226,10 @@ Key files:
 | `drivers/ub/urma/hw/udma/udma_jetty.c` | Jetty object |
 | `drivers/ub/urma/hw/udma/udma_ctrlq_tp.c` | control queue and TP |
 | `drivers/ub/urma/hw/udma/udma_eid.c` | EID/IP helpers |
+| `drivers/ub/urma/ubcore/ubcore_topo_info.h` | ubcore topology node, aggregate device, path, and path-set structures |
+| `drivers/ub/urma/ubcore/ubcore_topo_info.c` | ubcore topology map helpers and path-set selection |
+| `drivers/ub/urma/ubcore/ubcore_uvs_cmd.c` | ubcore topology set/get and path-set global commands |
+| `drivers/ub/urma/ubagg/ubagg_ioctl.c` | ubagg topology set and aggregate topology handling |
 | `include/uapi/ub/urma/udma/udma_abi.h` | kernel UAPI ABI |
 
 ## Important Symbols
@@ -249,6 +266,18 @@ UMDK/u-UDMA:
 - `udma_u_post_jetty_send_wr`
 - `udma_u_poll_jfc`
 
+UMDK/UVS/topology:
+
+- `uvs_set_topo_info`
+- `uvs_get_topo_info`
+- `uvs_ubagg_ioctl_set_topo`
+- `uvs_ubcore_ioctl_set_topo`
+- `struct urma_topo_node`
+- `uvs_path_set_t`
+- `get_topo_info_from_ko`
+- `create_topo_map`
+- `cmd_show_topo`
+
 kernel-ub:
 
 - `uburma_cmd_create_ctx`
@@ -283,5 +312,9 @@ OLK-6.6 kernel:
 - `udma_alloc_ucontext()`: obtains per-user-context UMMU TID.
 - `udma_alloc_tid()`: maps ubcore token IDs to UMMU TIDs.
 - `udma_register_seg()`: UDMA Segment registration and UMMU grant/map path.
+- `struct ubcore_topo_node`: kernel topology node with `1D-fullmesh` and Clos type comments.
+- `ubcore_cmd_set_topo()`: creates/updates global ubcore topology map and Jetty resources.
+- `ubagg_cmd_set_topo_info()`: creates/updates ubagg topology map.
+- `ubcore_get_path_set()`: resolves aggregate EIDs into topology-aware path sets.
 - `query_caps_from_firmware()`: queries hardware/firmware resources.
 - `udma_query_device_attr()`: exposes device capabilities to ubcore/user space.
