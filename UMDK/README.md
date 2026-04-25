@@ -33,6 +33,9 @@ Canonical upstream lives on Huawei/openEuler forges; GitHub copies are auto-mirr
 **Reference snapshot:**
 - [`umdk_repo_layout.md`](umdk_repo_layout.md) — Initial repo layout note. Largely superseded by the architecture doc; kept as a quick-reference jump-table.
 
+**Working backlog:**
+- [`umdk_refinement_todos.md`](umdk_refinement_todos.md) — Consolidated TODO list of every open question, deferred read, gap, and verification step across all the other docs. Prioritized (P1/P2/P3), sized (S/M/L), and grouped into: quick wins, remaining Chinese-spec chapters to read, code-reading queue, cross-doc consistency sweeps, web-research follow-ups, new-doc proposals, and permanently out-of-scope items. **Pick from here when planning a refinement session.**
+
 Still pending (next research batches):
 
 - Remaining Chinese spec chapters — §5 Network Layer (NPI), §6.5/6.6 (multipath + congestion control / C-AQM), §8 Function Layer (URMA + URPC + Multi-Entity coord), §9 Memory Management (UMMU detail, UB Decoder), §10.5/10.6 (Virtualization, RAS), Appendix B (packet formats), Appendix D (config registers), Appendix G (hot-plug), Appendix H (URPC message format).
