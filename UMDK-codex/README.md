@@ -35,6 +35,7 @@ Two local document directories were found:
 - [Architecture diagrams and workflows](./architecture-diagrams-and-workflows.md)
 - [UB root bus, udev, and device enumeration](./ub-root-bus-udev-device-enumeration.md)
 - [UMMU memory-management deep dive](./ummu-memory-management-deep-dive.md)
+- [UNIC, CDMA, URPC, UMS, and tool coverage](./unic-cdma-urpc-ums-tools-coverage.md)
 - [Runtime validation guide](./runtime-validation-guide.md)
 - [URMA/UDMA working flows](./urma-udma-working-flows.md)
 - [URMA/UDMA architecture](./urma-udma-architecture.md) - older snapshot, kept for continuity
@@ -52,6 +53,13 @@ UMDK is the user-space portion of the UnifiedBus memory-semantics software stack
 - `src/cam`: communication acceleration code for AI/MoE workloads.
 - `src/ulock`: distributed lock implementation.
 - `src/usock`: socket compatibility support through UMS.
+
+The side-component coverage now explicitly includes UNIC, CDMA, URPC/UMQ,
+UMS/USOCK, and the discovered runtime tools. No local source named `ubtool`,
+`ub_tool`, `ub tool`, or `ub-tool` was found in the checked UMDK and kernel
+trees; the actual discovered tools are `urma_admin`, `urma_ping`,
+`urma_perftest`, `urpc_admin`, URPC perftest tools, `ums_admin`, `ums_run`, and
+the UMS preload library source.
 
 The terminology guide maps UMDK/URMA objects to familiar RDMA and Ethernet
 concepts. The short version is: `ubcore_device` is closest to `ib_device`,
@@ -114,6 +122,23 @@ LLM workload locality
   -> UMMU-protected UB memory access
 ```
 
+Adjacent UB software paths fill in compatibility and service surfaces around
+the native URMA/UDMA path:
+
+```text
+Linux netdev path:
+  UNIC -> netdev/channels/NAPI/link state over UBASE auxiliary devices
+
+Crystal DMA path:
+  CDMA -> /dev/cdma/dev -> CDMA_SYNC -> JFS/JFC/CTP/Segment -> UMMU
+
+RPC/queue path:
+  URPC -> UMQ -> IPC or UB backend -> URMA Jetty/JFC where UB transport is used
+
+Socket compatibility path:
+  ums_run/libums-preload -> AF_SMC/UMS -> TCP ULP + ubcore client
+```
+
 ## Follow-up Questions
 
 - Confirm the exact branch/tag pairing between `/Users/ray/Documents/Repo/ub-stack/umdk` and `/Users/ray/Documents/Repo/ub-stack/kernel-ub`.
@@ -121,3 +146,6 @@ LLM workload locality
 - Capture real UB hardware output for `/sys/bus/ub`, `/sys/class/ubcore`, `/sys/class/uburma`, `/dev/ubcore`, `/dev/uburma`, and `udevadm info`.
 - Continue line-by-line tracing for the highest-value user API paths:
   `create_context`, `create_jetty`, `register/import segment`, `post_jfs_wr`, and `poll_jfc`.
+- Deepen the new side-component coverage with line-level paths for UNIC TX/RX,
+  CDMA ABI/client use, URPC channel attach/queue pairing, and UMS connection
+  manager/token/buffer behavior.

@@ -5,8 +5,8 @@ Last updated: 2026-04-25
 This TODO tracks the refinement pass for the UMDK/URMA/UDMA documentation set.
 The current docs cover the major architecture, terminology, UnifiedBus
 specification interpretation, root-bus enumeration, udev exposure, UMMU memory
-management, end-to-end workflows, UB-Mesh context, source evidence, diagrams,
-and runtime validation planning.
+management, end-to-end workflows, UB-Mesh context, UNIC/CDMA/URPC/UMS/tool
+coverage, source evidence, diagrams, and runtime validation planning.
 
 ## Execution Priority
 
@@ -19,6 +19,8 @@ Current order:
 - P4: refine comparisons and terminology.
 - P5: add runtime validation commands and capture output when hardware exists.
 - P6: do final file renames/book restructuring after review.
+- P7: deepen side-component docs if UNIC, CDMA, URPC, or UMS become debugging
+  targets.
 
 ## 1. Freeze and Push Current Baseline
 
@@ -408,6 +410,8 @@ Required coverage:
 - what is proven by local source;
 - what is inferred from UB-Mesh paper/spec interpretation;
 - what still needs runtime validation.
+- where UNIC, CDMA, URPC, UMS, and the discovered tools fit relative to the
+  native URMA/UDMA path.
 
 ## 17. Create a Canonical Glossary
 
@@ -574,3 +578,33 @@ Candidate final structure:
 - `11-runtime-validation-guide.md`
 - `12-known-unknowns-and-validation-gaps.md`
 - `13-review-checklist.md`
+
+## 25. Deepen UNIC, CDMA, URPC, UMS, and Tool Coverage
+
+Status: initial coverage completed in `unic-cdma-urpc-ums-tools-coverage.md`;
+line-level deep dives still pending
+
+The requested names are now explicitly covered:
+
+- `liburma`, URMA, UDMA, UMMU, and UVS remain covered by the main docs.
+- UNIC, CDMA, URPC/UMQ, UMS/USOCK, and tools are covered in the new side
+  component note.
+- `ubtool` was searched by name across the local UMDK/current-kernel/paired
+  kernel trees and was not found. The local discovered tools are `urma_admin`,
+  `urma_ping`, `urma_perftest`, `urpc_admin`, URPC perftest tools,
+  `ums_admin`, `ums_run`, and `libums-preload.so` source.
+
+Next refinements:
+
+- Trace UNIC TX/RX from netdev open/start-xmit/NAPI/completion through UB/UBASE
+  callback handling.
+- Build a CDMA ABI table from `include/uapi/ub/cdma/cdma_abi.h` and map every
+  command to its handler and object lifetime.
+- Find and document all in-tree users of `include/ub/cdma/cdma_api.h`.
+- Trace URPC `urpc_channel_server_attach()` through control-plane
+  serialization, server capability exchange, queue add, and queue pair.
+- Compare UMQ `ipc`, `ub`, and `ubmm` transports.
+- Trace UMS `cm`, `llc`, `cdc`, RMB, token, fallback, and data movement paths.
+- Add command examples and expected output templates for all discovered tools.
+- Ask for or locate an external/vendor source if the intended `ubtool` is not
+  one of the discovered local tools.

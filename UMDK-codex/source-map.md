@@ -119,6 +119,47 @@ Key UB-Mesh/topology user-space files:
 | `src/urma/tools/urma_ping/ping_run.c` | topology-aware ping helper logic |
 | `src/cam/comm_operator/ascend_kernels` | CAM/MoE tiling code with `level0:fullmesh` collective hints |
 
+Key URPC/UMQ files:
+
+| Path | Role |
+| --- | --- |
+| `src/urpc/include/framework/urpc_framework_api.h` | Public URPC API for init/uninit, allocator registration, remote memory-segment access, channel create/destroy, server attach/refresh/detach, server start, and queue add/remove/pair/unpair |
+| `src/urpc/include/umq/umq_api.h` | Public UMQ API for queue init/create/bind, buffer allocation, enqueue/dequeue, interrupts, and async events |
+| `src/urpc/framework/lib/control/cp.c` | URPC channel control implementation, including channel create/destroy, server attach/refresh/detach, queue add/remove, and pair/unpair |
+| `src/urpc/framework/lib/datapath/dp.c` | URPC datapath implementation |
+| `src/urpc/umq/umq_ub/core/private/umq_pro_ub.c` | UB backend that polls URMA JFCs, posts Jetty receives, handles TX/RX completions, and flushes Jetty state |
+| `src/urpc/umq/umq_ipc` | IPC UMQ transport implementation |
+| `src/urpc/umq/umq_ubmm` | UB memory-management related UMQ transport implementation |
+| `src/urpc/tools/urpc_admin/urpc_admin.c` | URPC admin tool; connects to `<path>/urpc.sock.<pid>` and sends Unix-domain IPC control requests |
+| `src/urpc/tools/perftest` | URPC/UMQ performance tests |
+
+Key UMS/USOCK files:
+
+| Path | Role |
+| --- | --- |
+| `src/usock/ums/kmod/ums/ums_mod.c` | UMS kernel module entry, AF_SMC protocol registration, TCP ULP registration, ubcore client registration, and socket operations |
+| `src/usock/ums/tools/ums-preload.c` | LD_PRELOAD socket wrapper; maps eligible TCP stream sockets to AF_SMC |
+| `src/usock/ums/tools/ums_run` | Wrapper script that injects `/usr/lib/libums-preload.so` and execs the target command |
+| `src/usock/ums/tools/ums_admin/ums_admin.c` | UMS DFX/admin tool using generic netlink family `UMS_GENL_DFX` |
+| `src/usock/ums/kmod/ums/cm` | UMS connection-management path |
+| `src/usock/ums/kmod/ums/llc` | UMS link-layer control path |
+| `src/usock/ums/kmod/ums/cdc` | UMS CDC path |
+
+Discovered tool paths:
+
+| Tool | Path | Role |
+| --- | --- | --- |
+| `urma_admin` | `src/urma/tools/urma_admin` | URMA device/resource/EID/topology admin tool |
+| `urma_ping` | `src/urma/tools/urma_ping` | URMA connectivity/topology diagnostic tool |
+| `urma_perftest` | `src/urma/tools/urma_perftest` | URMA performance tests |
+| `urpc_admin` | `src/urpc/tools/urpc_admin` | URPC process control/DFX through Unix-domain IPC |
+| URPC perftest | `src/urpc/tools/perftest` | URPC/UMQ performance tests |
+| `ums_admin` | `src/usock/ums/tools/ums_admin` | UMS generic-netlink DFX status tool |
+| `ums_run` | `src/usock/ums/tools/ums_run` | UMS preload runner for socket applications |
+
+No local source named `ubtool`, `ub_tool`, `ub tool`, or `ub-tool` was found in
+the checked UMDK, current kernel, or paired kernel trees during this pass.
+
 Key UDMA user provider files:
 
 | Path | Role |
@@ -226,6 +267,21 @@ Key files:
 | `drivers/ub/urma/hw/udma/udma_jetty.c` | Jetty object |
 | `drivers/ub/urma/hw/udma/udma_ctrlq_tp.c` | control queue and TP |
 | `drivers/ub/urma/hw/udma/udma_eid.c` | EID/IP helpers |
+| `drivers/net/ub/unic/unic_main.c` | UNIC module entry, auxiliary driver, probe/remove, IP/netdevice notifiers |
+| `drivers/net/ub/unic/unic_netdev.c` | UNIC netdev queue setup, traffic class mapping, NAPI/channel enable, net up/down, link status |
+| `drivers/net/ub/unic/unic_tx.c` | UNIC transmit path |
+| `drivers/net/ub/unic/unic_rx.c` | UNIC receive path |
+| `drivers/net/ub/unic/unic_txrx.c` | UNIC TX/RX channel glue |
+| `drivers/net/ub/unic/unic_qos_hw.c` | UNIC QoS hardware handling |
+| `drivers/net/ub/unic/unic_dcbnl.c` | UNIC DCB/netlink behavior |
+| `drivers/ub/cdma/cdma_main.c` | CDMA module entry, auxiliary driver, class creation, char-device creation, reset callbacks |
+| `drivers/ub/cdma/cdma_chardev.c` | CDMA `/dev/cdma/dev`, `CDMA_SYNC` ioctl, mmap handling |
+| `drivers/ub/cdma/cdma_ioctl.c` | CDMA user command dispatcher and handlers for context, CTP, queue, JFS, JFC, JFCE, Segment |
+| `drivers/ub/cdma/cdma_tid.c` | CDMA device-level KSVA/SVA/IOPF enablement, TID allocation, and UMMU grant/ungrant |
+| `drivers/ub/cdma/cdma_context.c` | CDMA context-level KSVA/SVA/separated-TID allocation and teardown |
+| `drivers/ub/cdma/cdma_segment.c` | CDMA Segment pin, token, TID, and UMMU grant/ungrant handling |
+| `include/uapi/ub/cdma/cdma_abi.h` | CDMA UAPI command, mmap, completion, and object ABI |
+| `include/ub/cdma/cdma_api.h` | Kernel-facing CDMA client API |
 | `drivers/ub/urma/ubcore/ubcore_topo_info.h` | ubcore topology node, aggregate device, path, and path-set structures |
 | `drivers/ub/urma/ubcore/ubcore_topo_info.c` | ubcore topology map helpers and path-set selection |
 | `drivers/ub/urma/ubcore/ubcore_uvs_cmd.c` | ubcore topology set/get and path-set global commands |
@@ -250,6 +306,45 @@ UMDK/liburma:
 - `urma_post_jetty_send_wr`
 - `urma_post_jetty_recv_wr`
 - `urma_poll_jfc`
+
+UMDK/URPC/UMQ:
+
+- `urpc_init`
+- `urpc_channel_create`
+- `urpc_channel_server_attach`
+- `urpc_channel_queue_add`
+- `urpc_channel_queue_pair`
+- `umq_init`
+- `umq_create`
+- `umq_bind`
+- `umq_enqueue`
+- `umq_dequeue`
+- `umq_ub_poll_rx`
+- `umq_ub_poll_tx`
+- `umq_ub_fill_fc_rx_buf`
+
+UMDK/UMS:
+
+- `ums_init`
+- `ums_sock_register`
+- `ums_ubcore_register_client`
+- `tcp_register_ulp`
+- `ums_create`
+- `ums_sock_alloc`
+- `socket` in `ums-preload.c`
+
+Kernel UNIC/CDMA:
+
+- `unic_probe`
+- `unic_enable_channels`
+- `unic_link_status_change`
+- `cdma_probe`
+- `cdma_ioctl`
+- `cdma_cmd_parse`
+- `cdma_alloc_dev_tid`
+- `cdma_alloc_context`
+- `cdma_register_seg`
+- `cdma_seg_grant`
 
 UMDK/u-UDMA:
 

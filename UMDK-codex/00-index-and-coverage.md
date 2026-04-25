@@ -35,18 +35,21 @@ research notes in this directory. It is meant to answer two questions quickly:
 10. `ummu-memory-management-deep-dive.md`
    - UMMU, TID/token, SVA/KSVA, MATT/MAPT, segment registration, page pinning,
      and teardown.
-11. `urma-udma-working-flows.md`
+11. `unic-cdma-urpc-ums-tools-coverage.md`
+   - Side-component coverage for UNIC, CDMA, URPC/UMQ, UMS/USOCK, tools, and
+     the absence of a local `ubtool` by that name.
+12. `urma-udma-working-flows.md`
    - Detailed URMA/UDMA API and operation-level flows.
-12. `runtime-validation-guide.md`
+13. `runtime-validation-guide.md`
    - Commands and expected observations for hardware/runtime validation.
-13. `source-map.md`
+14. `source-map.md`
    - Source anchors by component and operation.
-14. `08-source-evidence-map.md`
+15. `08-source-evidence-map.md`
    - Claim-to-source evidence table with concrete paths and line numbers.
-15. `refinement-todo.md`
+16. `refinement-todo.md`
    - Next refinement tasks for diagrams, evidence tables, workflow chapters,
      comparisons, terminology, runtime validation, and doc restructuring.
-16. `working-log.md`
+17. `working-log.md`
    - Chronological notes and unresolved follow-ups.
 
 `urma-udma-architecture.md` is an older architecture snapshot kept for
@@ -66,6 +69,11 @@ continuity. Prefer `umdk-component-architecture.md` and
 | UB root bus and enumeration | Newly covered | `ub-root-bus-udev-device-enumeration.md` | Adds `ub_bus_type`, `ub_entity`, UBRT/UBIOS, `ub_enum_probe`, and uevents. |
 | udev and device-node exposure | Newly covered | `ub-root-bus-udev-device-enumeration.md` | Documents kernel devnode callbacks and uevent variables; no custom udev rules were found in source. |
 | UMMU memory management | Newly covered | `ummu-memory-management-deep-dive.md` | Covers firmware UMMU nodes, UMMU mapping, SVA/KSVA, TID, token, segment grant/map/unmap. |
+| UNIC network driver | Newly covered | `unic-cdma-urpc-ums-tools-coverage.md`, `source-map.md` | Covers auxiliary-device binding, netdev queue/channel/NAPI/link behavior, and open TX/RX trace gaps. |
+| CDMA Crystal DMA | Newly covered | `unic-cdma-urpc-ums-tools-coverage.md`, `source-map.md` | Covers `/dev/cdma/dev`, `CDMA_SYNC`, context, queue, JFS/JFC/JFCE, CTP, Segment, and UMMU/SVA/TID paths. |
+| URPC and UMQ | Newly covered | `unic-cdma-urpc-ums-tools-coverage.md`, `source-map.md` | Covers URPC channel/server/queue APIs, UMQ APIs, UB backend use of URMA Jetty/JFC, and admin tool behavior. |
+| UMS/USOCK socket compatibility | Newly covered | `unic-cdma-urpc-ums-tools-coverage.md`, `source-map.md` | Covers AF_SMC registration, TCP ULP, ubcore client registration, preload socket remapping, `ums_run`, and `ums_admin`. |
+| Tooling and `ubtool` status | Newly covered | `unic-cdma-urpc-ums-tools-coverage.md` | Records discovered tools and that no local `ubtool` source was found by that name. |
 | UB-Mesh paper context | Newly covered | `ub-mesh-context-and-umdk-mapping.md` | Maps the UB-Mesh paper to UVS, ubcore topology, ubagg, bond provider, CAM fullmesh hints, and UMMU. |
 | Source evidence map | Newly covered | `08-source-evidence-map.md` | Claim-to-source table with file and line anchors. |
 | Diagrams and workflow chapters | Newly covered | `architecture-diagrams-and-workflows.md` | Adds Mermaid diagrams for boot, udev, UMMU, topology, CAM, data path, and teardown. |
@@ -87,6 +95,9 @@ The earlier document set was already broad, but it had three important gaps:
    doc follows firmware discovery, UDMA probe-time SVA enablement, context TID
    allocation, token/TID allocation, segment registration, MATT mapping, and
    teardown.
+4. Side components were named but not traced. The new UNIC/CDMA/URPC/UMS/tools
+   doc maps those components, records concrete source anchors, separates them
+   from UDMA/liburma, and documents that `ubtool` was not found locally.
 
 ## Scope Boundaries
 
@@ -120,3 +131,6 @@ paired reference context.
   `urma_poll_jfc`.
 - Compare `src/urma/hw/udma/udma_u_abi.h` with the kernel UDMA ABI in both
   kernel trees.
+- Deepen side-component source tracing for UNIC TX/RX, CDMA client/ABI use,
+  URPC control plane and UMQ transport modes, and UMS connection/token/buffer
+  paths.

@@ -69,3 +69,18 @@ UB-Mesh and source-evidence refinement:
   for systems with UB hardware or emulation.
 - Updated the TODO status so completed docs are distinguished from runtime
   validation that still needs hardware output.
+
+Side-component coverage pass:
+
+- Added `unic-cdma-urpc-ums-tools-coverage.md`.
+- Confirmed the existing docs already cover `liburma`, URMA, UDMA, UMMU, and
+  UVS at higher depth.
+- Added source-backed coverage for UNIC auxiliary-driver/netdev behavior, CDMA
+  char-device/ABI/UMMU paths, URPC/UMQ API and UB backend behavior, UMS/USOCK
+  AF_SMC/TCP-ULP/preload behavior, and the discovered admin/runtime tools.
+- Searched local UMDK, current openEuler kernel, and paired kernel trees for
+  `ubtool`, `ub_tool`, `ub tool`, `ub-tool`, and `UB tool`; no local source by
+  that name was found.
+- Updated `README.md`, `00-index-and-coverage.md`, `source-map.md`, and
+  `refinement-todo.md` to include the new coverage and remaining deep-dive
+  tasks.
