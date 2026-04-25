@@ -392,3 +392,185 @@ Evidence to capture:
 - path count and path endpoints if exposed;
 - whether LRS/HRS or switch-like elements appear in software-visible topology;
 - whether runtime output confirms or contradicts the UB-Mesh paper mapping.
+
+## 16. Add a One-Page Executive Summary
+
+Status: pending
+
+Create `01-summary.md` as the first human-readable entry point. It should be
+short enough to read before any deep source tracing.
+
+Required coverage:
+
+- what UB, UMDK, URMA, and UDMA are;
+- why UB-Mesh matters for this stack;
+- what the software stack does from application to hardware;
+- what is proven by local source;
+- what is inferred from UB-Mesh paper/spec interpretation;
+- what still needs runtime validation.
+
+## 17. Create a Canonical Glossary
+
+Status: pending
+
+Create a dedicated glossary or split one out from
+`umdk-rdma-terminology-and-comparison.md`. This should be the single place to
+look up terminology across UB, UMDK, URMA, UDMA, and UB-Mesh.
+
+Required terms:
+
+- UB, UMDK, URMA, UDMA, UVS, TPSA, ubcore, uburma, ubagg, ubase;
+- Jetty, JFS, JFR, JFC, Segment, token, TID, EID, UMMU;
+- UB-Mesh, nD-FullMesh, UB-Mesh-Pod, LRS, HRS, APR, CCU;
+- Ethernet, InfiniBand, RoCE, RDMA verbs comparison terms.
+
+Rules:
+
+- Mark exact equivalents, near equivalents, and misleading analogies.
+- Avoid implying `token_id/TID` are simple `lkey/rkey` replacements.
+- Keep UB bus/device-model terms separate from transport endpoint terms.
+
+## 18. Add Known Unknowns and Validation Gaps
+
+Status: pending
+
+Create `known-unknowns-and-validation-gaps.md`. This is the most important
+next rigor pass because it makes the research defensible by separating proven
+facts, paper claims, and architecture inference.
+
+Initial known unknowns:
+
+- APR is paper-supported but not visible by name in the local source.
+- LRS/HRS are paper-supported but not directly named in the local source.
+- CCU is paper-supported but not directly visible in the checked UMDK/kernel
+  code.
+- `4D-FullMesh` and full `nD-FullMesh` generation are not visible in the local
+  source; current public APIs expose `1D-fullmesh` and Clos-like topology.
+- 64+1 backup policy is paper-supported but not found as a named local source
+  object.
+- Runtime output from `/sys`, `/dev`, `udevadm`, `dmesg`, `urma_admin`, and
+  `urma_ping` is still missing.
+
+Expected output:
+
+- table with `topic`, `current evidence`, `why it matters`, `next validation`;
+- cross-links to `runtime-validation-guide.md` and `08-source-evidence-map.md`.
+
+## 19. Normalize Source References
+
+Status: pending
+
+Current docs use many absolute local paths. Keep those for reproducibility on
+this machine, but add repo-relative paths for long-term readability after push.
+
+Reference format:
+
+```text
+kernel: drivers/ub/urma/ubcore/ubcore_topo_info.c
+local: /Users/ray/Documents/Repo/kernel/drivers/ub/urma/ubcore/ubcore_topo_info.c
+```
+
+Apply to:
+
+- `08-source-evidence-map.md`;
+- `ub-mesh-context-and-umdk-mapping.md`;
+- `architecture-diagrams-and-workflows.md`;
+- `source-map.md`;
+- any future source-heavy docs.
+
+## 20. Add Version-Difference Notes
+
+Status: pending
+
+Create a short version note section that explicitly separates which findings
+come from each checkout.
+
+Required version anchors:
+
+- UMDK `master @ d04677a`;
+- current openEuler kernel `OLK-6.6 @ 8f8378999`;
+- older paired kernel `OLK-5.10 @ 5ae3d7d`;
+- local UnifiedBus PDF set and UB-Mesh paper version.
+
+Expected output:
+
+- table of repos, branches, commits, and role;
+- warnings when a claim comes only from one kernel tree;
+- explicit note that OLK-6.6 is treated as the current implementation
+  reference unless later branch pairing proves otherwise.
+
+## 21. Render-Check Mermaid Diagrams
+
+Status: pending
+
+Render the Mermaid diagrams in GitHub or another Markdown preview path and fix
+readability/layout issues.
+
+Checks:
+
+- diagrams render without syntax errors;
+- labels are readable in GitHub preview;
+- diagrams do not duplicate too much prose;
+- diagrams remain source-anchored;
+- sequence diagrams have clear actor names and direction.
+
+## 22. Reduce Cross-Doc Duplication
+
+Status: pending
+
+The docs now intentionally overlap in a few places. Do a cleanup pass so each
+document has a clear ownership boundary.
+
+Target ownership:
+
+- `end-to-end-platform-workflow.md`: prose lifecycle walkthrough.
+- `architecture-diagrams-and-workflows.md`: diagrams and sequence workflows.
+- `08-source-evidence-map.md`: claim-to-source evidence only.
+- `ub-mesh-context-and-umdk-mapping.md`: paper-to-source mapping and inference
+  boundaries.
+- `runtime-validation-guide.md`: commands, expected observations, and capture
+  template only.
+- `known-unknowns-and-validation-gaps.md`: unresolved questions and validation
+  plan.
+
+## 23. Add a Review Checklist
+
+Status: pending
+
+Create a compact review checklist for future doc edits.
+
+Checklist items:
+
+- every source-derived claim has a file/function anchor;
+- every paper/spec claim cites the paper/spec source;
+- every inference is labeled as inference;
+- every runtime claim has captured output or is marked pending;
+- comparisons avoid false equivalence with RDMA, Ethernet, InfiniBand, RoCE,
+  or NVLink;
+- version-specific behavior names the exact repo/branch/commit;
+- diagrams are render-checked;
+- no unrelated local files are staged during documentation pushes.
+
+## 24. Final Book-Structure Refactor
+
+Status: pending after review
+
+After the summary, glossary, known-unknowns, source-reference normalization,
+and duplicate cleanup are complete, do the final file structure refactor.
+
+Candidate final structure:
+
+- `00-index-and-coverage.md`
+- `01-summary.md`
+- `02-architecture-overview.md`
+- `03-boot-enumeration-root-bus-udev.md`
+- `04-ubcore-uburma-userspace.md`
+- `05-udma-provider-implementation.md`
+- `06-ummu-memory-model.md`
+- `07-ub-mesh-context-and-topology.md`
+- `08-workflows-and-diagrams.md`
+- `09-terminology-and-comparison.md`
+- `10-source-evidence-map.md`
+- `11-runtime-validation-guide.md`
+- `12-known-unknowns-and-validation-gaps.md`
+- `13-review-checklist.md`
