@@ -481,7 +481,392 @@ Extending TEE from single-processor to **cross-UBPU** trusted compute clusters.
 
 ---
 
-## 5. Cross-corrections to earlier docs
+## 5. §8 Function Layer — URMA, URPC, Multi-Entity coordination
+
+### 5.1 Layer overview (§8.1 p. 240)
+
+Function layer sits **on top of the transaction layer** and provides:
+
+- **Two programming models**: Load/Store synchronous access (CPU instructions translated by UB Controller into transaction ops) and **URMA asynchronous access** (Jetty-based async API).
+- **Three higher-level abstractions**: **URPC** (function calls), **Multi-Entity coordination** (collective patterns, fusion ops, global maintenance), **Entity management** (discovery, registration, config — see §10).
+
+URMA programming requires binding **transaction queues** or other carriers to host Jetty transactions.
+
+### 5.2 Memory Segment (§8.2.1 pp. 240–241)
+
+- **Creation**: app calls OS memory-allocation API; result is a segment described by `(EID, TokenID, UBA, length)`. UMMU configures **MATT** (Memory Address Translation Table) and **MAPT** (Memory Access Permission Table). UMMU may use **lazy allocation** — physical memory only assigned at first access.
+- **Multi-token sharing**: a single TokenID can be reused across multiple segments; or one segment can have multiple TokenIDs (each grants different permission sets).
+- **Teardown safety**: **before clearing UMMU entries, all in-flight UB transactions referencing the segment must be drained.**
+- **Initiator usage modes** (§8.2.1.2 p. 241):
+  1. **Map** segment address into local process VA → MVA (Mapped Virtual Address). Both sync and async access work.
+  2. **Apply only, no map**. Async access only.
+- **Access methods** (§8.2.1.3 p. 241):
+  1. **Base address + length**, with alignment per transaction type (e.g. 4-byte Atomic needs 4-byte alignment).
+  2. **ByteEnable** — Initiator marks which bytes inside the addressed range are valid; only marked bytes are updated. Used by `Write_with_be`.
+
+### 5.3 Jetty (§8.2.2 pp. 241–245) — three types + auxiliary objects
+
+Three Jetty types:
+
+| Type | Spec name | Bindings | Use case |
+|---|---|---|---|
+| **Type 1** | Standard Jetty | Both SQ + RQ | Bidirectional |
+| **Type 2** | Single-side Jetty: **JFS** (Jetty For Sending) or **JFR** (Jetty For Receiving) | SQ-only **or** RQ-only | Unidirectional; saves resources. JFS-only Initiator accessing Target memory needs **no JFR at Target** |
+| **Type 3** | **Jetty Group** (Target-only) | Multiple Jetties + RQ Group | Initiator addresses the *group*; Target distributes per **policy** |
+
+**Jetty-group target-selection policies** (§8.2.2 p. 242, three options):
+
+1. **Hint hashing** — Initiator carries a Hint field; Target hashes by Hint into a member.
+2. **Round Robin**.
+3. **RQ-depth dynamic LB** — pick the member with the freest RQ (depth-aware load balancing).
+
+Benefits of Jetty Group: NUMA-affinity dispatching; CPU-free distribution.
+
+**Auxiliary objects** (§8.2.2 p. 243):
+
+- **JFC** (Jetty For Completion): completion-notification queue; binds a unique CQ. **Multiple Jetties may share one JFC** (one CQ holds multiple Jetties' CQEs).
+- **JFCE** (JF Completion Event): interrupt-driven completion; binds a JFC + an EQ. Trigger via FCE flag in the request, a timer, or a count-threshold.
+- **JFAE** (JF Asynchronous Event): receives async exceptions (Jetty error, driver/HW fault). Binds an EQ.
+
+**Communication models** (§8.2.2.2 p. 243–244):
+
+- **Many-to-many (M2N)**: Initiator Jetty isn't bound to a single Target Jetty; can talk to any. Per-request specifies Target Jetty. Used by Standard + Single-side.
+- **One-to-one**: Standard Jetty only. Initiator + Target Jetties bound 1:1.
+
+**Jetty state machine** (§8.2.2.3 pp. 244–245, Fig. 8-4):
+
+States: **Reset → Ready → Suspend → Error**.
+
+| Transition | Trigger |
+|---|---|
+| Reset → Ready | "Create comm relation" call |
+| Ready → Suspend | Recoverable fault (e.g. transport fault) — only if Exception Mode = `Exception suspend` |
+| Ready → Error | Severe error (HW fault, context tampering) |
+| Suspend → Ready | App handles the fault; Jetty resumes |
+| Suspend → Error | Unrecoverable |
+| Error → Reset | App calls modify-interface; **must drain all SQE error CQEs first** |
+
+**Exception Mode** (§8.2.2.3 #3) — two flavors:
+
+- **`Exception continue`**: SQE exception just produces an error CQE; Jetty stays in Ready; SQ continues. **Jetty never enters Suspend in this mode.**
+- **`Exception suspend`**: Jetty enters Suspend on SQE exception; new WRs paused; in-flight SQEs drained; CQEs reported; SQ explicitly cleaned up. App must intervene.
+
+### 5.4 Transaction queues (§8.2.3 p. 246) and queue IDs
+
+Four queues; FIFO discipline ⇒ same queue = ordered transactions; different queues = no ordering relationship.
+
+| Queue | Holds | Per-entry ID |
+|---|---|---|
+| **SQ** (Send Queue) | SQEs (work requests) | each SQ has unique **RCID** (Requester Context ID) |
+| **RQ** (Receive Queue) | RQEs (recv contexts) | each RQ has unique **TCID** (Target Context ID); multiple RQs can be **RQ Group** with a single **TC Group ID** |
+| **CQ** (Complete Queue) | CQEs | — |
+| **EQ** (Event Queue) | event notifications | — |
+
+`RCID` and `TCID` ride in transaction-layer packet headers to identify which Jetty originated / should handle the transaction.
+
+### 5.5 Access security (§8.2.4 p. 246) — credential lookup
+
+Initiator can fetch Target credentials via **three** mechanisms:
+
+1. From the SQE: Target Jetty's **TCID + TokenValue**.
+2. From the SQE: memory segment's **TokenID + TokenValue**.
+3. From **UB Decoder** address-translation result: TokenID + TokenValue.
+
+Permission verification runs per spec §11 Security (CIP, UMMU permission table).
+
+### 5.6 Communication management (§8.2.5 pp. 246–247)
+
+Initiator gets Target's segment / Jetty info via **three** patterns:
+
+1. **Via UBFM** (centralized exchange).
+2. **Via Public Jetty (公知 Jetty)** — well-known Jetty IDs reserved by the spec. **Reservation table 8-1 p. 247:**
+
+| Reserved Jetty ID | Use |
+|---|---|
+| **0** | Exchange transport-layer info |
+| **1** | Exchange transaction-layer info |
+| **2** | **Socket over UB** ← matches the UMS / AF_SMC use case |
+| 3–31 | Reserved |
+| 32–1023 | User-defined |
+
+3. **Via TCP/IP** out-of-band (sendmsg/recvmsg with segment info).
+
+> **Cross-reference for UMS / USOCK:** Public Jetty ID 2 ("Socket over UB") is the spec-level slot UMS rides on — see [`umdk_cam_dlock_usock.md`](umdk_cam_dlock_usock.md) §3 for the AF_SMC-takeover code path.
+
+### 5.7 Memory borrowing and sharing (§8.2.6 pp. 247–249)
+
+Two modes:
+
+- **Memory Borrowing (借用)** — **1:1 exclusive**: borrower has sole access to lender's segment.
+- **Memory Sharing (共享)** — **1:N shared**: lender's one segment serves multiple borrowers.
+
+Two access patterns:
+
+- **Cacheable** — Initiator caches Target memory in local cache; same coherence semantics as local memory.
+- **Non-Cacheable** — bypass cache; avoid coherence overhead. Better for streaming/communication patterns.
+
+**Cacheable shared-memory needs cross-node cache coherence.** UB defines an **Ownership mechanism** with three states (§8.2.6 p. 249, Fig 8-9):
+
+| State | Meaning |
+|---|---|
+| **Invalid** | This node may not R/W this segment |
+| **Write** | This node may R+W |
+| **Read** | This node may R only |
+
+Invariant: at any instant, **at most one node may be in Write** — all others must be Invalid.
+
+State transitions:
+
+- Write → Invalid: **Clean & Invalidate** (write-back dirty + invalidate cache)
+- Write → Read: **Clean** (write-back; keep cache for subsequent reads)
+- Read → Invalid: **Invalidate** (drop cache, no write-back needed)
+- Other transitions: NA
+
+This Ownership mechanism is what **OBMM** (`drivers/ub/obmm/`) implements via `hisi_soc_cache_maintain()` HW primitives — see [`umdk_kernel_internals_and_udma_hotpath.md`](umdk_kernel_internals_and_udma_hotpath.md) §4 + [`umdk_code_followups.md`](umdk_code_followups.md) §Q4. The spec leaves the implementation choice (HW or SW) open.
+
+### 5.8 Deadlock avoidance (§8.2.7 pp. 250–251) — three memory scenarios + message comm
+
+Three memory-access deadlock scenarios:
+
+1. **Memory pool borrowing** — A borrows from B, B borrows from A; if both Writeback simultaneously, mutual TAACK blocking can deadlock.
+2. **Page table access** — when UMMU page table is in borrowed memory, reading it goes through the same physical port as the original memory access; can deadlock.
+3. **Page Fault handling** — Page Fault on remote access can trigger swap traffic on same port.
+
+Mitigations: **request retry**, **virtual-channel separation**, **transaction-type segregation**, or **guarantee page tables stay local + don't depend on UB transactions for completion**.
+
+**Message-communication deadlock** (§8.2.7.3 p. 251): if RQ resources are insufficient, RNR TAACKs queue up; mutual blocking deadlocks. Three mitigations:
+
+- **Transport vs transaction layer separation** — function-layer resource shortage doesn't block transport layer (no large-scale back-pressure).
+- **Resource-state in TAACK + Initiator retry** — Target tells Initiator "no resources, try later".
+- **Timeout mechanism** — message comm allowed to fail; app handles; UB circuit stays unblocked.
+
+### 5.9 Load/Store synchronous access (§8.3 p. 252) — TP Bypass
+
+Processor instructions (Load, Store, Atomic) reach UB Controller via on-chip bus; UB Controller converts to transaction ops. **Cross-layer optimization choices:**
+
+- **Server-internal / rack-internal / small-cluster**: use **TP Bypass mode** — no transport-layer state; relies on data-link retransmit. Optimizes latency + bandwidth.
+- **DC-scale**: use full TP Channel for end-to-end reliability.
+
+UB also supports treating UB transactions as **native instruction-set primitives** for many-to-many message send/recv, event notification, Order info, global sync ops.
+
+Load/Store can use **ROI / ROL** transaction service modes (§7.3.3) when ordering matters.
+
+### 5.10 URMA asynchronous access (§8.4 p. 253) — 7-step programming flow
+
+1. Get EID; create URMA context.
+2. Based on URMA context, create Jetty / JFC / JFCE; build comm relations (incl. **import remote Jetty + memory segment**); bind transaction queue; specify service mode.
+3. Submit transaction request via Jetty interface to SQ.
+4. UB Controller schedules SQ → transaction layer ops; user spec includes operation type (read/write/etc.), Target info (segment/Jetty), ordering requirement, completion-notification flag.
+5. Transaction layer executes per spec §7.4.
+6. Completion → CQ; on exception → event to EQ.
+7. User polls CQ via JFC, or waits for events.
+
+URMA supports **ROI / ROT / ROL / UNO** modes; not every request supports all four — see §7.4 per type.
+
+### 5.11 URPC (§8.5 pp. 254–256) — 3 roles, 3 message types, 3 param-passing modes
+
+**Roles** (Fig. 8-12 p. 254):
+
+| Role | Function |
+|---|---|
+| **Client** | URPC originator; calls remote function |
+| **Server** | URPC receiver/dispatcher; routes call to a Worker |
+| **Worker** | URPC executor; runs function and returns result via Server |
+
+(Plus Caller = user code on Client side; Callee = function impl, may be merged into Worker.)
+
+**Message types**:
+
+- **URPC Request** — Client → Server: function ID + params.
+- **URPC Ack** — Server → Client: param-transfer complete; Client may release param memory.
+- **URPC Response** — Server → Client: function result.
+- (URPC Ack + Response can be **combined** into one message — Server's choice.)
+
+**Peer-to-peer architecture** (Fig 8-13 p. 255): every UBPU may host Client + Server + Worker. Typical use: NPU Client → SSU Server/Worker for direct remote storage write — AI training/inference data NPU → SSU directly.
+
+**Three parameter-passing modes** (§8.5.3 pp. 256–257):
+
+| Mode | Mechanism | Param size | Param-transfer RTT | Use case |
+|---|---|---|---|---|
+| **Value-pass (inline)** | Params + URPC header in one URPC Request | ≤ 40 KB | **0.5 RTT** | Small params, ample memory (e.g. storage scenarios <40 KB) |
+| **Value-pass (out-of-line)** | Param data **address** in Request; Server fetches param via Read/Load | ≥ 40 KB | **1.5 RTT** | Large params, scarce memory; Client may release after Server fetches |
+| **Reference-pass** | Param **address** in Request; **Server passes address to Worker; Worker fetches via Read/Load** | unbounded | **1.5 RTT** | AI training/inference where Worker controls fetch timing — **overlaps data transfer with NPU compute** |
+
+The **reference-pass** mode is the architectural enabler for compute-overlap-with-comm patterns — Worker schedules its data fetch concurrent with prior compute. Client memory stays valid until Worker explicitly fetches.
+
+### 5.12 Multi-Entity coordination (§8.6 p. 257) — three scenarios
+
+1. **Fusion ops** — combine multiple discrete transactions into one fused op. Examples: multi-UBPU broadcast, multicast, task-balancing, task-scheduling, data-sync-fusion.
+2. **Collective communication** — classic parallel-compute pattern. One collective call → decomposed into multiple UB transactions across UBPUs; minimizes data movement, increases sync efficiency.
+3. **Global maintenance ops** — cross-UBPU memory consistency, UMMU change sync, comm state mgmt.
+
+UB defines a **modular framework** for adding new coordination patterns — extensible across scenario-specific designs.
+
+### 5.13 Entity management (§8.7 p. 258)
+
+UBPU is the **user** of Entity resources. It must perform local Entity discovery, pooled Entity registration, config mgmt, interrupt + msg notification, comm + remote-memory register control, virtualization. **Detailed mechanics in §10 Resource Management** (already covered in §3 of this doc).
+
+---
+
+## 6. Appendix H — URPC message format (pp. 512–518)
+
+Bit-level frame format. This is the source of truth for the URPC wire protocol; the userspace `protocol.h` description in [`umdk_urpc_and_tools.md`](umdk_urpc_and_tools.md) §1.3 cross-validates against it.
+
+### 6.1 URPC Function ID — 48-bit composite (§H.2 p. 512, Fig. H-1)
+
+```
+[ UBPU Class : 12 ][ UBPU Subclass : 12 ][ P : 1 ][ Method : 23 ]   (48 bits total)
+```
+
+| Field | Bits | Meaning |
+|---|---|---|
+| **UBPU Class** | 12 | UBPU type |
+| **UBPU Subclass** | 12 | UBPU sub-type |
+| **P** (Private) | 1 | 0 = public method (fixed); 1 = customized method (deployable) |
+| **Method** | 23 | URPC method ID |
+
+**Public methods** are uniformly defined per UBPU class+subclass (function, interface, params). **Customized methods** are user-defined per role; URPC protocol doesn't constrain them. Client can dynamically deploy or remove them on Server/Worker.
+
+**Reserved P+Method patterns** (§H.2 p. 512–513):
+
+- `0b 0000_0000_0000_0000_0000_0000` — query the public methods this UBPU supports.
+- `0b 1000_0000_0000_0000_0000_0000` — query the customized methods this UBPU supports.
+- `0b 1000_0000_0000_0000_0000_0001` — deploy a new customized method.
+- `0b 1000_0000_0000_0000_0000_0010` — remove a deployed customized method.
+- `0b 1000_0000_0000_0000_0000_0011` — query a method by name.
+
+Storage-domain example (Table H-2 p. 513): UBPU Class = `0x002`, Subclass = `0x001`, P = 0, Method = (varies).
+
+### 6.2 URPC Message types (§H.3.1 p. 513)
+
+4-bit `Type` field at the head of every URPC message:
+
+| Type | Meaning |
+|---|---|
+| 0 | URPC Request |
+| 1 | URPC Ack |
+| 2 | URPC Response |
+| 3 | URPC Ack + URPC Response combined (format = URPC Response) |
+
+### 6.3 URPC Request layout (§H.3.2 pp. 513–514, Fig. H-2 + Table H-4)
+
+**Head (32 bytes base):**
+
+| Field | Bits | Meaning |
+|---|---|---|
+| Version | 4 | URPC version (current = 1) |
+| Type | 4 | = 0 here |
+| Ack | 1 | 1 = include Ack; 0 = omit (Server decides whether to combine Ack+Response) |
+| RSVD | 1 | reserved |
+| **Argument DMA Count** | 6 | # of Argument DMAs Server must execute; 0 ⇒ Argument DMA Table is absent |
+| **Function** | 48 | the URPC Function ID (per §H.2 layout above) |
+| **Request Total Size** | 32 | URPC Request size in bytes (head + all params, **excluding** Argument DMA Table) |
+| **Request ID** | 32 | unique URPC call identifier; matches Request ↔ Ack/Response |
+| **Client's URPC Channel** | 24 | URPC Channel on Client (sender of Request, receiver of Ack/Response) |
+| **Function Defined** | 8 | URPC extension-header type indicator |
+
+**Function Defined values** (referenced in §H.3.2 Table H-4 + §I.1):
+
+| Value | Meaning |
+|---|---|
+| 0 | No EXT Head |
+| 1 | Universal compute extension |
+| 2 | **Storage PLOG extension** (see Appendix I.1) |
+| Others | Reserved |
+
+**Per-argument DMA descriptor** (when Argument DMA Count > 0):
+
+```
+[ Argument DMA Size : 32 ][ Argument DMA UB Address : 64 ][ Argument DMA UB Token : 32 ]
+```
+
+**Inline data** (when no DMA needed):
+
+```
+[ EXT Head : variable ][ User Data : variable ]
+```
+
+### 6.4 URPC Ack layout (§H.3.3 p. 515, Fig H-3 + Table H-5)
+
+| Field | Bits | Meaning |
+|---|---|---|
+| Version | 4 | =1 |
+| Type | 4 | 1 (independent Ack) or 3 (Ack + Response combined) |
+| RSVD | 8 | reserved |
+| **Request ID Range** | 16 | covers consecutive Request IDs in collective Ack/Response (default 1) |
+| Request ID | 32 | unique URPC call ID |
+| Client's URPC Channel | 24 | |
+| RSVD | 8 | |
+
+**Collective-transmission conditions** (§H.3.3 p. 515): only if all Request IDs are **consecutive**, on the **same URPC Channel**, with the **same Status** (only one Status field in the combined message). Default Range = 1 (just current Request ID).
+
+### 6.5 URPC Response layout (§H.3.4 pp. 515–517, Fig H-4 + Table H-6)
+
+| Field | Bits | Meaning |
+|---|---|---|
+| Version | 4 | =1 |
+| Type | 4 | 2 (independent Response) or 3 (Ack + Response combined) |
+| **Status** | 8 | see Status code table below |
+| Request ID Range | 16 | as in Ack |
+| Request ID | 32 | |
+| Client's URPC Channel | 24 | |
+| Function Defined | 8 | extension-header type, same enum as Request |
+| **Response Total Size** | 32 | head + Return Data; **excluding** Return Data Offset array |
+| Return Data Offset | 32 × (Range-1) | per-Request-ID offsets into Return Data when collective Response carries multiple results |
+| EXT Head | variable | optional |
+| User Data / Return Data | variable | |
+
+**Status code (§H.3.4 Table H-6 p. 516):**
+
+| Status | Meaning |
+|---|---|
+| 0 | Worker URPC complete (success) |
+| 1 | Server rejects execution |
+| 2 | Function not supported |
+| 3 | Server's Argument Buffer insufficient |
+| 4 | URPC call timeout |
+| 5 | Version mismatch |
+| 6 | URPC protocol header error |
+| Others | Reserved |
+
+**Cross-validation note:** the field semantics here match `umdk/src/urpc/framework/protocol/protocol.h` (per [`umdk_urpc_and_tools.md`](umdk_urpc_and_tools.md) §1.3 agent survey). The spec is the authoritative wire definition; the userspace impl is its concrete realization.
+
+### 6.6 Storage PLOG application example (§I.1 p. 518)
+
+`PLOG` = distributed storage persistence protocol (an example URPC application). Two scenarios (Fig I-1):
+
+- **CPU → CPU → SSD**: CPU originates URPC, target CPU forwards to local SSD.
+- **CPU → SSU**: CPU originates URPC directly to a UB-native storage device (SSU = Storage Sub-Unit UBPU).
+
+Activated by **`Function Defined = 2`** in the URPC header → enables `URPC PLOG EXT Message` extension header. Uses **reference-pass** parameter mode so SSU's compute fabric can pull data when ready.
+
+---
+
+## 7. Implementation finding — UVS naming & TPSA legacy (verified 2026-04-25)
+
+The umdk codebase uses **"UVS" as a label without expanding it**. Sweep of `~/Documents/Repo/ub-stack/umdk/src/urma/lib/uvs/`:
+
+- All source-file headers carry `Description: uvs api / uvs cmd tlv parse / uvs ubagg ioctl / uvs private api` — UVS treated as a known label, never expanded.
+- The `CMakeLists.txt` has only SPDX + Huawei copyright; no description.
+- No file in `lib/uvs/` mentions "Unified Vector Service" or "User-space Virtual Switch" or any other UVS expansion.
+- `umdk/RELEASE-NOTES.md`, `README.md`, `umdk/doc/**/*.md` — no UVS expansion either.
+- The UB Base Spec 2.0 (Chinese full + English preview) does not contain UVS as a defined term.
+
+**TPSA legacy** still visible in filenames + header histories:
+
+- Newer files (2024–2025): `uvs_*` prefix — `uvs_api.h`, `uvs_types.h`, `uvs_private_api.{c,h}`, `uvs_cmd_tlv.{c,h}`, `uvs_ubagg_ioctl.{c,h}`.
+- Older files (2022–2023): `tpsa_*` prefix — `tpsa_ioctl.{c,h}`, `tpsa_log.{c,h}`, `tpsa_api.c`. Plus a `config/tpsa/tpsa.conf` config file.
+- `tpsa_ioctl.h` line 9 (Author: JiLei, 2023-07-03) documents the historical port: "port ioctl functions from tpsa_connect and daemon here". This **directly confirms** that TPSA was a separate **daemon process** ("tpsa_connect and daemon") whose ioctl API was migrated into the present UVS library — matching the "transport_service/daemon/* deletion" observation from earlier in the doc set.
+
+**Plausible expansion of TPSA**: "Transport Path Service Agent" (educated guess based on filename + role). Not asserted in source.
+
+**Recommendation across the doc set:** describe UVS as **"the userspace control library that ported TPSA's daemon ioctls into a caller-driven design (no canonical expansion in repo or spec)"**. The earlier guesses ("Unified Vector Service" / "User-space Virtual Switch") have **no basis in the source** — drop them.
+
+This finding closes [`umdk_refinement_todos.md`](umdk_refinement_todos.md) §1.4.
+
+---
+
+## 8. Cross-corrections to earlier docs
 
 These spec readings refine or correct several earlier docs:
 
@@ -503,20 +888,20 @@ The 2023 essay's "(Entity ID, UASID, offset)" vs current spec's UBMD `(EID, Toke
 
 ---
 
-## 6. Open questions remaining after this read
+## 9. Open questions remaining after this read
 
 1. **§5 Network Layer** — not read in this round. NPI definition + check rules at §5.3.3.1 referenced from §11.3.2.
 2. **§6.5 Multipath load balancing** + **§6.6 Congestion control** — not read; these explain C-AQM (referenced in Bojie Li 2023 talk).
-3. **§8 Function Layer** (URMA + URPC + Multi-Entity Coordination + Entity Management) — not read; would clarify the API surface from spec side.
+3. ~~§8 Function Layer~~ — **DONE 2026-04-25**, see §5 above.
 4. **§9 Memory Management** in detail — UMMU functions (§9.4) and UB Decoder (§9.5).
 5. **§10.5 Virtualization** + **§10.6 RAS** — not read.
 6. **Appendix B Packet Formats** + **Appendix D Configuration Space Registers** — bit-level layout reference; useful for HW-side dives but a lot of pages.
 7. **Appendix G Hot-Plug** — needed for the hot-remove atomicity question in earlier docs.
-8. **Appendix H URPC Message Format** — would deepen the URPC doc.
+8. ~~Appendix H URPC Message Format~~ — **DONE 2026-04-25**, see §6 above.
 
 ---
 
-## 7. What changed in our understanding
+## 10. What changed in our understanding
 
 | Area | Before | After this read |
 |---|---|---|

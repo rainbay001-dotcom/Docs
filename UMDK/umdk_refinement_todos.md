@@ -38,12 +38,8 @@ These can be knocked out in an hour or two and would tighten the doc set signifi
 - **Action:** `grep` for any comment block in `drivers/ub/urma/hw/udma/udma_dfx.{c,h}` that expands DFX; check Huawei/HiSilicon kernel driver conventions in adjacent drivers.
 - **Success:** one definitive expansion cited from a comment, or a clear "spec/code never expands it; we adopt X" decision.
 
-### 1.4 Sweep doc-set for "UVS" expansion consistency
-- **Source:** Three different expansions appear: "Unified Vector Service" (in the spec doc), "User-space Virtual Switch" (agent guess), and "uvs_admin / TPSA replacement" (architecture doc). Spec doc §11 #1 is now marked partial-resolution; the comparison doc and arch doc need to match.
-- **Target:** all docs that mention UVS.
-- **Effort:** S.
-- **Action:** Pick the canonical phrasing — recommend **"UVS (control library; canonical expansion not asserted in repo headers)"** until confirmation lands. Sweep each doc.
-- **Success:** every UVS mention uses identical framing; no doc claims a confirmed expansion.
+### 1.4 ~~Sweep doc-set for "UVS" expansion consistency~~ — **RESOLVED 2026-04-25**
+- See `umdk_spec_deep_dive.md` §7 — definitive finding: UVS canonical expansion is **not asserted anywhere** in the umdk repo or the UB Base Spec. TPSA legacy still visible in filenames; `tpsa_ioctl.h:9` documents the historical TPSA daemon → UVS library port. Recommendation embedded in spec_deep_dive §7. Doc-set sweep still pending as a quick win.
 
 ### 1.5 Sanity-check the `udma_u_ops.c:300-312` citation for `g_udma_provider_ops`
 - **Source:** `umdk_code_followups.md` Q7.
@@ -65,12 +61,8 @@ These can be knocked out in an hour or two and would tighten the doc set signifi
 
 The 28 MB Chinese spec is 518 pp; we've read the ToC + §6 / §7 / §10 / §11 / preview. Other chapters that would close real gaps:
 
-### 2.1 §8 Function Layer — URMA / URPC / Multi-Entity coordination / Entity management (pp. 240–258)
-- **Why:** Spec-side API surface for URMA. Would let us validate / correct the IB-verbs↔URMA terminology table from the spec's own definitions of jetty / JFS/JFR/JFC / segment / token semantics.
-- **Source:** `umdk_spec_deep_dive.md` §6 #3 (deferred); `umdk_spec_survey.md` §11 #1 (partial).
-- **Target:** new section in `umdk_spec_deep_dive.md` (§8 added), updates to `umdk_spec_survey.md` §5 (URMA), §6 (URPC), §7 (UMDK component definitions).
-- **Effort:** L (≈18 pages to read).
-- **Success:** definitive spec-side definition of every URMA primitive; cite-able rule for which verbs are mandatory vs optional; URPC vs Multi-Entity-coordination vs Entity-management distinguished.
+### 2.1 ~~§8 Function Layer~~ — **RESOLVED 2026-04-25**
+- §8 (URMA + URPC + Multi-Entity coord + Entity mgmt, pp. 240–258) read in full and integrated as `umdk_spec_deep_dive.md` §5. Major findings: 4-state Jetty machine, three Jetty types (Standard / JFS-or-JFR / Group), three Jetty-Group target-selection policies, Public Jetty 2 = "Socket over UB", Ownership mechanism for shared-mem coherence (Invalid/Write/Read), three URPC param-passing modes (inline/out-of-line/reference-pass) with RTT cutoffs at 40 KB.
 
 ### 2.2 §9 Memory Management — UMMU functions + UB Decoder (pp. 259–287)
 - **Why:** UMMU is the IOMMU that everything ends up using; the spec's normative behavior for permission check, page-table walk, and Decoder address-translation would deepen the kernel-internals doc and the comparison-doc UMMU row.
@@ -100,12 +92,8 @@ The 28 MB Chinese spec is 518 pp; we've read the ToC + §6 / §7 / §10 / §11 /
 - **Effort:** M (≈10 pages).
 - **Success:** spec-side virtualization model (passthrough vs mediated) clarified; RAS layer/event taxonomy cited.
 
-### 2.6 Appendix H URPC Message Format (pp. 512–517)
-- **Why:** Definitive bit-level URPC frame layout. Our `umdk_urpc_and_tools.md` Wire-format section §1.3 is from agent reading of `protocol.h` only — the spec is the source of truth.
-- **Source:** `umdk_spec_deep_dive.md` §6 #8.
-- **Target:** updates to `umdk_urpc_and_tools.md` §1.3.
-- **Effort:** S (6 pages).
-- **Success:** every header field in the URPC doc cross-checked against spec App. H; mismatches called out and reconciled.
+### 2.6 ~~Appendix H URPC Message Format~~ — **RESOLVED 2026-04-25**
+- App. H (pp. 512–517) read and integrated as `umdk_spec_deep_dive.md` §6. URPC Function ID = 48-bit `[UBPU Class:12 | UBPU Subclass:12 | P:1 | Method:23]`. Type field 4 bits with combined Ack+Response = 3. Argument-DMA descriptor `[size:32 | UB Addr:64 | Token:32]`. Status codes 0-6 (success / reject / unsupported / buf insufficient / timeout / version mismatch / hdr error). PLOG = `Function Defined = 2` extension header. URPC doc §1.3 cross-validated.
 
 ### 2.7 Appendix G Device Hot-Plug (pp. 508–511)
 - **Why:** Open question in arch doc §6 #5: hot-remove atomicity. Spec defines the protocol-level hot-plug contract.
@@ -359,7 +347,12 @@ If you've got a full day:
 
 When an entry is fully resolved, move it here with date + one-line summary. Keeps a permanent record without bloating the active list.
 
-_(empty as of doc creation 2026-04-25)_
+- **2026-04-25** §1.4 UVS canonical-expansion sweep — resolved: no expansion in repo or spec; documented in spec_deep_dive §7.
+- **2026-04-25** §2.1 Spec §8 Function Layer — read + integrated to spec_deep_dive §5.
+- **2026-04-25** §2.6 Spec Appendix H URPC Message Format — read + integrated to spec_deep_dive §6.
+- **2026-04-25** UMS userspace tools (ums-preload.so / ums_run / ums_admin) — agent surveyed + integrated to cam_dlock_usock §3.5.1; this fills a gap not previously listed but flagged in the audit.
+- **2026-04-25** UNIC depth dive — agent surveyed + integrated to kernel_internals §8 (file map, init, TX/RX paths, NAPI, RSS, ethtool ops, MAC table, vs ipourma).
+- **2026-04-25** CDMA depth dive — agent surveyed + integrated to kernel_internals §8 (char dev /dev/cdma, ioctl set, mmap types, WQE format, doorbell offset).
 
 ---
 

@@ -238,6 +238,52 @@ send(s, buf, len, 0);
 
 The kernel transparently picks UMS for eligible connections (peer supports it, fabric is UB-capable). For UMS-specific tuning, the module borrows the SMC-R sock-level constant `SOL_SMC = 286`.
 
+### 3.5.1 Userspace tools — three components (verified 2026-04-25)
+
+UMS isn't only a kernel module. The userspace side has three tools at `umdk/src/usock/ums/tools/`:
+
+| Tool | Role | How |
+|---|---|---|
+| **`ums-preload.so`** | LD_PRELOAD library that **transparently rewrites `socket(AF_INET/AF_INET6, SOCK_STREAM, IPPROTO_TCP)` to `socket(AF_SMC, ...)`** | Intercepts `socket()` at `ums-preload.c:77`; loads libc via `dlopen(LIBC_SO)` at line 117. Domain remapped to `AF_SMC` (`0x2b`); protocol to `SMCPROTO_SMC` or `SMCPROTO_SMC6`. `UMS_DEBUG` env var toggles trace logs (`ums-preload.c:115`). |
+| **`ums_run`** | Bash wrapper that sets `LD_PRELOAD` for the target command | `ums_run [-d] <cmd>` (getopts at `ums_run:19`). Sets `LD_PRELOAD` (`ums_run:45`), execs target. The `-d` flag is parsed but stripped before exec — currently a placeholder. |
+| **`ums_admin`** | DFX/diagnostics CLI over netlink generic family `UMS_GENL_DFX_NAME` | Subcommand `show` (`ums_admin.c:332`); two-arg parser at `ums_admin.c:302`. Issues `UMS_NETLINK_GET_LGR_STATUS` / `_LINK_STATUS` / `_CONN_STATUS` (`ums_admin.c:106-109`). Reports link-group ID, role, connection counts, send/RMB buffer utilization. |
+
+**Architectural picture (revised):**
+
+```
+                     unmodified TCP app
+                            │
+                ┌───────────┴────────────┐
+                │  socket(AF_INET, ...)  │
+                └───────────┬────────────┘
+                            │
+   ums_run sets LD_PRELOAD ─┤
+                            ▼
+                  ums-preload.so intercepts:
+                   redirect → socket(AF_SMC,...)
+                            │
+                            ▼ (libc → kernel)
+                  AF_SMC family — claimed by UMS kmod
+                            │
+                            ▼
+                          UMS kmod (kmod/ums/)
+                  (sock_unregister(AF_SMC) +
+                   re-register; CLC/CDC; URMA backend)
+                            │
+                            ▼
+                   ubcore → udma → wire
+```
+
+Without `ums-preload.so`, you must either explicitly call `socket(AF_SMC, ...)` (apps that already speak SMC-R will Just Work over UMS) or accept that only `AF_SMC`-aware code gets accelerated. With **`ums_run + ums-preload.so`**, truly unmodified TCP apps get the URMA fast path.
+
+`ums_admin show` is the single supported subcommand — link-group state + per-link buffer utilization. No netlink-attribute browser; no per-connection trace.
+
+**Spec-level cross-reference**: UMS rides on **Public Jetty 2 = "Socket over UB"** (UB Base Spec §8.2.5 Table 8-1; see [`umdk_spec_deep_dive.md`](umdk_spec_deep_dive.md) §5.6). This is the spec-defined slot reserved for socket-over-UB protocols.
+
+### 3.5.2 dlock tools — empty
+
+`umdk/src/ulock/dlock/tools/` contains a 2-line `CMakeLists.txt` (MIT license header) and **no binaries**. dlock has examples but no admin/inspect tooling.
+
 ### 3.6 Test harness
 
 `umdk/test/usock/ums/README.md`:

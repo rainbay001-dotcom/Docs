@@ -388,28 +388,86 @@ Most likely rationale: per-UE (user engine — ~47 per chip) instances have smal
 
 ### UNIC
 
-**Path:** `drivers/net/ub/unic/`. ~35 files (`unic_tx.c`, `unic_rx.c`, `unic_netdev.c`, `unic_hw.c`, etc.).
+**Path:** `drivers/net/ub/unic/`. **55 files** (corrected from earlier "~35"). Five biggest: `unic_tx.c` (34 KB), `unic_rx.c` (34 KB), `unic_hw.c` (29 KB), `unic_dev.c` (27 KB), `unic_netdev.c` (23 KB).
 
-**Role.** UB-native NIC. Exposes a `struct net_device` to the Linux network stack. Multi-queue (RSS), checksum offload, TSO/LSO, VLAN, QoS per virtual lane, MAC filtering, multicast.
+**File organization:**
+
+- Core: `unic_main.c`, `unic_dev.c`, `unic_netdev.c`
+- Data path: `unic_tx.c`, `unic_rx.c`, `unic_txrx.c`
+- HW control: `unic_hw.c`, `unic_channel.c`, `unic_cmd.c`
+- Filtering / mgmt: `unic_mac.c`, `unic_vlan.c`, `unic_ip.c`, `unic_bond.c`, `unic_qos_hw.c`
+- Misc: `unic_ethtool.c`, `unic_stats.c`, `unic_guid.c`, `unic_dcbnl.h`, `unic_reset.c`, `unic_lb.c`, `unic_crq.c`, `unic_event.c`, `unic_comm_addr.c`
+- 8 files in `debugfs/` subdir
+- Headers: `unic.h`, `unic_trace.h`
+
+**Role.** UB-native NIC. Exposes a `struct net_device` to the Linux network stack. Multi-queue (RSS), checksum offload, TSO/LSO via UBL, VLAN offload, QoS per virtual lane (Traffic Class mapping), MAC filtering, multicast, GRO, bonding (`unic_bond.c`).
+
+**Module init.** `unic_init()` at `unic_main.c:78` creates a workqueue, registers netdev + IP-addr notifiers, registers an auxiliary driver. Per-device probe `unic_probe()` at `unic_main.c:17` calls `unic_dev_init()`, then `unic_dbg_init()` for debugfs.
+
+**Netdev ops** at `unic_netdev.c:696-709`:
+
+| ndo | Function |
+|---|---|
+| `.ndo_open` | `unic_net_open` |
+| `.ndo_stop` | `unic_net_stop` |
+| `.ndo_start_xmit` | `unic_start_xmit` (`unic_tx.c:1222`) |
+| `.ndo_select_queue` | `unic_select_queue` (RSS) |
+| `.ndo_set_rx_mode` | `unic_set_rx_mode` (multicast filtering) |
+| `.ndo_set_mac_address` | `unic_set_mac_address` |
+
+**TX path.** `unic_start_xmit()` at `unic_tx.c:1222` selects an SQ from the channel via `skb->queue_mapping`; pads short packets to 60 bytes if UBL not supported; checks `unic_maybe_stop_tx()` for ring availability; constructs a 64-byte SQE WQE with up to 18 SGEs; stores skb in `sq->skbs[]`; rings doorbell. TX completion polled by `unic_poll_tx()` → `unic_reclaim_sq_space()` (`unic_tx.c:200-243`).
+
+**RX path.** Per-channel NAPI; poll function `unic_poll_rx()` at `unic_rx.c:1129-1180`. Reads JFC CQE at `cq->cqe[cq->ci & cq_mask]` (`:1157`), checks owner bit. Constructs skb via `unic_rx_construct_skb()` at `unic_rx.c:1048-1080` — `napi_alloc_skb(napi, UNIC_RX_HEAD_SIZE=256)`; adds page-frag fragments; `napi_gro_receive()` at `:1126`. Packet-type table `unic_rx_ptype_tbl[]` at `unic_rx.c:32-200` maps HW packet-type ID to `skb->ip_summed`, hash type, L3 type — entry 19 (IPv4 TCP) gives `CHECKSUM_UNNECESSARY` + `PKT_HASH_TYPE_L4`.
+
+**Multi-queue (RSS).** Queue count from `unic_dev->channels.num` and `rss_size`; set via `netif_set_real_num_tx_queues()` / `_rx_queues()` (`unic_netdev.c:92-99`). Default `UNIC_DEFAULT_CHANNEL_NUM` (`unic_dev.c:49`). Max channels = `min(jfs.max_cnt, jfr.max_cnt, jfc.max_cnt >> 1)` (`unic_dev.c:65`). Per-VL queue arrays (`unic_dev.c:84-91`) for QoS. Traffic Class mapping via `unic_netdev_set_tcs()` at `unic_netdev.c:37-77` — VL → TC mapping with `netdev_set_prio_tc_map()`.
+
+**Offload features.** `unic_ethtool_ops` at `unic_ethtool.c:662-690`:
+
+- `.get_ringparam / .set_ringparam` → `unic_get/set_channels_param()` (`:679-680`)
+- `.get_link_ksettings` (`unic_ethtool.c:68-80`)
+- `.self_test`, `.set_phys_id` referenced in ops table
+
+Hardware does IPv4/TCP/UDP RX checksum verification (per packet-type table). TX checksum enable in SQE control. **TSO/LSO**: UBL (UB Layer) optimization via `CONFIG_UB_UNIC_UBL` (`unic_tx.c:1254`). VLAN: `.ndo_vlan_rx_add_vid / _kill_vid` plus SQE-level VLAN tag insertion. **GRO** via `napi_gro_receive`.
+
+**MAC table mgmt.** `unic_add_del_mac_tbl()` at `unic_mac.c:20-62` uses HW commands `UBASE_OPC_ADD_MAC_TBL` / `UBASE_OPC_DEL_MAC_TBL` (`unic_mac.c:41, 79`). Overflow → macvlan mode (`unic_mac.c:25-26`).
 
 **Difference vs UDMA.** UNIC is a kernel-internal NIC — TX/RX rings are not exposed to userspace. Standard QDisc → netdev TX → UB-native frames. UNIC does **not** ride on URMA; it has its own kernel uAPI.
 
+**Difference vs ipourma.** UNIC is an L2 offload engine — packets bypass kernel TCP processing; HW carries raw frames over UB. ipourma is an L3+ ULP gateway — packets traverse the full kernel stack first, then ipourma tunnels IP flows over URMA jetties. UNIC is the "fast path NIC"; ipourma is the "transparent gateway for legacy IP code". Both can coexist on the same UB hardware.
+
 ### CDMA
 
-**Path:** `drivers/ub/cdma/`. ~48 files (`cdma_jfs.c`, `cdma_api.c`, `cdma_ioctl.c`, `cdma_event.c`, `cdma_dev.h`).
+**Path:** `drivers/ub/cdma/`. **46 files** (corrected from earlier "~48"). Five biggest: `cdma_jfs.c` (26 KB), `cdma_api.c` (25 KB), `cdma_debugfs.c` (21 KB), `cdma_ioctl.c` (20 KB), `cdma_jfc.c` (17 KB).
 
-**Role.** A simpler DMA engine. Bulk CPU↔memory or device↔memory transfers, NOT peer-to-peer. No remote EID. Simpler trust model — appropriate for VM DMA.
+**Role.** Simpler DMA engine. Bulk CPU↔memory or device↔memory transfers; the `token_id` field is present in SQE control but largely unused at present (`cdma_jfs.h:65`). Simpler trust model — appropriate for VM DMA. CDMA defines "DMA QP" = JFS (send queue) + JFC (completion queue) + CTP (transport path).
 
-**uAPI.** Char dev `/dev/cdma`, ioctls (`cdma_ioctl.c`), userspace lib wraps into `dma_*` functions:
+**Char device.** `/dev/cdma` (`cdma_chardev.c:19` `CDMA_DEVICE_NAME`); class `cdma_cdev_class` at `cdma_main.c:32`. Ioctl entry `cdma_ioctl()` at `cdma_chardev.c:63`. **Single ioctl command** `CDMA_SYNC` defined at `uapi/ub/cdma/cdma_abi.h:11` as `_IOWR(CDMA_IOC_MAGIC='C', 0, struct cdma_ioctl_hdr)`. Header carries `(command, args_len, args_addr)`; dispatcher `cdma_cmd_parse()` at `cdma_chardev.c:84`.
 
-```c
-struct dma_device *dma_get_device_list(u32 *num_devices);
-struct dma_ctx *dma_create_context(struct dma_device *, ...);
-struct dma_qp *dma_create_qp(struct dma_ctx *, ...);
-int dma_post_send(struct dma_qp *, struct dma_send_wr *, ...);
+**Mmap.** `cdma_remap_vma_pages()` (`cdma_chardev.c`) maps the JFS doorbell page; `vm_pgoff` encodes mmap-type. Two mmap types per `uapi/cdma_abi.h:63-66`: `CDMA_MMAP_JFC_PAGE`, `CDMA_MMAP_JETTY_DSQE`.
+
+**Command enum** (per `uapi/ub/cdma/cdma_abi.h:68-84`):
+
+```
+CDMA_CMD_QUERY_DEV_INFO       — device capabilities
+CDMA_CMD_CREATE_CTX           — user context init
+CDMA_CMD_DELETE_CTX
+CDMA_CMD_CREATE_CTP           — create transport path
+CDMA_CMD_DELETE_CTP
+CDMA_CMD_CREATE_JFS / DELETE_JFS
+CDMA_CMD_REGISTER_SEG / UNREGISTER_SEG
+CDMA_CMD_CREATE_QUEUE / DELETE_QUEUE   — wraps JFS + JFC + CTP
+CDMA_CMD_CREATE_JFC / DELETE_JFC
+CDMA_CMD_CREATE_JFCE                   — async event queue
+CDMA_CMD_MAX
 ```
 
-**Niche.** CDMA complements UDMA. UDMA does RDMA-like remote ops; CDMA does local high-throughput memory-to-memory. Concurrent operation possible.
+**Hot path.** Userspace writes a 64-byte WQE (`cdma_jfs_wqebb` at `cdma_jfs.h:33-35`, four 16-dword arrays) directly to the JFS ring. WQE control `cdma_sqe_ctl` at `cdma_jfs.h:43-70`: DW0 = SQE index + fence + inline + owner; DW1 = opcode (send/write/atomic) + inline length; DW2 = TPN (transport path number) + SGE count; DW4-7 = remote EID (optional); DW8 = remote token. Doorbell offset `CDMA_DOORBELL_OFFSET = 0x80` (`cdma_abi.h:24`); CI mask `GENMASK(21, 0)` lower 22 bits (`cdma_abi.h:26`).
+
+**Status codes** at `cdma_abi.h:43-61` (`enum dma_cr_status`): SUCCESS, unsupported opcode, access error, timeout, etc.
+
+**Userspace `dma_*` API at `cdma_api.c`:** exports `dma_get_device_list()` at line 33 returning `dma_device` array; opaque `private_data`. **No dedicated libcdma found in umdk** — CDMA is wrapped via direct ioctl + mmap from a higher-level lib, likely integrated into URMA userspace (`urma/lib/urma/`).
+
+**Niche.** CDMA complements UDMA. UDMA does RDMA-like remote ops with full QP state machine, atomics, bonding, transport-path migration. CDMA is the minimal local DMA engine for CPU↔mem transfers (e.g. PCIe-attached accelerators, GPU memory, intra-node DMA where overhead must be minimal). Concurrent operation possible.
 
 ---
 

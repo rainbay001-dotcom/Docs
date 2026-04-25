@@ -104,6 +104,10 @@ The device + subclass prefix is set once at library init. Private methods are us
 
 ### 1.3 Wire format
 
+**Cross-validated against UB Base Spec Appendix H** (see [`umdk_spec_deep_dive.md`](umdk_spec_deep_dive.md) §6 for the spec-side bit layouts). The userspace `protocol.h` description below matches the spec-defined frame format; field semantics are authoritative via the spec.
+
+**Function ID is 48-bit** (per spec §H.2): `[ UBPU Class : 12 | UBPU Subclass : 12 | P : 1 | Method : 23 ]`. Reserved P+Method patterns query/install/remove customized methods. Storage domain example: UBPU Class `0x002`, Subclass `0x001`, P=0.
+
 **Request header** (per agent — `framework/protocol/protocol.h:69–105`). 32-byte base + variable DMA-descriptor table:
 
 ```
