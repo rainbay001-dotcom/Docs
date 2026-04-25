@@ -584,7 +584,123 @@ app → liburma → WQE into ring → wmb → doorbell MMIO
 
 ---
 
-## 6. Open questions / code-reading TODOs
+## 6. User-kernel boundary at a glance
+
+Consolidated view of every interface that crosses the user↔kernel boundary in URMA-land, pulling together material from §2 (kernel) + §3 (userspace) + §4 (workflows). For the **per-ioctl argument-struct catalogue** (which struct each of the ~101 sub-commands carries), see [`umdk_user_kernel_boundary.md`](umdk_user_kernel_boundary.md).
+
+### 6.1 The boundary, drawn
+
+```
+USERSPACE
+┌──────────────────────────────────────────────────────────────────────┐
+│  app                                                                  │
+│   ▼                                                                   │
+│  liburma   ──┬── /usr/lib64/urma/libudma_udma.so   (provider plugin)  │
+│              │   ctor: urma_register_provider_ops(&g_udma_provider_ops)│
+│              │                                                        │
+│   ├── post-send fast path (no syscall):                               │
+│   │   write WQE → mmap'd JFS ring; wmb(); MMIO doorbell store         │
+│   │                                                                   │
+│   ├── ioctl(/dev/ub_uburma_<n>)  magic 'U' cmd 1                      │
+│   │     uburma_cmd_hdr { command, args_len, args_addr }               │
+│   │     → ~101 UBURMA_CMD_* sub-commands                              │
+│   │                                                                   │
+│   ├── netlink genl (ubcore_genl_admin) — stats, EID, res queries      │
+│   └── sysfs — config space, resource mmap, driver_override, …         │
+│                                                                       │
+│  liburma → libuvs (control library)                                   │
+│            └── ioctl(/dev/ubcore)  magic 'V' cmd 1 (TPSA_CMD)         │
+│            └── ioctl(/dev/ubagg)   magic UVS_UBAGG_CMD_MAGIC cmd 1    │
+└──────────────────────────────────────────────────────────────────────┘
+                                  ▲ ▼
+─────────────────────── kernel/user boundary ─────────────────────────
+                                  ▲ ▼
+KERNEL
+┌──────────────────────────────────────────────────────────────────────┐
+│  uburma char dev   (drivers/ub/urma/uburma)                           │
+│    ioctl dispatch  → parse cmd_hdr → handler table → ubcore op        │
+│    mmap            → doorbell page, JFS/JFR/JFC rings, segment        │
+│    uobj table      → per-fd handle ↔ kernel object map                │
+│    eventfd         → async event delivery                             │
+│    ▼                                                                  │
+│  ubcore             (drivers/ub/urma/ubcore)                          │
+│    device registry • jetty/JFS/JFR/JFC mgrs • segment registry        │
+│    EID mgr • TP/TPG state machine • genl netlink                      │
+│    ▼ ubcore_ops vtable (~20 fn ptrs at ubcore_types.h:2101)           │
+│  hw/udma            (drivers/ub/urma/hw/udma)                         │
+│    probe → ubcore_register_device                                     │
+│    alloc_ucontext • register_seg • create_jfs/jfr/jfc/jetty           │
+│    mmap → maps HW BAR doorbell + ring buffers into user VA            │
+│    interrupt → eventfd_signal → user wakeup                           │
+│    ▼                                                                  │
+│  UBASE → UBUS → HW                                                    │
+└──────────────────────────────────────────────────────────────────────┘
+```
+
+### 6.2 Boundary interfaces — complete inventory
+
+| Interface | Direction | Used for | Where defined |
+|---|---|---|---|
+| **mmap'd doorbell page** | user → HW (no kernel involved per call) | post-send fast path; CQ arm | `udma_db.c` (kernel) + `udma_u_db.c` (user) |
+| **mmap'd JFS / JFR / JFC rings** | user ↔ HW (DMA) | WQE production, CQE consumption | §4.5–§4.6; ABI in `udma_abi.h` |
+| **`/dev/ub_uburma_<n>` ioctl** | user → kernel | context, segment, jetty, queue, EID, device-query lifecycle | `uburma_cmd.h:34-36` (`UBURMA_CMD` magic `'U'` cmd 1) |
+| `uburma_cmd_hdr` wrapper struct | user → kernel | carries `(command, args_len, args_addr)` | `uburma_cmd.h:24` |
+| ~101 `UBURMA_CMD_*` sub-commands | user → kernel | per-op dispatch | `uburma_cmd.h:38-100` enum |
+| **eventfd** registered via uburma | kernel → user | async events: CQ armed, errors, port state, hot-remove | `uburma_event.c` |
+| **`/dev/ubcore` ioctl** | user → kernel | UVS topology / TP path queries | `umdk/src/urma/lib/uvs/core/tpsa_ioctl.h:30-31` (`TPSA_CMD` magic `'V'` cmd 1) |
+| **`/dev/ubagg` ioctl** | user → kernel | aggregator / bonding mgmt | `umdk/src/urma/lib/uvs/core/uvs_ubagg_ioctl.h:36` |
+| **netlink genl** family | both | stats, resource queries, EID enumeration, hot-plug events | `drivers/ub/urma/ubcore/ubcore_genl*.c` |
+| **sysfs `/sys/bus/ub/devices/<n>/`** | both | per-Entity attrs (class_code, guid, eid, tid, resource mmap, driver_override) | `drivers/ub/ubus/sysfs.c` |
+| **userspace provider `.so`** (`libudma_udma.so`) | dlopen'd by liburma | implements `urma_provider_ops` for HW provider | [`umdk_code_followups.md`](umdk_code_followups.md) §Q7 |
+| **provider ctor** `__attribute__((constructor))` | runs at .so load | `urma_register_provider_ops(&g_udma_provider_ops)` | `udma_u_main.c:12-20` |
+
+### 6.3 What crosses in each direction
+
+**User → kernel (per syscall):**
+
+- Command ID (one of ~101 `UBURMA_CMD_*` values).
+- Per-command argument struct (varies by command).
+- Virtual addresses for kernel to pin (segment register).
+- Sizes, depths, capabilities (queue depth, segment length, jetty config).
+- **Provider opaque blob** (`udata` / `udrv_data_va`) — pass-through to the provider ops vtable; uburma + ubcore do not interpret.
+
+**Kernel → user (per syscall):**
+
+- Allocated handles / IDs (jetty_id, token_id, ucontext handle).
+- mmap-ready offsets for follow-up `mmap()` (doorbell page, ring buffers).
+- Capability descriptions for `QUERY_*` commands.
+- Status / error codes.
+
+**Cross-boundary via mapping (no per-op syscall):**
+
+- WQE writes (user → mmap'd JFS ring; HW DMA-reads).
+- CQE reads (HW writes mmap'd JFC ring; user polls).
+- Doorbell (user MMIO store to mapped HW BAR).
+- Segment data (HW DMAs directly to pinned user pages, UMMU-translated).
+
+### 6.4 Two userspace usage paths over the same kernel surface
+
+The same `/dev/ub_uburma_<n>` char dev serves two distinct userspace stacks:
+
+1. **URMA-direct** — App → liburma → ioctl + mmap. All §4 workflows take this path.
+2. **CANN / HCCL** (production AI) — PyTorch → CANN runtime → HCCL → CANN's UB driver layer → kernel. Whether HCCL bottoms out on `/dev/ub_uburma_<n>` directly or has its own kernel surface is not yet code-confirmed — see [`umdk_academic_papers.md`](umdk_academic_papers.md) §3.
+
+Both paths cross the **same `ubcore_ops` vtable** in the kernel; what differs is the userspace dispatcher above ubcore. CAM (`umdk_cam_op_lib`) bridges by exposing URMA-aware ops as PyTorch operators.
+
+### 6.5 Spec ↔ boundary mapping
+
+| Spec concept (§) | Boundary realization |
+|---|---|
+| URMA primitives — Jetty, JFS, JFR, JFC, segment, token (§8.2.1–§8.2.3) | Each maps to one or more `UBURMA_CMD_*` sub-commands |
+| Public Jetty 2 = Socket over UB (§8.2.5) | UMS / USOCK — see [`umdk_cam_dlock_usock.md`](umdk_cam_dlock_usock.md) §3 |
+| Token rotation (§11.4.4) | Userspace-orchestrated over `UBURMA_CMD_ALLOC_TOKEN_ID` + segment rebind |
+| UPI partitioning (§10.3.2) | Set via UVS ioctl ('V' magic); enforced kernel-side |
+| TEE extension EE_bits (§11.6) | Attached at provider layer; UBFM-driven out-of-band of standard ioctl path |
+| USI interrupts (§10.3.4) | Provider EQ → eventfd → user wakeup |
+
+---
+
+## 7. Open questions / code-reading TODOs
 
 _Several previously-listed questions have been resolved — see [`umdk_code_followups.md`](umdk_code_followups.md) for the answers._
 
@@ -609,7 +725,7 @@ _Several previously-listed questions have been resolved — see [`umdk_code_foll
 
 ---
 
-## 7. Further reading within the repos
+## 8. Further reading within the repos
 
 **If you have one hour, read (in order):**
 
