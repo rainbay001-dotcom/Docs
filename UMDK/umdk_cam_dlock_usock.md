@@ -79,6 +79,8 @@ So the path is `Python → PyTorch op → CAM kernel (AscendC) → CANN collecti
 
 This is the architectural difference vs NCCL: NCCL puts collective algorithms (ring, tree, halving-doubling) above the verbs/CUDA layer; CAM puts them inside fused HBM-resident kernels and lets CANN handle the verb-level moves.
 
+**Cross-reference: CloudMatrix-Infer's FusedDispatch / FusedCombine** ([arXiv:2506.12708](https://arxiv.org/abs/2506.12708) §4.2.1, see [`umdk_academic_papers.md`](umdk_academic_papers.md) §2.6) is the same architectural species but reaches Ascend NPUs via **CANN's operator-package channel rather than UMDK's `umdk_cam_op_lib` torch ops**. Both fuse MoE dispatch + GEMM + combine into a single kernel launch, both quantize tokens (BF16 → INT8) before transmission, both rely on direct UB writes. The difference is plumbing: CAM ships in UMDK as a PyTorch operator library; CloudMatrix-Infer's variant ships through the CANN OPP. The two paths share the same UB hardware and likely the same kernel `drivers/ub/` but enter via different userspace stacks.
+
 ### 1.7 Topology awareness
 
 No auto-discovery via UBFM/UVS within CAM itself. The caller passes `ep_world_size`, `ep_rank_id`, `moe_expert_num`, etc. The framework (vllm / SGLang) is responsible for setting up the rank topology. `get_dispatch_layout()` (`pybind/functions.h:41-44`) computes per-rank send-lists and counts based on supplied expert→rank mappings.

@@ -273,7 +273,11 @@ Approximate, anecdotal — for orientation only:
 
 | Metric | URMA + UDMA | IB EDR/HDR/NDR (verbs) | RoCEv2 over 100/200 GbE | TCP/IP over 100 GbE |
 |---|---|---|---|---|
-| Best-case one-way latency | ~1–5 µs (per UMDK perftest README; HW-dependent). Aggregate: CloudMatrix384 sustains 538 tok/s/NPU under a 15 ms TPOT cap — see [`umdk_web_research_addenda.md`](umdk_web_research_addenda.md) §5 | ~0.7–1 µs (NDR ConnectX-7 best case) | ~2–4 µs (with PFC tuning) | ~10–50 µs |
+| Best-case one-way latency | **1.2 µs NPU↔NPU @ 512 B** on CloudMatrix384 (peer-reviewed; [arXiv:2506.12708](https://arxiv.org/abs/2506.12708) §3); 1.0 µs NPU↔CPU. ~1–5 µs aggregated for liburma post-send (UMDK perftest, HW-dependent) | ~0.7–1 µs (NDR ConnectX-7 best case) | ~2–4 µs (with PFC tuning) | ~10–50 µs |
+| Per-NPU peer BW (one direction) | **196 GB/s** measured on CloudMatrix384 ([arXiv:2506.12708](https://arxiv.org/abs/2506.12708) §3) | ~50 GB/s (NDR ConnectX-7) | ~25 GB/s (200 GbE) | ~12 GB/s (100 GbE) |
+| Aggregated cluster scale (per supernode) | **8,192 NPUs** (Atlas 950) / 384 (CloudMatrix384) | ~1K nodes typical, IB scale-out via routers | Same as IB | DC fabric scale |
+| Cost-efficiency vs same-BW Clos | **2.04× cheaper** measured (UB-Mesh paper, [arXiv:2503.20377](https://arxiv.org/abs/2503.20377) §6.4) | Reference baseline | — | — |
+| Availability (8K-NPU cluster) | **98.8%** measured (UB-Mesh §6.6); 99.78% with monitoring | 91.6% (Clos baseline, same-paper methodology) | — | — |
 | Bandwidth | Up to fabric line rate (200/400 Gb/s class HW) | Up to fabric line rate | Up to NIC line rate | NIC line rate minus TCP overhead |
 | Lossless? | Yes (credit-based, link-layer) | Yes (credit-based, link-layer) | Conditional (PFC) | No |
 | Memory access | First-class (transaction layer) | First-class (verbs) | First-class | Synthesized via TCP+app |

@@ -38,6 +38,8 @@ URMA is only one of several "upper-layer" UnifiedBus kernel modules. The full UB
 
 URMA is a **userspace-accessible, verbs-like API** for remote memory access. UDMA is a **HiSilicon hardware provider** under URMA's provider framework. UMDK is the **userspace kit** wrapping liburma, providers, control libraries (UVS), and higher-level services (urpc, cam, dlock, ums).
 
+> **Two distinct usage paths into the same UB hardware** (verified against academic papers, see [`umdk_academic_papers.md`](umdk_academic_papers.md) §3.2). Production AI workloads on Ascend SuperPoDs (e.g. CloudMatrix384 serving DeepSeek-R1) run **PyTorch → CANN → HCCL/ACL → UB driver** — they do **not name URMA at any layer**. Direct OS-level / framework-developer workloads use the path documented in this doc: **liburma → /dev/ub_uburma* → ubcore → udma**. CAM bridges the two by shipping URMA-aware PyTorch ops as `umdk_cam_op_lib`. Both paths share the same UB silicon and (likely) the same kernel `drivers/ub/`.
+
 ---
 
 ## 1. The broader UB kernel ecosystem
