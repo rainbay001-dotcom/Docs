@@ -14,20 +14,27 @@ Canonical upstream lives on Huawei/openEuler forges; GitHub copies are auto-mirr
 
 ## Docs in this directory
 
-- [`umdk_spec_survey.md`](umdk_spec_survey.md) — What the **UnifiedBus 2.0 Base Specification** and the UMDK project's own README/docs say about UMDK / URMA / UDMA / URPC. Glossary, six-layer protocol stack, transport/transaction modes, vocabulary discipline (UDMA is **not** a spec term), spec ↔ implementation mapping. Anchored to the English preview spec at `~/Documents/docs/unifiedbus/UB-Base-Specification-2.0-preview-en.pdf`.
-- [`umdk_architecture_and_workflow.md`](umdk_architecture_and_workflow.md) — Code-side reference. The broader UB kernel ecosystem (UBUS / UBASE / UBFI / UMMU / OBMM / SENTRY / CDMA / UNIC alongside URMA), every URMA + UDMA subsystem with file:line cites, end-to-end workflows for device discovery, context open, memory registration, jetty lifecycle, post-send fast path, completion, teardown, control plane, multipath, ipourma, URPC, CAM. Cross-component diagrams + open questions.
-- [`umdk_repo_layout.md`](umdk_repo_layout.md) — Initial repo layout note (kernel `drivers/ub/urma/` vs userspace `src/`). Largely superseded by the architecture doc; kept as a quick-reference jump-table.
+**Concept / spec / comparison:**
+- [`umdk_spec_survey.md`](umdk_spec_survey.md) — What the **UnifiedBus 2.0 Base Specification** and the UMDK project's own README/docs say about UMDK / URMA / UDMA / URPC. Glossary, six-layer protocol stack, transport/transaction modes, vocabulary discipline (UDMA is **not** a spec term), spec ↔ implementation mapping.
+- [`umdk_vs_ib_rdma_ethernet.md`](umdk_vs_ib_rdma_ethernet.md) — Terminology mapping (URMA ↔ IB verbs ↔ generic RDMA ↔ Ethernet) plus multi-axis comparison: spec / design / implementation / interface / ecosystem / performance / security perspectives. Where the analogies break and what URMA does that IB doesn't (and vice versa).
 
-More docs will be added as deeper surveys of each sub-component complete. Pending topics:
+**Code architecture:**
+- [`umdk_architecture_and_workflow.md`](umdk_architecture_and_workflow.md) — Code-side reference. The broader UB kernel ecosystem (UBUS / UBASE / UBFI / UMMU / OBMM / SENTRY / CDMA / UNIC alongside URMA), every URMA + UDMA subsystem with file:line cites, end-to-end workflows for device discovery, context open, memory registration, jetty lifecycle, post-send fast path, completion, teardown, control plane, multipath, ipourma, URPC, CAM.
+- [`umdk_kernel_internals_and_udma_hotpath.md`](umdk_kernel_internals_and_udma_hotpath.md) — Deep dive into the kernel foundation drivers (UBUS, UBASE, UBFI, OBMM, UBMEMPFD, UBDEVSHM, UMMU) and the **UDMA hot path** (probe, WQE format, doorbell, post-send, poll vs event completion, error paths, MMU integration, OLK-5.10→6.6 evolution). Plus contrasts vs UNIC and CDMA.
+- [`umdk_urpc_and_tools.md`](umdk_urpc_and_tools.md) — URPC framework (API, dispatch, wire format, marshalling, security), the three UMQ backends (`umq_ipc`, `umq_ub`, `umq_ubmm`) with their flow control + buffering, and the URMA control-plane CLIs (`urma_admin`, `urma_perftest`, `urma_ping`).
+- [`umdk_cam_dlock_usock.md`](umdk_cam_dlock_usock.md) — CAM (PyTorch operator library `umdk_cam_op_lib` for Ascend NPU collectives, MoE dispatch/combine), dlock (URMA-atomics-backed distributed locks with leases), and **USOCK / UMS** which takes over the upstream Linux `AF_SMC` socket family and substitutes URMA for SMC-R's RDMA backend.
 
-- UDMA hot path (work queues, doorbells, CQ coalesce) — kernel `drivers/ub/urma/hw/udma/` + userspace `src/urma/hw/udma/udma_u_*`.
-- UBASE / UBFI / UBUS internals — the foundational kernel layers UDMA binds through.
-- `src/urpc/` — RPC framework + `umq` (userspace message queue) detailed walk.
-- `src/usock/ums/` — UB message socket; in particular whether UMS adds a kernel module beyond uburma.
-- `src/ulock/dlock/` — distributed lock library design.
-- `src/cam/` — collective comm/math operators (Ascend kernels + pybind).
-- uvs_admin / urma_admin / urma_perftest control-plane tools.
-- Web research follow-up: Bojie Li essay, openEuler doc center, LWN/lore mentions; cite into the spec doc.
+**Reference snapshot:**
+- [`umdk_repo_layout.md`](umdk_repo_layout.md) — Initial repo layout note. Largely superseded by the architecture doc; kept as a quick-reference jump-table.
+
+Still pending (next research batches):
+
+- Web research pass — Bojie Li "The Thinking Behind Unified Bus" essay, openEuler doc center, LWN / lore.kernel.org mentions, Huawei CloudMatrix whitepapers. Cite into the spec doc.
+- Full Chinese spec read (UB-Base-Specification-2.0-zh.pdf) — fill in details deferred from the English preview (full §6 Transport, §7 Transaction, §10 Resource Management, §11 Security).
+- UBFM ↔ UVS daemon mapping (where does the topology brain live?).
+- DCA / HEM removal rationale from OLK-5.10 → 6.6.
+- OBMM cross-supernode coherence implementation details.
+- `udma_mue` and `udma_dfx` purpose.
 
 ## Style
 

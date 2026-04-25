@@ -1,0 +1,444 @@
+# UB kernel foundations + UDMA hot path
+
+_Last updated: 2026-04-25._
+
+Deep dive into the kernel-side code below URMA — the foundation drivers (UBUS, UBASE, UBFI, OBMM, UMMU, UBMEMPFD, UBDEVSHM) and the UDMA hardware provider's data plane (probe, WQE format, doorbell, post-send, completion). Companion to [`umdk_architecture_and_workflow.md`](umdk_architecture_and_workflow.md), which gives the high-level picture; this doc adds the line-level detail.
+
+Source: `~/Documents/Repo/kernel/` on `OLK-6.6` (kernel) + `~/Documents/Repo/ub-stack/umdk/src/urma/hw/udma/` (userspace fast path).
+
+> **Caveat about line citations.** Some `file:line` cites below come from a survey agent and have been spot-verified at high-load anchors (e.g. `ubcore_register_device:1223`, `tpsa_ioctl.h:30-31`, `uburma_cmd.h` enum count). Lines for files I haven't personally opened are marked _(unverified line)_ where they look approximate. The fact and the file should be right; the column may drift by a few.
+
+---
+
+## 1. UBUS — the foundational UB bus
+
+**Path:** `drivers/ub/ubus/`. Approx 82 files, with `enum.c` (~33 KB), `ubus_entity.c` (~24 KB), `sysfs.c` (~22 KB), `instance.c` (~21 KB) being the biggest.
+
+**Role.** UBUS implements UB as a Linux bus type — parallel to `pci_bus_type` or `usb_bus_type`. All UB hardware (UBPUs, switches, controllers) hang off UBUS. UBUS does not export its own data-plane uAPI; it provides discovery + sysfs + the bus-level lifecycle for upper drivers (UBASE / UNIC / CDMA / UDMA).
+
+**Init.** `ubus_driver_init()` (per agent survey, file: `ubus_driver.c:340` _(unverified line)_) registers the bus type and a vendor `ub_manage_subsystem_ops` vtable.
+
+**Key public symbols** (per agent survey of `drivers/ub/ubus/ubus.h:60-76`):
+
+```c
+struct ub_bus_controller *ub_find_bus_controller(u32 ctl_no);
+int ub_get_bus_controller(u32 *list, u32 max);   /* enumerate */
+int register_ub_manage_subsystem_ops(const struct ub_manage_subsystem_ops *ops);
+void ub_bus_type_iommu_ops_set(...);    /* IOMMU integration */
+struct iommu_ops *ub_bus_type_iommu_ops_get(void);
+```
+
+**Key data structures.**
+
+- `struct ub_entity` — represents any UB endpoint (controller, switch, device). Carries `priv_flags` such as `DETACHED`, `ROUTE_UPDATED`, `ACTIVE`. Defined in `drivers/ub/ubus/ubus.h:41-47` _(unverified)_.
+- `enum ub_entity_type` — `BUS_CONTROLLER`, `IBUS_CONTROLLER`, `SWITCH`, `DEVICE`, `P_DEVICE`, `IDEVICE`, `P_IDEVICE`. Helpers `is_bus_controller()`, `is_device()`, `is_controller()`.
+- `struct ub_manage_subsystem_ops` — vendor vtable: `controller_probe`, `controller_remove`, `ras_handler_probe`.
+
+**Probe sequence.** UBFI parses firmware (UBRT table or DTS) → enumerates entities. UBUS binds to enumerated entities. Vendor `ub_manage_subsystem_ops` runs for controller-specific init. Then upper modules (UBASE → UNIC/CDMA/UDMA via aux bus) probe.
+
+**Sub-Kconfigs:** `UB_UBUS_BUS` (modular part), `UB_UBUS_USI` (Message Signaled Interrupts on UB; selects `GENERIC_MSI_IRQ`). Vendor subtree at `drivers/ub/ubus/vendor/`.
+
+---
+
+## 2. UBASE — the auxiliary bus + command queue
+
+**Path:** `drivers/ub/ubase/`. ~36 files; biggest are `ubase_dev.c` (51 KB), `ubase_ctrlq.c` (50 KB), `ubase_qos_hw.c` (36 KB), `ubase_eq.c` (33 KB), `ubase_hw.c` (29 KB), `ubase_cmd.c` (28 KB).
+
+**Role.** UBASE creates an **auxiliary bus** for upper UB modules. UDMA, CDMA, and UNIC all bind through UBASE rather than directly to UBUS. Doing so lets each upper module probe as an `auxiliary_device` in standard Linux fashion. UBASE also owns the **command-queue** — the kernel↔HW control channel used to configure devices.
+
+**Init.** `ubase_main.c:11-24` (per agent):
+
+```c
+int ubase_init(void) {
+    int ret = ubase_dbg_register_debugfs();
+    ret = ubase_ubus_register_driver();   /* bind to UBUS as a bus driver */
+    return ret;
+}
+```
+
+**Public API.**
+
+- `int ubase_cmd_send_inout(struct auxiliary_device *adev, struct ubase_cmd_buf *in, struct ubase_cmd_buf *out)` — synchronous command send/recv via the device's command queue.
+- Capability queries: `ubase_dev_urma_supported()`, `ubase_dev_cdma_supported()`, `ubase_dev_unic_supported()` (`ubase_dev.c`), used by upper drivers to gate functionality.
+
+**Command queue model.** A pair of DMA-coherent rings — CSQ (command send) and CRQ (command response) — programmed into HW BARs (CSQ_BASEADDR_L/H, CRQ_BASEADDR_L/H, DEPTH, HEAD, TAIL). Allocations via `dma_alloc_coherent()`. PI/CI indices guarded by spinlocks. Default timeout `UBASE_CMDQ_TX_TIMEOUT`.
+
+**Key structs.**
+
+- `struct ubase_dev` (`ubase_dev.c`) — wraps HW context. Holds `hw.cmdq`, mailbox, event-queue arrays.
+- `struct ubase_cmdq_ring` (`ubase_cmd.c`) — PI, CI, desc count, DMA address of descriptor array, lock.
+- `struct ubase_mailbox_cmd` — semaphore-gated mailbox for command polling.
+
+**Why this layer exists.** Upper-module probes (UDMA, UNIC, CDMA) are uniform — all bind via Linux `auxiliary_driver`, all use `ubase_cmd_send_inout()` to talk to the HW command engine. This decouples them from each other and from UBUS internals.
+
+---
+
+## 3. UBFI — firmware interface
+
+**Path:** `drivers/ub/ubfi/`.
+
+**Role.** Bridges firmware-described UB topology to kernel; bootstraps the entity tree that UBUS consumes.
+
+**Init.** `ubfi/ub_fi.c:100-119` (per agent):
+
+```c
+int ub_fi_init(void) {
+    ub_firmware_mode_init();     /* detect ACPI vs DTS */
+    int ret = ubfi_get_ubrt();    /* fetch UBRT table or DTS node */
+    ret = handle_ubrt();          /* parse and instantiate entities */
+    return ret;
+}
+```
+
+**Firmware tables.** Two flavors:
+
+- **ACPI**: signature `UBRT`, retrieved via `acpi_get_table(ACPI_SIG_UBRT)` (`ub_fi.c:15-16`).
+- **DTS**: `/chosen/linux,ubios-information-table` property points to the physical address of an in-memory table (`ub_fi.c:16` _(unverified)_).
+
+Both call into `handle_acpi_ubrt()` or `handle_dts_ubrt()` to parse.
+
+**What it parses.** Per UBRT entry: entity type, port count, link speeds, memory size limits (DMA window), IOMMU/UMMU routing hints. For each entry, `struct ub_entity` is allocated and registered with UBUS.
+
+**Lifecycle.** `ubfi_get_ubrt()` / `ubfi_put_ubrt()` (refcount the parsed table).
+
+---
+
+## 4. OBMM — Ownership-Based Memory Management
+
+**Path:** `drivers/ub/obmm/`. ~35 files; `obmm_shm_dev.c` (~30 KB), `ubmempool_allocator.c` (~18 KB), `obmm_core.c` (~17 KB), `obmm_import.c` (~17 KB), `obmm_ownership.c` (~11 KB).
+
+**Role.** **Cross-supernode coherent shared memory.** Probably the most distinctive UB kernel module. Lets a process on node A *export* a region of physical memory and a process on node B *import* it, with cross-supernode cache-consistency maintained by HW (HiSilicon SoC cache hooks). Selected `NUMA_REMOTE`, `PFN_RANGE_ALLOC`, `RECLAIM_NOTIFY` per `Kconfig`.
+
+**uAPI.**
+
+- `/dev/obmm` — master char device, ioctls for region create/delete/query.
+- `/dev/obmm_shmdev{region_id}` — per-region char device, mmap to access the region's pages.
+
+**Region lifecycle** (per `obmm_core.c:79-98` — agent survey).
+
+```c
+struct obmm_region {
+    refcount_t ref;
+    bool       enabled;
+    /* ... */
+};
+
+void activate_obmm_region(struct obmm_region *r) {
+    refcount_set(&r->ref, 1);
+    r->enabled = true;
+}
+
+bool try_get_obmm_region(struct obmm_region *r) {
+    return refcount_inc_not_zero(&r->ref);
+}
+
+bool disable_obmm_region_get(struct obmm_region *r) {
+    /* dec-if-one: only succeeds when no in-flight users */
+    return refcount_dec_if_one(&r->ref);
+}
+```
+
+The dec-if-one pattern guards against concurrent removal while users hold refs.
+
+**Two region kinds.**
+
+- **Export region.** Local physical memory. Allocator choice: `conti_mem_allocator.c` (contiguous) for HW with strict alignment, `ubmempool_allocator.c` (pooled) for general use.
+- **Import region.** Local mapping shim onto remote memory. First access triggers RDMA-fetch over UB or UBoE.
+
+**NUMA + reclaim.** Hooks `memory_hotplug.h`, owns mmu_notifier callbacks for invalidation when remote pages are removed.
+
+**Why this matters.** OBMM is a parallel mechanism to URMA's segment_register: URMA segments are accessed via verb-level operations (post_send WRITE/READ), while OBMM regions are accessed via plain CPU loads/stores backed by the HW coherence fabric. The two are different programming models — message-passing vs shared-memory — over the same underlying UB.
+
+---
+
+## 5. UBMEMPFD + UBDEVSHM — virtualization & shared-mem contexts
+
+**UBMEMPFD** (`drivers/ub/ubmempfd/`). memfd-style fd for user-allocated memory pinning. Registers with UMMU for IOMMU translation. Small (~5 files); wraps `memfd_create()` so QEMU can hand a guest's memfd to host-side UMMU virtualization.
+
+**UBDEVSHM** (`drivers/ub/ubdevshm/`). Shared-memory device contexts. Lets multiple "user engines" share segment tables and page tables for zero-copy. Exports `/dev/ubdevshm`. ~8 files; integrates with OBMM for cross-process memory sharing.
+
+Both are glue layers; the heavy lifting is in OBMM and UMMU.
+
+---
+
+## 6. UMMU — UB IOMMU
+
+**Path:** `drivers/iommu/hisilicon/{ummu-core, logic_ummu}/`.
+
+**Why two halves.** `ummu-core` is the abstraction — TID (Translation ID) manager, EID registry, ops dispatch. `logic_ummu` is the actual page-table walker, flush handler, interrupt path. Same split as `iommu/intel-iommu` core/dmar.
+
+**Init.** `ummu-core/core.c:14-56` (per agent):
+
+```c
+int ummu_core_init(struct ummu_core_device *dev) {
+    ummu_core_alloc_tid_manager(dev, &tid_ops, max, min);
+    set_global_device(dev);                  /* registers ub_bus_type_iommu_ops */
+    return 0;
+}
+```
+
+**Public API.**
+
+- `ummu_core_register_device()`
+- `tid_alloc()`, `tid_free()` — translation-context allocation
+- `eid_add()`, `eid_del()` — endpoint registration
+
+**IOMMU framework integration.** Implements `iommu_ops` for the Linux IOMMU framework. UDMA and UNIC call standard `iommu_map()` / `iommu_unmap()`; UMMU services them under the hood.
+
+**SVA path.** UMMU supports SVA (Shared Virtual Addressing) via `iommu_sva_bind_device()`. With SVA, user VA == device VA (same ASID); UMMU shares the kernel page-table walker.
+
+**Invalidation.** Mmu_notifier callbacks (e.g. on `/dev/obmm` import region removal, or process exit) fire UMMU TID invalidation. In-flight HW operations to invalidated pages complete with `LOCAL_ACCESS_ERR` or `REM_ACCESS_ERR` on the CQE.
+
+---
+
+## 7. UDMA hot path — the data plane
+
+UDMA is HiSilicon's UnifiedBus DMA engine, registered as a UBASE auxiliary device and as a `ubcore` provider. The kernel side is `drivers/ub/urma/hw/udma/` (38 files, ~16k LOC). Userspace side is `umdk/src/urma/hw/udma/udma_u_*.{c,h}` (~28 files).
+
+### 7.1 Probe + resource model
+
+**Entry** (per agent — file `udma_main.c:1344-1354`):
+
+```c
+int udma_probe(struct auxiliary_device *adev,
+               const struct auxiliary_device_id *id) {
+    if (udma_init_dev(adev)) {
+        ubase_adev_fault_log(adev, UDMA_FAULT_EVENT_ID_PROBE, NULL);
+        return -EINVAL;
+    }
+    ubase_reset_register(adev, udma_reset_handler);
+    return 0;
+}
+```
+
+`udma_init_dev()` allocates the per-device state:
+
+- `struct udma_dev` (`udma_dev.h:110-150` _(unverified)_) — top-level HW context.
+- Jetty tables (Xarray-backed): `jetty_table`, `jfr_table`, `jfc_table`.
+- Doorbell BAR mapping: `k_db_base` (kernel VA), `db_base` (resource_size_t).
+- EQ (event queue) for async completions.
+- KSVA — kernel SVA context for UMMU pinning.
+
+**Capability negotiation.** `udma_set_dev_caps()` (per agent — `udma_main.c:122-150`) populates `attr->dev_cap`: max JFS/JFR/JFC depth and count, max jetties per group, SGE limits, inline-payload size, feature flags (e.g. JFC_INLINE), CQE coalescing mode.
+
+**Module parameters** (`udma_main.c:36-46`):
+
+| Param | Type | Effect |
+|---|---|---|
+| `cqe_mode` | bool | CQE count by CI-PI gap (1) vs explicit count (0) |
+| `jfc_arm_mode` | int | 0 = always raise interrupt; non-zero = conditional / coalesced |
+| `hugepage_enable` | bool | Use huge pages for queue buffers |
+| `jfr_sleep_time` | int | µs between RQ polls in the kthread fallback |
+
+The `jfc_arm_mode=2` flag in UMDK's install instructions implies coalesced interrupt mode is the recommended default.
+
+### 7.2 WQE format
+
+A jetty's send queue stores work requests as **SQEs** (Send Queue Entries), packed into 64-byte **WQEBBs** (Work Queue Entry Basic Blocks). One SQE may span up to 4 WQEBBs depending on opcode and SGE count.
+
+User-visible SQE control header (per agent — `umdk/src/urma/hw/udma/udma_u_jfs.h:17-50`):
+
+```c
+struct udma_jfs_sqe_ctl {
+    uint32_t sqe_bb_idx : 16;      /* WQE block index */
+    uint32_t flag       :  7;
+    uint32_t opcode     :  8;      /* WRITE | READ | SEND | ATOMIC */
+    uint32_t sge_num    :  8;
+    uint32_t tp_id      : 24;      /* Transport Path ID */
+    uint32_t rmt_eid[URMA_EID_SIZE];   /* remote EID */
+    uint32_t rmt_token_value;
+    /* + variable: remote_addr, sgelist or inline payload */
+};
+```
+
+Sizes (`udma_u_jfs.h:81-114` _(unverified)_):
+
+- `MAX_SQE_BB_NUM = 4`
+- `SQE_NORMAL_CTL_LEN = 48`, `SQE_WRITE_IMM_CTL_LEN = 64`
+- `UDMAWQE_INLINE_EN = 0x40` flag: encode inline data
+- Inline payload max: 192 B for `WRITE_IMM`, 176 B for `WRITE_NTF`
+
+### 7.3 Doorbell mechanics
+
+Each jetty has its own doorbell page (a 4 KB region of HW BAR). Multiple jetties may share one page at different offsets.
+
+**Mapping** (per agent — `udma_db.c:12-65`):
+
+- User: mmap'd page via uburma. VA recorded as `db_addr`.
+- Kernel pin: `udma_pin_sw_db()` → `udma_umem_get()` walks page tables, holds page refs.
+- Tracking struct `udma_sw_db`: user VA, kernel VA, page ref, `offset` for shared pages.
+
+**Doorbell layout for JFC** (per agent — `udma_abi.h:138-146`):
+
+```c
+struct udma_jfc_db {
+    uint32_t ci      : 24;   /* completion index */
+    uint32_t notify  :  1;   /* request event */
+    uint32_t arm_sn  :  2;   /* arm sequence */
+    uint32_t type    :  1;
+    uint32_t jfcn    : 20;   /* JFC number */
+};
+```
+
+Doorbell offsets per spec preview (`udma_abi.h:29`): `UDMA_DOORBELL_OFFSET = 0x80`, `UDMA_JFC_HW_DB_OFFSET = 0x40`.
+
+**Format of a single write.** A single 64-bit MMIO store to the doorbell address: lower 32 bits hold CI/notify/arm_sn/type, upper 32 bits hold JFCN. Posted-write semantics on Kunpeng (HiSilicon ARMv8) — HW DMA engine fetches the pending WQE immediately.
+
+### 7.4 Post-send walkthrough
+
+User-app sequence (per agent — `udma_u_jfs.c:115+`):
+
+```c
+/* 1. Encode WQE in the user-mmapped JFS ring */
+sq->wqebb_index = sq->pi >> 6;        /* 64-byte block index */
+memcpy(sq_ring + (pi % ring_size), &wqe, wqe_len);
+
+/* 2. Bump producer */
+sq->pi += wqe_block_count;
+
+/* 3. Doorbell write — 64-bit MMIO */
+uint64_t db_value = ((uint64_t)jfs_id << 32) | sq->pi;
+*(volatile uint64_t *)doorbell_va = db_value;
+
+/* 4. Inner-shareable barrier after MMIO */
+asm volatile("dmb ish" ::: "memory");
+```
+
+Note: the `wmb()` *before* the MMIO is actually required by the WQE-then-doorbell ordering rule — visible WQE first, then doorbell. The code above conceptually follows: WQE write completion → doorbell store; `dmb` after the doorbell flushes the write itself.
+
+CPU instructions emitted on aarch64 (Kunpeng):
+
+```
+str   x0, [doorbell_va]      ; MMIO write
+dmb   ish                    ; data memory barrier, inner shareable
+```
+
+### 7.5 Completion: poll + event
+
+**Poll mode** (`udma_u_jfc.c`, `udma_jfc.c`):
+
+- CQ ring is mmap'd to userspace.
+- User polls JFC's CI (advanced by HW), reads CQE at `(ci % ring_size)`.
+- CQE format: opcode, status, length, work-request ID, syndrome, `imm_data`.
+- User increments CI, writes CI doorbell to update HW watermark.
+
+**Event mode** (`udma_eq.c:23-83`):
+
+- EQ collects async events from HW.
+- Interrupt handler:
+  - `udma_ae_jfs_check_err()` (`udma_eq.c:85-102`) — check jetty error.
+  - Invokes `ubcore_jetty->jfae_handler()` callback.
+  - Callback signals eventfd or per-fd event flag in uburma.
+- CQE coalescing controlled by `jfc_arm_mode`.
+
+**Status codes** (per agent — `udma_abi.h:166-187`):
+
+```
+UDMA_CQE_SUCCESS                            = 0x00
+UDMA_CQE_UNSUPPORTED_OPCODE                 = 0x01
+UDMA_CQE_LOCAL_OP_ERR                       = 0x02
+UDMA_CQE_TRANSACTION_ACK_TIMEOUT_ERR        = 0x05
+JETTY_WORK_REQUEST_FLUSH                    = 0x06
+/* + sub-status fields for local/remote data errors */
+```
+
+### 7.6 Error paths
+
+- **Timeout** → `UDMA_CQE_TRANSACTION_ACK_TIMEOUT_ERR`.
+- **Link down / TP-level error** → async event `UBASE_EVENT_TYPE_TP_LEVEL_ERROR` (`udma_eq.c:41`) → `udma_ctrlq_remove_single_tp()` → flushed pending SQEs return with `JETTY_WORK_REQUEST_FLUSH`.
+- **Reset** (`udma_main.c:1356-1403`): `ubcore_stop_requests()` → poll until idle (max 800 ms) → `ubcore_unregister_device()` → `udma_destroy_dev()`.
+
+### 7.7 MMU / IOMMU integration
+
+- User pages pinned via `udma_umem_get()` (looks up VMA, may call `get_user_pages_fast()`).
+- IOMMU translation context allocated via UMMU (TID).
+- Page table programmed: `iommu_map()` — or, in SVA mode, the kernel pagetable is shared (same ASID).
+- TID stored in JFS/JFR/JFC contexts.
+- Code path: `udma_jfs.c:75-108` → `udma_create_sgt_from_pages()` → `udma_ioummu_map(ctx, tid, flags, addr, sgt)` → kernel `iommu_map_sg()` (in SVA-off mode).
+
+### 7.8 DCA / HEM evolution from OLK-5.10
+
+**OLK-5.10 hns3** had Dynamic Context Allocation (DCA — pooled HW context cache, file `hns3_udma_dca.c`, ~33 KB) and Hardware Entry Memory paging (HEM — `hns3_udma_hem.c`, ~53 KB).
+
+**OLK-6.6 UDMA does not have DCA or HEM.** `grep` for "dca", "hem", "context_pool", "hardware_entry" in `drivers/ub/urma/hw/udma/` returns nothing. All contexts are pre-allocated upfront in `struct udma_dev`. Jetty allocation uses bitmap IDs (`alloc_jetty_id()`, `udma_jetty.c:269` _(unverified)_).
+
+Most likely rationale: per-UE (user engine — ~47 per chip) instances have smaller scale than the top-of-chip resource pool, so pre-allocation suffices and the paging machinery is dropped for simplicity.
+
+---
+
+## 8. UNIC and CDMA — quick contrast
+
+### UNIC
+
+**Path:** `drivers/net/ub/unic/`. ~35 files (`unic_tx.c`, `unic_rx.c`, `unic_netdev.c`, `unic_hw.c`, etc.).
+
+**Role.** UB-native NIC. Exposes a `struct net_device` to the Linux network stack. Multi-queue (RSS), checksum offload, TSO/LSO, VLAN, QoS per virtual lane, MAC filtering, multicast.
+
+**Difference vs UDMA.** UNIC is a kernel-internal NIC — TX/RX rings are not exposed to userspace. Standard QDisc → netdev TX → UB-native frames. UNIC does **not** ride on URMA; it has its own kernel uAPI.
+
+### CDMA
+
+**Path:** `drivers/ub/cdma/`. ~48 files (`cdma_jfs.c`, `cdma_api.c`, `cdma_ioctl.c`, `cdma_event.c`, `cdma_dev.h`).
+
+**Role.** A simpler DMA engine. Bulk CPU↔memory or device↔memory transfers, NOT peer-to-peer. No remote EID. Simpler trust model — appropriate for VM DMA.
+
+**uAPI.** Char dev `/dev/cdma`, ioctls (`cdma_ioctl.c`), userspace lib wraps into `dma_*` functions:
+
+```c
+struct dma_device *dma_get_device_list(u32 *num_devices);
+struct dma_ctx *dma_create_context(struct dma_device *, ...);
+struct dma_qp *dma_create_qp(struct dma_ctx *, ...);
+int dma_post_send(struct dma_qp *, struct dma_send_wr *, ...);
+```
+
+**Niche.** CDMA complements UDMA. UDMA does RDMA-like remote ops; CDMA does local high-throughput memory-to-memory. Concurrent operation possible.
+
+---
+
+## 9. Cross-section: load order and dependencies
+
+Recapped from UMDK README (the only authoritative source for ordering on real hardware):
+
+```
+ubfi               # firmware tables
+ummu-core          # IOMMU core
+ummu               # vendor-specific UMMU (HiSilicon)
+ubus               # UB bus
+hisi_ubus          # HiSilicon-specific bus driver
+ubase              # auxiliary bus for upper modules
+unic               # UB NIC
+cdma               # CDMA engine
+ubcore             # URMA framework (modprobe)
+uburma             # URMA char dev (modprobe)
+udma               # URMA hardware provider
+```
+
+Module parameter cheat-sheet (also from the README):
+
+| Module | Important params |
+|---|---|
+| `ubfi` | `cluster=1` (omit for VF NIC) |
+| `ummu` | `ipver=609` |
+| `ubus` | `ipver=609 cc_en=0 um_entry_size=1` |
+| `hisi_ubus` | `msg_wait=2000 fe_msg=1 um_entry_size1=0 cfg_entry_offset=512` |
+| `unic` | `tx_timeout_reset_bypass=1` |
+| `udma` | `dfx_switch=1 ipver=609 fast_destroy_tp=0 jfc_arm_mode=2` |
+
+The `ipver=609` recurring parameter is a UB silicon revision tag (suspected — needs confirmation).
+
+---
+
+## 10. Open questions / follow-ups
+
+1. **`ipver=609` semantics.** Almost certainly a silicon revision selector. Confirm in `drivers/ub/ubus/vendor/hisi/`.
+2. **UDMA MUE.** `udma_mue.{c,h}` registers `udma_register_ue_msg_req_event` / `_rsp_event` against an auxiliary device. UE = "User Entity" or "User Engine"? Read top of `udma_mue.c`.
+3. **`udma_dfx`.** DFx (Design For x — debug, telemetry, fault injection) helpers. Map the sysfs / debugfs surface they expose.
+4. **OBMM cross-supernode coherence.** What HW mechanism ensures cache consistency on remote-page invalidation? Selects `HISI_SOC_CACHE` so likely a HiSilicon-specific cache-coherency domain.
+5. **UBMEMPFD virtualization.** What does the QEMU-side counterpart look like? Where in QEMU does a guest UMMU (vUMMU) source fd-backed memory?
+6. **Why two UMMU drivers?** `ummu-core` vs `logic_ummu` split. Are there other `logic_*` siblings planned?
+7. **DCA/HEM removal rationale.** Confirm via Huawei release notes or commit logs.
+8. **UNIC offload quirks.** Any UB-specific offloads (e.g. compression, tag-list) not exposed via standard `ethtool -k`?
+
+---
+
+_Companion: [`umdk_architecture_and_workflow.md`](umdk_architecture_and_workflow.md), [`umdk_spec_survey.md`](umdk_spec_survey.md), [`umdk_vs_ib_rdma_ethernet.md`](umdk_vs_ib_rdma_ethernet.md)._
