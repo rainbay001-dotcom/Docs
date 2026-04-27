@@ -2,7 +2,7 @@
 
 This directory tracks Codex findings about openEuler UMDK, with the current focus on the URMA and UDMA stack.
 
-Last updated: 2026-04-25
+Last updated: 2026-04-27
 
 ## Local Repositories
 
@@ -34,6 +34,7 @@ Two local document directories were found:
 - [UMDK component architecture](./umdk-component-architecture.md)
 - [End-to-end platform workflow](./end-to-end-platform-workflow.md)
 - [Architecture diagrams and workflows](./architecture-diagrams-and-workflows.md)
+- [UMQ architecture and workflows](./umq-architecture-and-workflows.md)
 - [UB root bus, udev, and device enumeration](./ub-root-bus-udev-device-enumeration.md)
 - [UB and PCIe probe process comparison](./ub-vs-pcie-probe-process-comparison.md)
 - [UMMU memory-management deep dive](./ummu-memory-management-deep-dive.md)
