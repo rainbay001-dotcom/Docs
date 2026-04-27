@@ -35,6 +35,7 @@ Two local document directories were found:
 - [End-to-end platform workflow](./end-to-end-platform-workflow.md)
 - [Architecture diagrams and workflows](./architecture-diagrams-and-workflows.md)
 - [UMQ architecture and workflows](./umq-architecture-and-workflows.md)
+- [HiSilicon IMP interface](./hisilicon-imp-interface.md)
 - [UB root bus, udev, and device enumeration](./ub-root-bus-udev-device-enumeration.md)
 - [UB and PCIe probe process comparison](./ub-vs-pcie-probe-process-comparison.md)
 - [UMMU memory-management deep dive](./ummu-memory-management-deep-dive.md)
