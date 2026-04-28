@@ -61,11 +61,17 @@ kernel-side users that repeatedly ask for the same TP list.
 
 ## 2. Goal
 
-Add a small UDMA-side TP-list cache module that avoids repeated synchronous
-control-queue requests for the same TP-list query while preserving correctness.
+Add a small UDMA-side TP-list mitigation module that handles both latency
+sources:
+
+- first-use latency, by proactively creating/fetching TP lists before the
+  application's first hot-path `get_tp_list`;
+- repeated-call latency, by caching successful responses and collapsing
+  concurrent identical misses.
 
 The module should:
 
+- Prewarm likely local/peer EID pairs after EID discovery or context creation.
 - Cache successful `GET_TP_LIST` responses by a strict request key.
 - Collapse concurrent identical misses so only one caller sends the control
   queue request.
@@ -80,10 +86,235 @@ Non-goals:
 - Do not remove the existing perftest `tp_reuse` optimization.
 - Do not cache failed `GET_TP_LIST` responses unless a later benchmark proves
   negative caching is safe and useful.
+- Do not assume module-init prewarming is valid for userspace callers until the
+  request owner semantics of the `flag` field are proven.
 
 ---
 
-## 3. Module Boundary
+## 3. First-Creation Mitigation: TP Warmup
+
+Caching only helps after a TP list exists or after the first slow miss. To
+mitigate the first creation, the module must move the slow control-queue round
+trip earlier and off the application's critical path.
+
+The correct model is **prewarm, not eliminate**: the first
+`UDMA_CMD_CTRLQ_GET_TP_LIST` still has to happen somewhere, because the
+management side owns TPID allocation and selection. The mitigation is to issue
+that request asynchronously when enough topology information is known, so the
+later application call usually becomes a local cache hit.
+
+### 3.1 Warmup Trigger Points
+
+Use two trigger points.
+
+1. **Device/EID warmup** after `udma_init_eid_table()`.
+
+   `udma_init_dev()` calls `udma_init_eid_table()`, which calls
+   `udma_query_eid_from_ctrl_cpu()` and populates the local UDMA EID table. If
+   the module also has a configured peer-host EID set at this point, it can
+   schedule background warmup for `(local_eid, peer_eid)` pairs.
+
+2. **Context/PID warmup** when a user context is created.
+
+   Current `udma_get_tp_list()` sends a 24-bit owner-like flag:
+
+   ```c
+   if (current->flags & PF_KTHREAD)
+       tp_cfg_req.flag = UDMA_DEFAULT_PID;
+   else
+       tp_cfg_req.flag = (uint32_t)current->tgid & UDMA_PID_MASK;
+   ```
+
+   A module-init work item runs in kernel context and therefore uses
+   `UDMA_DEFAULT_PID`. If the management side treats that field as process
+   ownership, module-init warmup will not satisfy a later userspace process
+   using its own `tgid`. To avoid this, add a context-aware warmup hook that
+   runs when the process is known. It should enqueue warmup work for the same
+   process key that later `get_tp_list()` will use.
+
+### 3.2 `udma_init_eid_table()` Timing And Process
+
+`udma_init_eid_table()` is reached through UDMA device bring-up, not directly
+from `module_init()`.
+
+Normal probe path:
+
+```text
+module_init(udma_init)
+  -> auxiliary_driver_register(&udma_drv)
+  -> Linux auxiliary-driver core matches an aux device
+  -> udma_probe()
+  -> udma_init_dev()
+  -> udma_init_eid_table()
+```
+
+Reset re-init path:
+
+```text
+udma_reset_handler(..., UBASE_RESET_STAGE_INIT)
+  -> udma_reset_init()
+  -> udma_init_dev()
+  -> udma_init_eid_table()
+```
+
+Inside `udma_init_dev()`, `udma_init_eid_table()` runs after these steps:
+
+1. `udma_create_dev(adev)` creates the provider device object.
+2. `udma_register_event(adev)` registers event handlers.
+3. `udma_register_workqueue(udma_dev)` makes the UDMA workqueue available.
+4. `udma_set_ubcore_dev(udma_dev)` registers/sets up the ubcore-facing device.
+5. `udma_init_eid_table(udma_dev)` queries and installs local EIDs.
+6. On success, `udma_dev->status = UDMA_NORMAL`.
+
+This means the warmup module has two useful facts immediately after
+`udma_init_eid_table()` returns success: local EIDs are known, and the UDMA
+workqueue already exists. The warmup should be scheduled at that point, before
+or just after `udma_dev->status = UDMA_NORMAL`, but it must not block probe.
+
+`udma_init_eid_table()` itself is a wrapper around
+`udma_query_eid_from_ctrl_cpu()`. That function:
+
+1. Builds a control-queue message with:
+   - opcode `UDMA_CTRLQ_GET_SEID_INFO`;
+   - service version `UBASE_CTRLQ_SER_VER_01`;
+   - service type `UBASE_CTRLQ_SER_TYPE_DEV_REGISTER`;
+   - `need_resp = 1`;
+   - payload command `UDMA_CMD_CTRLQ_QUERY_SEID` (`0xb5`).
+2. Sends the message through `ubase_ctrlq_send_msg()`, so this is a synchronous
+   control-queue query to the control CPU.
+3. Validates that returned `seid_num` does not exceed `UDMA_CTRLQ_SEID_NUM`.
+4. Takes `udma_dev->eid_mutex`.
+5. Iterates over returned EIDs.
+6. Validates each returned `eid_idx` against `SEID_TABLE_SIZE`.
+7. Calls `udma_add_one_eid()` for each entry.
+
+`udma_add_one_eid()`:
+
+1. Allocates a `struct udma_ctrlq_eid_info`.
+2. Copies the returned EID info.
+3. Stores it in `udma_dev->eid_table` with the EID index as the xarray key.
+4. For non-UE devices, registers the EID with UMMU through
+   `ummu_core_add_eid()`.
+5. Dispatches `UBCORE_MGMT_EVENT_EID_ADD` through ubcore.
+
+On partial failure, `udma_query_eid_from_ctrl_cpu()` rolls back entries already
+added in that call by invoking `udma_del_one_eid()` in reverse order, then
+returns the error. On init failure, `udma_init_dev()` unwinds ubcore
+registration, workqueue registration, event registration, and device creation.
+
+For first-TP mitigation, this matters because the earliest safe device-level
+warmup hook is:
+
+```c
+ret = udma_init_eid_table(udma_dev);
+if (ret)
+    goto err_init_eid;
+
+udma_tp_cache_schedule_device_warmup(udma_dev);
+udma_dev->status = UDMA_NORMAL;
+```
+
+The actual implementation can schedule the work before or after setting
+`UDMA_NORMAL`, but the work function must tolerate reset/remove racing it and
+must cancel/flush warmup in the reset and remove paths.
+
+### 3.3 Warmup Input
+
+The module needs a source of peer EIDs. If the host EIDs are known at module
+initialization, provide them through one of these mechanisms:
+
+- module parameter with a bounded peer-EID list for bring-up;
+- configfs/sysfs/debugfs write path for dynamic peer-EID updates;
+- UVS/topology callback when topology is set or changed;
+- static platform/firmware-provided host EID list if the deployment has one.
+
+Do not derive an all-to-all fabric matrix blindly unless the deployment is
+small. Warmup should be bounded by policy:
+
+- selected transport modes: RM/RC/UM as needed;
+- selected TP type flags: RTP/CTP/UTP/UBOE as needed;
+- local EID subset;
+- peer EID subset;
+- max concurrent control-queue requests;
+- retry/backoff budget.
+
+### 3.4 Warmup API
+
+Extend the proposed module with explicit warmup calls:
+
+```c
+int udma_tp_cache_warmup_pair(struct udma_dev *udev,
+                              const union ubcore_eid *local_eid,
+                              const union ubcore_eid *peer_eid,
+                              const struct udma_tp_warmup_policy *policy,
+                              u32 owner_key);
+
+int udma_tp_cache_schedule_warmup(struct udma_dev *udev,
+                                  const struct udma_tp_warmup_plan *plan);
+
+void udma_tp_cache_cancel_warmup(struct udma_dev *udev);
+```
+
+`owner_key` must be explicit. For device/EID warmup it can be
+`UDMA_DEFAULT_PID`. For context warmup it must be the same
+`current->tgid & UDMA_PID_MASK` value that normal userspace calls will send.
+
+### 3.5 Warmup Execution
+
+Warmup should run on a dedicated or existing UDMA workqueue, never inline in
+probe or context creation. Probe and context creation should enqueue work and
+return.
+
+Warmup flow for each key:
+
+1. Build the same cache key that a later `get_tp_list` call would build.
+2. Insert a `filling` cache entry before sending the control-queue request.
+3. Call the existing slow path once.
+4. Store the successful response in the cache and in `ctrlq_tpid_table`.
+5. Complete waiters.
+6. On failure, complete waiters with the same error and remove the failed
+   entry.
+
+This means if the application races with warmup, the application waits on the
+in-flight warmup entry instead of sending a duplicate control-queue request.
+
+### 3.6 Owner-Semantics Decision
+
+Before relying on module-init warmup for userspace latency, verify what the
+MUE/management side does with `tp_cfg_req.flag`.
+
+Possible outcomes:
+
+- **Flag is only a hint or default namespace.** Device/EID warmup with
+  `UDMA_DEFAULT_PID` can populate real TP resources, and later process-specific
+  calls can reuse them after cache-key policy is relaxed with proof.
+- **Flag is process ownership.** Device/EID warmup helps only kernel/default
+  owner users. Userspace first-call mitigation must happen at context creation
+  or requires a firmware/API extension to precreate for a specified owner.
+- **Flag selects isolation and resource accounting.** Keep PID in the cache key
+  and never reuse module-init entries for userspace. Use context warmup as the
+  production path.
+
+Until proven otherwise, assume process ownership and keep the cache key strict.
+
+### 3.7 Firmware/API Extension Option
+
+If the requirement is strict "create all first TP lists during module
+initialization for future userspace processes," the current API may be
+insufficient because the owner is implicit in `current`. The clean extension is
+one of:
+
+- add a kernel-internal precreate command that carries an explicit owner key;
+- add a shared/global TP-list owner namespace supported by the management side;
+- add a userspace/admin prewarm API that runs under the target process or under
+  an explicitly selected owner namespace.
+
+Without one of these, module-init prewarming can only safely precreate default
+owner TP lists.
+
+---
+
+## 4. Module Boundary
 
 Implement this as a source module inside the kernel UDMA provider, not as a
 separate loadable Linux module.
@@ -102,6 +333,8 @@ Integration points:
 - Destroy it during UDMA device teardown/reset cleanup.
 - Replace the direct call inside `udma_get_tp_list()` with
   `udma_tp_cache_get_or_fetch()`.
+- Schedule optional device/EID warmup after `udma_init_eid_table()` succeeds.
+- Schedule optional context/PID warmup when a userspace context is created.
 - Add invalidation hooks where TPID state is removed, deactivated, or replaced.
 
 Keep the current slow path intact. The cache module should call the existing
@@ -110,7 +343,7 @@ or control-queue logic.
 
 ---
 
-## 4. Cache Key
+## 5. Cache Key
 
 The key must be conservative. It should include every field that can change the
 returned TP list:
@@ -146,7 +379,7 @@ cache comparison matches what the management side actually receives.
 
 ---
 
-## 5. Cache Value
+## 6. Cache Value
 
 Store the complete successful response, not just one TP handle:
 
@@ -171,7 +404,7 @@ caller's capacity.
 
 ---
 
-## 6. Lookup And Single-Flight
+## 7. Lookup And Single-Flight
 
 Use a hash table protected by a mutex. A mutex is acceptable because the miss
 path may allocate and because `get_tp_list` already may sleep in the control
@@ -195,7 +428,7 @@ EID, peer EID)` tuple from sending N control-queue messages.
 
 ---
 
-## 7. Freshness And Invalidation
+## 8. Freshness And Invalidation
 
 Correctness is more important than hit rate. Use both explicit invalidation and
 a short TTL.
@@ -206,11 +439,15 @@ Configuration:
 udma_tp_cache_enable=0|1
 udma_tp_cache_ttl_ms=<milliseconds>
 udma_tp_cache_max_entries=<count>
+udma_tp_warmup_enable=0|1
+udma_tp_warmup_mode=device,context,both
+udma_tp_warmup_max_inflight=<count>
 ```
 
 Recommended rollout defaults:
 
 - First patch: disabled by default, TTL 1000 ms when enabled.
+- Warmup disabled by default until owner semantics are validated.
 - After validation: enable by default only if TP lifecycle tests pass under
   create/import/bind/deactivate/reset stress.
 
@@ -231,7 +468,7 @@ TTL rule:
 
 ---
 
-## 8. Public Internal API
+## 9. Public Internal API
 
 Header sketch:
 
@@ -247,6 +484,10 @@ int udma_tp_cache_get_or_fetch(struct udma_dev *udev,
 void udma_tp_cache_invalidate_tpid(struct udma_dev *udev, u32 tpid);
 void udma_tp_cache_flush(struct udma_dev *udev);
 void udma_tp_cache_flush_pid(struct udma_dev *udev, u32 pid_key);
+
+int udma_tp_cache_schedule_device_warmup(struct udma_dev *udev);
+int udma_tp_cache_schedule_context_warmup(struct udma_dev *udev, u32 pid_key);
+void udma_tp_cache_cancel_warmup(struct udma_dev *udev);
 ```
 
 `udma_tp_cache_get_or_fetch()` should return the same error codes as the
@@ -254,7 +495,7 @@ current `udma_get_tp_list()` implementation.
 
 ---
 
-## 9. Integration Detail In `udma_get_tp_list`
+## 10. Integration Detail In `udma_get_tp_list`
 
 Current shape:
 
@@ -290,7 +531,7 @@ If a cached response contains TPIDs already present in `ctrlq_tpid_table`,
 
 ---
 
-## 10. Observability
+## 11. Observability
 
 Add counters to `struct udma_tp_cache`:
 
@@ -306,6 +547,12 @@ Add counters to `struct udma_tp_cache`:
 - `flush_cnt`
 - `ctrlq_fetch_cnt`
 - `ctrlq_fetch_error_cnt`
+- `warmup_queued_cnt`
+- `warmup_started_cnt`
+- `warmup_success_cnt`
+- `warmup_error_cnt`
+- `warmup_cancel_cnt`
+- `warmup_race_wait_cnt`
 
 Expose counters through the existing UDMA debug surface if available. If there
 is no suitable debugfs/sysfs surface, start with rate-limited debug logs gated
@@ -322,7 +569,7 @@ number of application-level `urma_get_tp_list()` calls.
 
 ---
 
-## 11. Test Plan
+## 12. Test Plan
 
 Unit/KUnit tests for cache logic:
 
@@ -336,6 +583,12 @@ Unit/KUnit tests for cache logic:
 
 Functional tests:
 
+- Device/EID warmup with known local/peer EIDs: verify the first later
+  `get_tp_list` for `UDMA_DEFAULT_PID` is a cache hit.
+- Context/PID warmup: create context, wait for warmup completion, then verify
+  the first userspace `get_tp_list` is a cache hit for that process key.
+- Race test: start userspace `get_tp_list` while warmup for the same key is in
+  flight; verify only one control-queue fetch is sent.
 - Existing `urma_perftest` without `tp_reuse`: verify repeated identical
   calls hit cache after the first call.
 - Existing `urma_perftest` with `tp_reuse`: verify behavior is unchanged.
@@ -344,12 +597,17 @@ Functional tests:
 - Different peer EIDs: verify distinct misses and no cross-contamination.
 - Different PID/processes: verify entries do not leak across process identity
   unless explicitly intended.
+- Module-init warmup versus userspace PID: verify whether `UDMA_DEFAULT_PID`
+  warmed entries can actually satisfy process-keyed calls. Keep strict
+  isolation if not.
 - Deactivate/remove TP then re-query: verify stale TPIDs are not returned.
 - Device reset or UDMA teardown: verify cache is empty afterward.
 
 Performance tests:
 
 - Measure per-call latency around userspace `urma_get_tp_list()`.
+- Measure first-call latency with no mitigation, with cache only, with
+  device/EID warmup, and with context/PID warmup.
 - Measure kernel time spent in `ubase_ctrlq_send_msg()`.
 - Record hit/miss counters.
 - Compare `jetty_num = 1, 8, 64, 128` with and without cache.
@@ -365,7 +623,7 @@ Failure tests:
 
 ---
 
-## 12. Rollout
+## 13. Rollout
 
 Phase 1: instrumentation only
 
@@ -378,19 +636,26 @@ Phase 2: cache module behind disabled-by-default parameter
 - Keep cache disabled by default.
 - Validate correctness and benchmark locally.
 
-Phase 3: enable for selected tests
+Phase 3: warmup behind disabled-by-default parameter
+
+- Add device/EID warmup after EID table initialization.
+- Add context/PID warmup when userspace owner identity is known.
+- Validate owner semantics of `tp_cfg_req.flag`.
+
+Phase 4: enable for selected tests
 
 - Enable cache for perftest and known repeated-query workloads.
+- Enable warmup for deployments with known peer EIDs.
 - Collect hit rate and latency data.
 
-Phase 4: broader default
+Phase 5: broader default
 
 - Consider enabling by default only after reset, deactivate, migration, and
   process-isolation tests pass.
 
 ---
 
-## 13. Risks
+## 14. Risks
 
 Stale TP handles are the primary risk. A stale TPID can cause later TP attr or
 activation operations to target a TP that has been removed or repurposed. The
@@ -401,6 +666,16 @@ the cache key must include the same value. Sharing cached TP lists across
 processes is not safe without proof that the management side treats them as
 process-independent.
 
+Module-init warmup can create the wrong owner namespace if the management side
+uses `tp_cfg_req.flag` for process ownership. In that case, it will make
+kernel/default-owner calls faster but will not remove first-call latency for
+normal userspace. Context/PID warmup or an explicit-owner firmware command is
+required for that case.
+
+Warmup can create unnecessary TP resources. Bound it by peer-EID policy,
+transport mode, max in-flight requests, and TTL. Add a cancel path on EID
+removal and device reset.
+
 RM shared-TP logic has a separate busy-wait path in
 `ubcore_connect_adapter.c`. This module reduces repeated provider-level
 control-queue calls, but it does not fix that spin wait. If profiles still show
@@ -409,10 +684,12 @@ patch.
 
 ---
 
-## 14. Acceptance Criteria
+## 15. Acceptance Criteria
 
 The module is acceptable when:
 
+- With known peer EIDs and enabled warmup, the first application-visible
+  `get_tp_list` for a warmed key avoids sending a new control-queue request.
 - A repeated identical `get_tp_list` workload sends one control-queue request
   per fresh key per TTL window, not one request per API call.
 - Public URMA behavior and return codes remain compatible.
