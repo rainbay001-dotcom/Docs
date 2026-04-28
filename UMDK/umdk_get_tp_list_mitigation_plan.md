@@ -238,7 +238,152 @@ small. Warmup should be bounded by policy:
 - max concurrent control-queue requests;
 - retry/backoff budget.
 
-### 3.4 Warmup API
+### 3.4 Peer EIDs From UVS / UBSE Topology
+
+For topology-driven warmup, peer EIDs should come from the UVS/ubcore topology
+map rather than from `udma_init_eid_table()`. `udma_init_eid_table()` only
+installs local SEIDs. The peer side is known after an external topology source
+has populated UVS/ubcore.
+
+The apparent UBSE path is:
+
+```text
+UBSE / topology producer
+  -> uvs_set_topo_info(topo_buf, node_size, node_num)
+  -> uvs_ubagg_ioctl_set_topo()
+  -> uvs_ubcore_ioctl_set_topo()
+  -> ubcore_cmd_set_topo()
+  -> g_ubcore_topo_map
+```
+
+The local repo does not contain a UBSE implementation. The evidence that UBSE
+is the upstream topology producer is the size check in `uvs_set_topo_info()`:
+
+```c
+uint32_t size = sizeof(struct urma_topo_node);
+
+if (size != node_size) {
+    TPSA_LOG_ERR("node size not match, urma=%u, ubse=%u\n", size, node_size);
+    return -EINVAL;
+}
+```
+
+`uvs_set_topo_info_inner()` writes the same topology into both ubagg and ubcore:
+
+```text
+uvs_ubagg_ioctl_set_topo(topo, topo_num)
+uvs_ubcore_ioctl_set_topo(topo, topo_num)
+```
+
+The topology node carries the EID material needed for warmup:
+
+```c
+struct urma_topo_ue {
+    uint32_t chip_id;
+    uint32_t die_id;
+    uint32_t entity_id;
+    char primary_eid[EID_LEN];
+    char port_eid[PORT_NUM][EID_LEN];
+};
+
+struct urma_topo_agg_dev {
+    char agg_eid[EID_LEN];
+    struct urma_topo_ue ues[IODIE_NUM];
+};
+
+struct urma_topo_node {
+    uint32_t type;
+    uint32_t super_node_id;
+    uint32_t node_id;
+    uint32_t is_current;
+    struct urma_topo_link links[IODIE_NUM][PORT_NUM];
+    struct urma_topo_agg_dev agg_devs[DEV_NUM];
+};
+```
+
+The warmup module should not pair raw EIDs by scanning this topology itself
+unless it exactly duplicates ubcore route logic. Prefer the existing route
+helpers, because they convert bonding/aggregate EIDs into correctly paired
+primary and port EIDs.
+
+Userspace model:
+
+```c
+uvs_route_t route = {
+    .src = local_agg_eid,
+    .dst = peer_agg_eid,
+};
+uvs_route_list_t routes = {0};
+
+ret = uvs_get_route_list(&route, &routes);
+if (ret == 0) {
+    for (uint32_t i = 0; i < routes.len; i++) {
+        local_eid = routes.buf[i].src;
+        peer_eid = routes.buf[i].dst;
+    }
+}
+```
+
+Kernel-side model:
+
+```c
+struct ubcore_route route = {
+    .src = local_agg_eid,
+    .dst = peer_agg_eid,
+};
+struct ubcore_route_list routes = {0};
+
+ret = ubcore_get_route_list(&route, &routes);
+if (ret == 0) {
+    for (uint32_t i = 0; i < routes.route_num; i++) {
+        get_tp_cfg.local_eid = routes.buf[i].src;
+        get_tp_cfg.peer_eid = routes.buf[i].dst;
+        /* schedule warmup for this pair */
+    }
+}
+```
+
+`ubcore_get_route_list()` first appends primary-EID pairs, then appends port-EID
+pairs using topology links. For a cross-node direct route, the port pair comes
+from the source port link:
+
+```text
+src = src_agg_dev->ues[iodie_id].port_eid[port_id]
+dst = dst_agg_dev->ues[iodie_id].port_eid[peer_port_id]
+```
+
+For path-aware warmup, `uvs_get_path_set()` / `ubcore_get_path_set()` return a
+path set whose entries already contain `src_eid` and `dst_eid`:
+
+```c
+struct ubcore_path {
+    union ubcore_port_id src_port;
+    union ubcore_port_id dst_port;
+    union ubcore_eid src_eid;
+    union ubcore_eid dst_eid;
+};
+```
+
+Use route-list output for basic `(local_eid, peer_eid)` warmup. Use path-set
+output only when the warmup policy needs per-path port selection, multipath
+behavior, or topology-specific filtering.
+
+Practical warmup source sequence:
+
+1. Wait until `ubcore_cmd_set_topo()` has created or updated
+   `g_ubcore_topo_map`.
+2. Identify the current/local aggregate EID from topology or device policy.
+3. Enumerate peer aggregate EIDs from topology nodes where `is_current == 0`,
+   or from a UBSE/admin-provided peer subset.
+4. For each `(local_agg_eid, peer_agg_eid)`, call `ubcore_get_route_list()`.
+5. Schedule warmup for each returned physical/primary/port EID pair.
+6. Re-run or invalidate warmup when topology is updated.
+
+If the warmup code lives inside UDMA, it should consume a peer aggregate-EID
+list delivered by an admin/topology integration path, then call the kernel
+ubcore route helpers. It should not call the userspace UVS APIs directly.
+
+### 3.5 Warmup API
 
 Extend the proposed module with explicit warmup calls:
 
@@ -259,7 +404,7 @@ void udma_tp_cache_cancel_warmup(struct udma_dev *udev);
 `UDMA_DEFAULT_PID`. For context warmup it must be the same
 `current->tgid & UDMA_PID_MASK` value that normal userspace calls will send.
 
-### 3.5 Warmup Execution
+### 3.6 Warmup Execution
 
 Warmup should run on a dedicated or existing UDMA workqueue, never inline in
 probe or context creation. Probe and context creation should enqueue work and
@@ -278,7 +423,7 @@ Warmup flow for each key:
 This means if the application races with warmup, the application waits on the
 in-flight warmup entry instead of sending a duplicate control-queue request.
 
-### 3.6 Owner-Semantics Decision
+### 3.7 Owner-Semantics Decision
 
 Before relying on module-init warmup for userspace latency, verify what the
 MUE/management side does with `tp_cfg_req.flag`.
@@ -297,7 +442,7 @@ Possible outcomes:
 
 Until proven otherwise, assume process ownership and keep the cache key strict.
 
-### 3.7 Firmware/API Extension Option
+### 3.8 Firmware/API Extension Option
 
 If the requirement is strict "create all first TP lists during module
 initialization for future userspace processes," the current API may be
