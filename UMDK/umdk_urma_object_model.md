@@ -163,6 +163,8 @@ RC mode would fail this share — each jetty would need its own TP.
 
 Other RM-only privileges: shared JFR (`shared.jfr->jfr_cfg.trans_mode != URMA_TM_RM` is rejected), out-of-order completion semantics, the `urma_advise_jetty` API surface itself.
 
+For a code-level breakdown of every place RM and RC differ in the source — the per-WR destination addressing line, the API-surface partition, the object-composition restrictions, the bonding fast-paths — see [`umdk_urma_rm_vs_rc_code_level.md`](umdk_urma_rm_vs_rc_code_level.md).
+
 ### Trans-mode × TP-variant legality
 
 Cross-check the constraint at `urma_cp_api.c`:
