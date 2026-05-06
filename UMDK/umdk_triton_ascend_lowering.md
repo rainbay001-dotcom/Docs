@@ -375,7 +375,126 @@ For our purposes, the externally-visible picture stops at: `.text` is 740 bytes 
 - Hello-world sources used here: `/home/Ray/triton_hello/` on 192.168.25.218
 - Companion: [`umdk_get_tp_list_prewarm.md`](umdk_get_tp_list_prewarm.md) (different topic — UDMA cache — but same Ascend hardware family)
 
-## 11. Useful Triton-Ascend env vars
+## 11. msdebug + camodel: how far you can actually push disassembly
+
+Beyond the BiSheng `llvm-objdump` path, two more tools are worth knowing about. Neither restores public mnemonic decoding, but together they expose a lot of structure.
+
+### msdebug — Ascend's LLDB fork
+
+`/usr/local/Ascend/cann-8.5.0/tools/msdebug/bin/msdebug` is a complete LLDB 15.0.4 build (revision `0517a29`, vendor branch `mindstudio/msdebug`). Branding:
+
+> "msdebug (MindStudio Debugger) is part of MindStudio Operator-dev Tools.
+> The tool provides developers with a mechanism for debugging Ascend kernels running on actual hardware.
+> This enables developers to debug Ascend kernels without being affected by potential changes brought by simulation and emulation environments."
+
+The architecture name in msdebug's view of the binary: **`hiipu64`** (recognized by LLDB's loader). When you run:
+
+```
+msdebug -b -o "target create $BIN" -o "disassemble --bytes --name add_kernel" -o "quit"
+```
+
+…you get per-PC instruction words like:
+
+```
+add_kernel.npubin`add_kernel__:
+add_kernel.npubin[0x0] <+0>:   0x073a7f80          ← __CCE_KernelArgSize data (4 B)
+add_kernel.npubin`add_kernel$local:
+add_kernel.npubin[0x4] <+4>:   0x077b0010          ← real instructions start here
+add_kernel.npubin[0x8] <+8>:   0x029e3880
+add_kernel.npubin[0xc] <+12>:  0x003bd781
+add_kernel.npubin[0x10] <+16>: 0x021f0880
+...
+```
+
+The mnemonic column stays empty (decoder gated identically to `llvm-objdump`). But this *does* establish the encoding cleanly.
+
+### Encoding observations from the 185-instruction listing
+
+- **Fixed 32-bit instruction width.** Every PC in the disassembly is +4. No variable-length, no wide VLIW bundles in the public symbol view.
+- **Little-endian in memory.** The on-disk hex `80 7f 3a 07` decodes to LLDB's `0x073a7f80`.
+- **Total**: 740 B `.text` / 4 = exactly **185 instructions**. None of the 740 bytes are slack.
+- **High-nibble (opcode group) frequency** across all 185 instructions:
+
+  | High nibble | Count | % |
+  | --- | ---: | ---: |
+  | `0x0` | 96 | 52% |
+  | `0x8` | 44 | 24% |
+  | `0x1` | 16 | 8.6% |
+  | `0x2` | 6 | 3.2% |
+  | `0x3` | 6 | 3.2% |
+  | `0xf` | 5 | 2.7% |
+  | `0xe` | 3 | 1.6% |
+  | `0xc` | 3 | 1.6% |
+  | `0x7` | 3 | 1.6% |
+  | `0xa` | 2 | 1.1% |
+  | `0x4` | 1 | 0.5% |
+
+  Strongly bimodal — the `0x0` and `0x8` groups together account for 76% of all instructions. Likely opcode-in-high-bits encoding with the dominant ALU/memory groups in 0x0 and 0x8.
+
+### Cycle-Accurate Model (camodel) for Ascend910_9362
+
+CANN ships a full CA-model simulator library set for our exact target:
+
+```
+/usr/local/Ascend/cann-8.5.0/aarch64-linux/simulator/Ascend910_9362/
+├── config.json           L2 cache / log config (latencies, line size)
+├── config_hwts.json
+├── config_stars.json
+├── conf/
+└── lib/
+    ├── libruntime_camodel.so      ← cycle-accurate runtime drop-in
+    ├── libruntime_cmodel.so       ← functional (faster) model
+    ├── libnpu_drv_camodel.so
+    ├── libnpu_drv_pvmodel.so
+    ├── libtsch_camodel.so
+    ├── libffts_model.so
+    ├── libmodel_top.so / libmodel_top_pv.so
+    ├── libstars.so / libstars_pv.so
+    └── libpem_davinci.so          ← PEM = Power & Energy Model
+```
+
+`config.json` reveals the modeled L2:
+
+```json
+"L2CACHE": {
+    "cache_set_size": 24,
+    "cache_way_size": 16384,
+    "cache_line_size": 512,
+    "cache_read_latency": 241,
+    "cache_write_latency": 96
+}
+```
+
+**Activation experiment.** Prepending `simulator/Ascend910_9362/lib` to `LD_LIBRARY_PATH` and re-running the kernel completes successfully, but the runtime logs (`ASCEND_GLOBAL_LOG_LEVEL=1 ASCEND_SLOG_PRINT_TO_STDOUT=1`) show `DeviceClose: Close device success, device_id=0` — i.e., the real driver was used, not camodel. The simulator libraries are present but `LD_LIBRARY_PATH` alone doesn't redirect runtime selection. To actually invoke the camodel runtime needs:
+
+1. A specific launch path (likely Mind Studio's Operator-dev Tools wrapper, or a CMake `-DASCEND_PLATFORM=SIMULATOR` build flag); or
+2. An undocumented runtime-selector env var (the visible `ASCEND_*` env vars in `npu_executor_main` strings don't include a camodel switch); or
+3. Modify the loader's resolution order via `/etc/ld.so.conf.d/` to win over the regular driver.
+
+We did not crack the activation env this session. The Python `op_gen.simulator.simulator` module is a *post-hoc parser* that ingests dumps the camodel runtime would emit; without the runtime running, there's no dump to parse.
+
+The internal `op_gen.simulator.RelocParser._executable2obj` does:
+
+```python
+cmd = ["llvm-objdump", "--save-aicore-bins", self.relocatable_file]
+```
+
+Which produces the same `<not available>` listing we see — meaning Mind Studio's pipeline relies on the camodel runtime emitting *separate* dump files (which our Triton-Ascend run did not produce because we ran on real hardware), not on the LLVM disassembler.
+
+### What this means for the doc's earlier claim
+
+§6 (above) said disassembly is "gated everywhere we look." That's still accurate for **mnemonics**. But this section adds the structural picture:
+
+- Architecture identifier: **`hiipu64`** (per msdebug's LLDB target loader).
+- Encoding: **fixed 32-bit, little-endian, 4-byte aligned**.
+- Total instruction count: **185** for our vector_add.
+- Opcode-group frequency: dominated by `0x0_` (52%) and `0x8_` (24%) high-nibble groups.
+- Per-PC instruction words: extractable via `msdebug -b -o "disassemble --bytes ..."`.
+- L2 cache parameters of the modeled hardware: 24 sets × 16384 ways × 512 B lines, ~241 cycles read latency, ~96 cycles write latency.
+
+For people doing performance work, those L2 parameters alone are useful — they're the simulated values the codegen targets.
+
+## 12. Useful Triton-Ascend env vars
 
 ```bash
 TRITON_DUMP_DIR=/path           # dumps .ttir.mlir + .ttadapter.mlir
