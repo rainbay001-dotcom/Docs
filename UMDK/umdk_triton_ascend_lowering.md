@@ -494,7 +494,137 @@ Which produces the same `<not available>` listing we see — meaning Mind Studio
 
 For people doing performance work, those L2 parameters alone are useful — they're the simulated values the codegen targets.
 
-## 12. Useful Triton-Ascend env vars
+## 12. Cycle profiling
+
+Two ways to get cycles for a Triton-Ascend kernel: real-device profiling via `msprof` (works today, what we used), and CA-model simulation via `LD_PRELOAD`-activated camodel runtime (also works once you know the trick).
+
+### 12.1 Real-device profiling with `msprof`
+
+Concrete command (no Triton changes needed; just wrap the python invocation):
+
+```bash
+mkdir -p /home/Ray/triton_hello/msprof_out
+/usr/local/Ascend/cann-8.5.0/aarch64-linux/bin/msprof \
+    --output=/home/Ray/triton_hello/msprof_out \
+    --application="python /home/Ray/triton_hello/vector_add.py" \
+    --aic-metrics=PipeUtilization \
+    --aicpu=on
+```
+
+Caveat encountered: `msprof` itself fails to start with `libc_sec.so: cannot open shared object file` unless the driver lib paths are on `LD_LIBRARY_PATH`. Use the same `~/.bashrc` block from the NPU server memory:
+
+```bash
+export LD_LIBRARY_PATH="/usr/local/Ascend/driver/lib64/common:/usr/local/Ascend/driver/lib64/driver:/usr/local/Ascend/driver/lib64${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+```
+
+End-to-end run takes ~2 minutes. The output goes to `msprof_out/PROF_000001_<timestamp>_<random>/` with three subtrees: `host/`, `device_0/`, and `mindstudio_profiler_output/`. The most useful files:
+
+```
+mindstudio_profiler_output/
+├── op_summary_<ts>.csv      ← per-task cycles + per-pipeline breakdown
+├── op_statistic_<ts>.csv    ← per-op-type aggregate
+├── api_statistic_<ts>.csv   ← host-side API timings
+├── task_time_<ts>.csv       ← raw timeline
+└── msprof_<ts>.json         ← Mind Studio Insight format
+
+device_0/sqlite/
+├── ai_core_op_summary.db    ← same data, queryable as SQL
+├── ascend_task.db
+├── time.db
+├── op_counter.db
+├── biu_perf.db              ← BIU = Bus Interface Unit perf counters
+├── freq.db                  ← AICore frequency over time
+└── metric_summary.db
+```
+
+### 12.2 What `add_kernel` actually cost
+
+From `op_summary_<ts>.csv`, here's the row for our Triton-compiled `add_kernel`:
+
+| Field | Value |
+| --- | --- |
+| Op Name / OP Type | `add_kernel` / `add_kernel` |
+| OP State | static |
+| Task Type | **AI_VECTOR_CORE** (matches `mix_mode = "aiv"` in the metadata) |
+| Block Dim | 8 (our `triton.cdiv(1024, 128) = 8`) |
+| Mix Block Dim | 0 (no AI Cube use) |
+| HF32 Eligible | YES |
+| Input Shapes | 1024;1024 (FLOAT;FLOAT) |
+| Output Shape | 1024 (FLOAT) |
+| **Task Duration** | **3.360 µs** |
+| Task Wait Time | 12,223,361.58 µs (waiting for issue) |
+| **aicore_time** | 0.0 µs (didn't use AI Cube) |
+| aic_total_cycles | 0 |
+| **aiv_time** | **1.978 µs** (AI Vector core) |
+| **aiv_total_cycles** | **12,658** |
+| aiv_vec_time / ratio | 0.049 µs / 0.025 (2.5% — actual vector ops) |
+| aiv_scalar_time / ratio | 0.315 µs / 0.159 (15.9% scalar) |
+| aiv_mte2_time / ratio | 0.173 µs / 0.088 (8.8% — DRAM load) |
+| aiv_mte3_time / ratio | 0.183 µs / 0.092 (9.2% — DRAM store) |
+| aiv_icache_miss_rate | 0.235 (23.5% — first-run cold I-cache) |
+| cube_utilization(%) | 0.000 |
+
+**Headline: 12,658 AIV cycles, 1.978 µs of AI Vector time, 3.36 µs total task duration.**
+
+The pipeline-utilization ratios add up to ~36.4% — the remaining ~63% is dispatch/sync/idle. Expected for such a small kernel: 1024 elements × 4 bytes = 4 KB of data, split across 8 blocks of 128 elements each, with cold I-cache on the first invocation. A bigger N or a hot run would shift the ratios toward MTE2/MTE3.
+
+Cube utilization is 0 (we never touched the cube unit). MTE1 and fixpipe are also zero.
+
+### 12.3 Op-statistic comparison across the test run
+
+```csv
+OP Type,Core Type,Count,Total(us),Avg(us),Ratio(%)
+Range,        AI_VECTOR_CORE,1,12.16, 12.16, 50.000   ← torch.arange(n=1024)
+add_kernel,   AI_VECTOR_CORE,1, 3.36,  3.36, 13.816   ← our Triton kernel
+ReduceMax,    MIX_AIV,       1, 2.74,  2.74, 11.266   ← .abs().max()
+Add,          AI_VECTOR_CORE,1, 1.80,  1.80,  7.401   ← (out - (x+y))
+Abs,          AI_VECTOR_CORE,1, 1.42,  1.42,  5.839   ← .abs()
+Fill,         AI_VECTOR_CORE,1, 1.42,  1.42,  5.839   ← torch.full(10.0)
+Sub,          AI_VECTOR_CORE,1, 1.42,  1.42,  5.839   ← (out - (x+y))
+```
+
+`add_kernel` is 13.8% of total kernel time on this run; `Range` (the `torch.arange(1024, device="npu")` call) dominates at 50%. That's a useful baseline — for tiny kernels, surrounding torch ops can dwarf the kernel itself.
+
+### 12.4 Cycle-Accurate Model (camodel) activation — found
+
+The activation env we missed in §11: **`LD_PRELOAD=$SIM_LIB/libruntime_camodel.so`**, *not* just `LD_LIBRARY_PATH`.
+
+```bash
+SIM_LIB=/usr/local/Ascend/cann-8.5.0/aarch64-linux/simulator/Ascend910_9362/lib
+export CAMODEL_CONFIG_PATH=$SIM_LIB
+export LD_LIBRARY_PATH=$SIM_LIB:$LD_LIBRARY_PATH
+export LD_PRELOAD=$SIM_LIB/libruntime_camodel.so       # ← this is what flips the runtime
+```
+
+Confirmed via the camodel's own startup logs — once `LD_PRELOAD` is set, the camodel's loader prints:
+
+```
+[INFO] Config file [config_stars.json] from environment variable [CAMODEL_CONFIG_PATH].
+       Path: /usr/local/Ascend/cann-8.5.0/aarch64-linux/simulator/Ascend910B1/lib/config_stars.json
+[INFO] Config file is found, path is .../Ascend910B1/lib/config_stars.json.
+[FuncCache]: size:0x20000, line_size:128, way_num:16, line_num:1024, idx_num:64
+[TmSim]: Run in serial mode.
+[INFO] AicWrapper attach AIC 0, num_vec_core=2, num_subcore=3
+[INFO] AicWrapper attach AIC 1, num_vec_core=2, num_subcore=3
+... (attaches AIC 0 through AIC 21 — 22 simulated AI Cores)
+```
+
+Two surprises:
+- **Even with `CAMODEL_CONFIG_PATH` pointing at `Ascend910_9362/lib`, the runtime preferred `Ascend910B1/lib/config_stars.json`.** Likely the camodel runtime has its own platform-detection logic that picked 910B1 as the closest available config. To force 910_9362, you may need a more specific runtime selector or to symlink/copy 9362 configs over 910B1.
+- **22 AI Cores attached** — that's the simulated topology for 910B1, not your physical 16. Indicates the camodel is faithful to the model variant's spec, not the physical chip.
+
+`[FuncCache]` line: instruction cache is 0x20000 = **128 KB total**, 16-way, 128 B lines, 1024 lines, 64 sets per way. That's the I-cache configuration our 23.5% miss rate was measured against.
+
+### 12.5 Camodel timing caveat
+
+Camodel is a cycle-accurate simulator — even `vector_add` of n=1024 takes substantially longer than real-hardware execution. With a 60s timeout the test didn't complete (cut off mid-init while attaching cores). For real cycle-accurate runs, budget several minutes per kernel. That's why msprof on real hardware is the practical path for everyday cycle data; camodel is for when you need cycle counts on hardware you don't have, or want to model a different chip variant.
+
+If you need a successful camodel end-to-end run with dump output, expect to:
+1. Set the env (CAMODEL_CONFIG_PATH + LD_PRELOAD) as above.
+2. Allow ≥5 minutes wall-clock per simple kernel.
+3. Look for dump output in the working directory (the camodel writes per-AIC dumps that `op_gen.simulator.simulator -d <dump-dir> -reloc <kernel.npubin>` then parses into per-instruction execution traces).
+
+## 13. Useful Triton-Ascend env vars
 
 ```bash
 TRITON_DUMP_DIR=/path           # dumps .ttir.mlir + .ttadapter.mlir
