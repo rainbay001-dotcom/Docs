@@ -305,11 +305,13 @@ Ascend does not ship a public AICore disassembler. Here's what's in the toolkit 
 | Stock binutils `objdump -d` | — | "can't disassemble for architecture UNKNOWN!" |
 | Stock binutils `readelf -SW` / `-s` / `-x .text` | Section/symbol/hex dump | ✅ Works fine |
 
-The HiIPU decoder lives only inside Ascend's internal Mind Studio plugins (not the publicly-shipped CANN binaries). To get mnemonic disassembly you'd need:
+The HiIPU decoder lives only inside Ascend's internal Mind Studio plugins (not the publicly-shipped CANN binaries). To get mnemonic disassembly via the static-decoder path you'd need:
 1. Mind Studio installed (with the simulator/profiler plugin).
 2. Or reverse-engineer the encoding (substantial effort; AICore is a proprietary VLIW-style ISA).
 
-For our purposes, the externally-visible picture stops at: `.text` is 740 bytes of machine code emitted by BiSheng + LLD, structured as one global function `add_kernel`.
+**Indirect-disassembly path that DOES work today:** run the kernel under camodel and post-parse the per-core trace dumps with `msopgen sim`. You get mnemonic + operand state + per-pipeline cycle annotations on every instruction the kernel actually executed. See [`disassembly_via_camodel.md`](disassembly_via_camodel.md). Limitation: only executed instructions appear (untaken branches stay invisible until you re-run with different inputs).
+
+For static-binary inspection without running, the externally-visible picture stops at: `.text` is 740 bytes of machine code emitted by BiSheng + LLD, structured as one global function `add_kernel`.
 
 ### Side path: emitting AICore assembly directly via `ccec`
 
