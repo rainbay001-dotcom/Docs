@@ -95,6 +95,8 @@ The headline §3 / §4 numbers blur control ops, mask helpers, and actual comput
 
 The cast version uses **fewer vector instructions** (43 fewer ops, 43 fewer unique PCs in the binary) but the cycle savings are modest (−264 cyc out of ~8.6K).
 
+> **Why does the cast version have 43 fewer vector instructions even though i32 is 32× wider than bool?** Because 910B1/910_9362 have no dedicated predicate registers — bool data is packed in regular vector registers and needs `MOVEMASK`/`MOVEVA`/`VNCHWCONV` shuffles to bridge layout mismatches between compare, logic-op, and store. The cast widens to native lane width and skips all that shuffle. See §4.7 for the architectural background and how A5's `PAND`/predicate-register model differs.
+
 ### 4.5.2 Per-mnemonic VECTOR-pipe diff
 
 | Mnemonic | bool n × cyc (avg) | cast n × cyc (avg) | Δ cyc | What it does |
@@ -280,6 +282,83 @@ What I'm guessing:
 
 The way to get strict confirmation: re-run with `msopgen sim -reloc <kernel.npubin>`. That triggers `llvm-objdump --save-aicore-bins` which is decoder-gated, so we can't actually do this on shipped CANN-8.5.0. The mapping above is the closest you get without an internal Huawei build.
 
+## 4.7 Architectural context — why bool needs MOVEMASK/MOVEVA/VNCHWCONV on 910B1, but uses PAND on A5
+
+The expensive shuffle work (`VNCHWCONV` × 8, `MOVEVA` × 64, `MOV_UB_TO_UB` × 1) the bool path emits — and which the cast path eliminates — exists because of a fundamental architectural difference between AICore generations.
+
+### 4.7.1 Two architectural styles for bool/predicate
+
+**A5 (newer Ascend gen)** has **dedicated predicate registers** (`P0`, `P1`, …) and predicate-specific instructions: `PAND`, `POR`, `PNOT`, masked vector ops, `VSEL` driven by a predicate input. A vector compare can directly write a predicate (`VCMP X1, X2 → P0`), and predicate ALU is hardware-native — same model as ARM SVE / x86 AVX-512 mask registers.
+
+**910B1 / 910_9362 (current AICore, what camodel runs on)** has **no dedicated predicate registers**. Bool/mask data lives in regular wide vector registers, packed as bits. All bool logic uses **generic vector ALU instructions** with `Dtype:B16` semantics ("treat-this-register-as-packed-bools"). Format conversions are needed when the layout mismatches between consecutive ops.
+
+### 4.7.2 What we see in our 910B1 camodel trace
+
+Direct evidence from the bool-path trace's VECTOR pipe:
+
+```
+0x10d1142c  VCMPV  F16  Dtype:F16   ← compare result lands in regular vector register (X5)
+                                       as bit-packed bools, not in a predicate register
+0x10d11648  VOR    B16  Dtype:B16   ← bitwise OR on packed-bool data
+0x10d1166c  VAND   B16  Dtype:B16   ← bitwise AND on packed-bool data
+0x10d11614  VNOT   B16  Dtype:B16   ← bitwise NOT on packed-bool data
+```
+
+These **aren't predicate ops**. They're regular vector ALU ops with `Dtype:B16` telling the unit "interpret operand bits as packed bools." The hardware applies the logic op bitwise across the packed lane.
+
+### 4.7.3 Why MOVEMASK / MOVEVA / VNCHWCONV exist (and disappear under cast)
+
+Without dedicated predicate hardware, the AICore needs to fix up bit layouts between operations:
+
+| Instruction | Calls in bool path | Role |
+|---|---|---|
+| `MOVEMASK` | 84 | Convert between "VCMPV-result layout" (one bit per element packed within a lane) and "operand layout" (where AND/OR expect specific bit positions) |
+| `MOVEVA` | 64 (= N rows) | Per-row bit-arithmetic shuffle. With 32×32 packed bools, the compiler aligns bits within each row to match the next op's expected layout |
+| `VNCHWCONV B8` | 8 | Final output format conversion: packed-bool → byte-per-element int8 store layout |
+
+Combined: 73 shuffle/conversion instructions, ~1.3K cycles, **all of which exist to bridge the lack of predicate hardware**.
+
+The cast version sidesteps these by widening every bool to a full i32 lane. Once each "bool" lives in its own 32-bit lane, the AND/OR/SEL ops are regular vector arithmetic — no packing, no shuffling. **The cast is essentially "fake A5"** — it emulates the predicate-register-style flat layout by paying memory width instead of using HW support.
+
+### 4.7.4 What A5's PAND would replace (hypothetical lowering)
+
+If the same `mask_fn` were lowered for A5 with predicate registers, the structure would be:
+
+```
+VCMPV  X1, X2 → P0                  ; compare directly writes predicate
+VCMPV  X3, X4 → P1
+PAND   P0, P0, P1                   ; predicate-AND, hardware-native
+VCMPVS X5, 0  → P2
+POR    P0, P0, P2                   ; predicate-OR
+VSEL   XD = P0 ? Xtrue : Xfalse     ; predicate-driven select
+                                    ; output stored directly under predicate mask
+```
+
+Compared to the 910B1 lowering, this eliminates:
+- All 84 `MOVEMASK` instructions (predicates have a fixed HW layout)
+- All 64 `MOVEVA` instructions (no per-row repack needed)
+- All 8 `VNCHWCONV` instructions (predicates can drive output stores directly)
+- The `Dtype:B16` annotations on logic ops (predicate ALU is its own class)
+
+### 4.7.5 Why the cast path is roughly cycle-neutral on 910B1
+
+This is the architectural reason for the §3 / §4 finding that **bool and i32 cast variants take ~equal cycles**:
+
+| Path | Bool data carried as | Cost on 910B1 |
+|---|---|---|
+| **Bool** (`helloworld.py`) | Packed bits in vector registers | Saves ALU cost on heavy ops (VOR=17.5 cyc, VAND=18 cyc) but spends ~1.3K cyc on `MOVEMASK`+`MOVEVA`+`VNCHWCONV` shuffles |
+| **i32 cast** (`helloworld_cast.py`) | One i32 per lane, no packing | Eliminates shuffles entirely (~1.3K cyc saved) but each per-op ALU cost is heavier (`VOR`=56 cyc, `VAND`=48 cyc — ~3× the per-call cost) + extra inter-op pipe sync |
+
+Both paths arrive at roughly the same total cost because the savings from avoiding shuffles match the cost of wider per-op work. Triton-Ascend's bool packing is well-tuned for 910B1 — the shuffle overhead pays for itself.
+
+### 4.7.6 What this means for forward-looking work
+
+If you're targeting **910B1 / 910_9362** today: **don't add `.to(tl.int32)` casts to bool intermediates expecting a speedup.** The two paths are roughly equivalent (and the cast version is actually +1.3% slower). The cast helps binary size (15% smaller) but not cycles.
+
+If you're targeting **A5 (when it's available)**: bool intermediates should be the natural-fit choice. The compiler's `PAND`/`POR`/predicate-driven `VSEL` lowering will be strictly better than the i32-cast path. Don't manually widen what the architecture has hardware for.
+
+The actual perf improvements on this kernel come from **changing the output type**, not the intermediate type — the 1024-iteration int8 byte-store loop dominates either way (33K of 71K SCALAR cycles). Pack output as `int32` per row or as a bitmap, and the kernel speeds up regardless of which architecture you target.
+
 ## 5. What this tells you
 
 ### 5.1 The bool path packs efficiently
@@ -398,3 +477,5 @@ Local:
 | **Loop body and 1024 stores unchanged** | The kernel's bottleneck is the scalar unpack-store loop, not the upstream type. Cast doesn't touch it. |
 | **To actually speed up**: change the output type | Pack output as bitmap or wider int → cut store cost ~8×. Casting intermediates can't fix what the output type forces. |
 | **Camodel μarch caveat** | `te_set_version("Ascend910_9362")` doesn't change the simulator behavior — camodel locks to 910B1 internally. All cycle numbers are 910B1-model. Real-silicon 910_9362 numbers need msprof. See §6.5. |
+| **910B1 has no predicate registers** | Bool data is packed in regular vector registers; logic ops use `Dtype:B16` semantics; `MOVEMASK`/`MOVEVA`/`VNCHWCONV` bridge layout mismatches. The cast eliminates these by widening to native lane width — "fake A5". See §4.7. |
+| **A5 implications** | A5 has hardware predicate registers + `PAND`/`POR`. Bool path will be strictly faster than cast there. Don't manually widen on A5. |
