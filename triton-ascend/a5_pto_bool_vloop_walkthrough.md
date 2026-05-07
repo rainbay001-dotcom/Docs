@@ -249,7 +249,21 @@ boolean algebra stay in P-regs end-to-end.
 | `hivm.hir.vcast 1024xi32 → 1024xi8`                   | (later in body, not shown)     | i32 → i8 narrowing |
 | `hivm.hir.store 1024xi8 → gm`                         | (later DMA op)                 | UB → GM via MTE3 |
 
-## 6. The "vnot collapsed" insight
+## 6. A5 codegen wins — MLIR ops that disappear into hardware modes
+
+`hivmc-a5` exploits two A5 hardware features to eliminate entire MLIR
+phases:
+
+1. **Predicate registers** (P-regs, MaskRegs) — let boolean values
+   stay as 32-bit predicates without round-tripping through `f16`
+   memrefs.
+2. **Distribution modes on loads** (`brc_b32`, etc.) — let broadcast
+   semantics be folded into the load instruction, skipping explicit
+   `vbrc` ops and the destination tiles they would write to.
+
+Two worked examples follow.
+
+### 6.1 The "vnot collapsed" insight
 
 The bool MLIR (`captures_hivmc_input_a5_bool.mlir` Phase 10) has this
 canonical sequence to broadcast `C = (k_attn == 0)` from a 32-element
@@ -282,6 +296,116 @@ On A5, hivmc-a5 collapses the entire ladder to **zero ops** by:
 This is a real A5 efficiency win that doesn't show up at the MLIR
 level: **the bool variant's 3-op f16 detour for C-broadcast vanishes
 entirely on A5 hardware.**
+
+### 6.2 The "vbrc collapsed into VLDI brc_b32" worked example
+
+A concrete trace of how Triton's `q_attn_arg[:, None]` semantic flows
+through all three layers, showing where it disappears.
+
+#### Layer 1 — Triton source
+
+```python
+B = (q_attn_arg[:, None] == k_attn_arg[None, :])
+```
+
+`[:, None]` adds a length-1 column axis; combined with `[None, :]` it
+specifies a 32×32 broadcast. Concretely, computing one row `i` of B
+reduces to:
+
+```
+B[i, j] = (q_attn[i] == k_attn[j])    for j ∈ [0, 32)
+```
+
+The scalar `q_attn[i]` is paired against the 32-element `k_attn` row.
+
+#### Layer 2 — HIVM-MLIR (`captures_hivmc_input_a5_bool.mlir`)
+
+The MLIR materializes the broadcast **eagerly**, allocating a
+4096-byte tile in UB and running an explicit `vbrc`:
+
+```mlir
+// Phase 1 — broadcast q_attn col scalars to a 32×32 i32 tile in UB
+%5 = hivm.hir.pointer_cast(%c18976_i64) : 32x1xi32 ub    // src: 32 scalars (128 B)
+%6 = hivm.hir.pointer_cast(%c9216_i64)  : 32x32xi32 ub   // dst: q_attn[:, None] tile (4096 B)
+hivm.hir.vbrc ins(%5) outs(%6) broadcast_dims=[1]        // ◄── q_attn[:, None]
+
+// Phase 5 — full-tile vcmp produces B as 1024×i1
+%14 = hivm.hir.pointer_cast(%c9216_i64) : 1024xi1 ub
+hivm.hir.vcmp ins(%collapse_shape_11, %collapse_shape_12) outs(%14)
+```
+
+That looks tidy in the IR but it costs **4096 B of UB plus one
+upfront broadcast op** (which lowers to ≈16 hardware vector insns to
+fill the tile).
+
+#### Layer 3 — A5 PTO assembly
+
+`hivmc-a5` rewrites the algorithm. Instead of "broadcast eagerly to a
+32×32 tile, then compute B as one big vcmp," it does **"stream
+q_attn one scalar per iter using `brc_b32`, and compute B one row per
+VLOOP iter."**
+
+```asm
+VLDI V4, [S68], #1, #3, #1   ; brc_b32: load q_attn[i] (4 B) → broadcast to all 64 lanes
+                              ; S68 ← S68 + 4   (advance to q_attn[i+1] for next iter)
+…
+VCMP.EQ.s32 P4, V4, V5, P1   ; lane j: V4[j] == V5[j] = q_attn[i] == k_attn[j] = B[i, j]
+```
+
+V4 holds `(q_attn[i], q_attn[i], …, q_attn[i])` — exactly what
+`q_attn_arg[:, None]` yields for row `i`. The Triton `[:, None]`
+semantic is now implemented purely as the load's distribution-mode
+flag.
+
+#### Why hivmc-a5 prefers this
+
+|                                  | MLIR / eager broadcast | A5 / brc_b32 streaming |
+|----------------------------------|------------------------|-------------------------|
+| UB footprint for q_attn          | 128 B source + **4096 B broadcast tile** | 128 B source only — broadcast tile **never materialized** |
+| Setup ops (pre-loop)             | 1× `vbrc` (≈16 hw vector insns) | 0 — broadcast happens at load time |
+| Per-iter q_attn read             | 128 B (one tile row)   | **4 B** (one scalar)    |
+
+`hivmc-a5` collapses an entire MLIR phase (the eager `vbrc q_attn`)
+into a *load-mode flag* on the per-iter VLDI. The same pattern
+applies to V5 (k_attn row, full-VL load with `#p=0` so the same
+32-element row stays cached across iters) — together V4 + V5
+implement the `[:, None] == [None, :]` pair entirely in load
+semantics, with **zero explicit broadcast ops in the body**.
+
+#### Cross-layer mapping summary
+
+```
+Triton:   B[i, :] = (q_attn[i] == k_attn[:])
+                       │             │
+                       │             └── V5 = k_attn row    (full-VL, constant load #p=0)
+                       └── V4 = q_attn[i] broadcast         (brc_b32, +4 B/iter)
+
+MLIR:     hivm.hir.vbrc q_attn 32x1 → 32x32  (eager, allocates 4096 B UB tile)
+          hivm.hir.vcmp 1024-elem tile        (one big op over the tile)
+
+A5 PTO:   VLDI V4, [S68], #1, #3, #1          ◄── broadcast folded into load
+          VCMP.EQ.s32 P4, V4, V5, P1          ◄── one row of B per iter, ×32 iters
+```
+
+### 6.3 Combined effect on the bool kernel
+
+The two collapses together remove substantial cost from the bool
+path:
+
+| MLIR ops eliminated by A5 codegen | Replacement on hardware |
+|-----------------------------------|-------------------------|
+| `vbrc q_attn 32x1 → 32x32 i32`    | `VLDI` brc_b32 mode     |
+| `vbrc k_attn 1x32 → 32x32 i32`    | constant full-VL load (V5 unchanged across iters) |
+| `vbrc q_offset 32x1 → 32x32 i32`  | `VLDI` brc_b32 (similar) — V3 streams pre-broadcast tile |
+| `vbrc k_offset 1x32 → 32x32 i32`  | constant full-VL load (V2)  |
+| `vbrc C-f16 1x32 → 32x32 f16`     | precomputed once, reloaded by `VLDUI` + `MOVVP` |
+| `vcmp f16,0 → ¬C` (Phase 10)      | `VCMP` writes P-reg directly — no f16 detour |
+| `vnot i1 → C` (Phase 10)          | `PXOR P3, P3, P2(=ALLF)` — no-op slot |
+| `vcmp 1024xi1 → ...` (full-tile)  | 32× per-row `VCMP` inside VLOOP |
+
+Net: the bool MLIR's 4 broadcast ops + f16 detour ladder shrink to
+load-mode flags + a single no-op PXOR. UB footprint drops by roughly
+4 × 4096 B ≈ 16 KB just for the eliminated broadcast tiles.
 
 ## 7. Per-iter hardware-op tally
 
