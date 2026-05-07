@@ -413,13 +413,13 @@ brc_b32 stream) is deliberate and tracks a single distinguishing
 fact: **q_offset has two compute consumers per iteration; q_attn has
 one.**
 
-#### Same Triton/MLIR shape, different number of consumers
+#### Same Triton/MLIR shape, different number of consumers per iter
 
 ```python
-# q_attn:  one consumer
+# q_attn:  one consumer per iter
 B = (q_attn_arg[:, None] == k_attn_arg[None, :])
 
-# q_offset: TWO consumers using the same broadcast
+# q_offset: two consumers per iter
 A = (q_offset[:, None] <=  k_offset[None,  :])
 F = (q_offset[:, None] == k_offset[None,  :])
 ```
@@ -429,44 +429,98 @@ In the assembly, the reuse is direct — `V3` and `V2` feed both compares:
 ```asm
 VCMP.LE.s32 P5, V3, V2, P1   ; A_row uses V3 (q_offset row) and V2 (k_offset row)
 …
-VCMP.EQ.s32 P4, V3, V2, P1   ; F_row REUSES the same V3 and V2     ◄── two consumers
+VCMP.EQ.s32 P4, V3, V2, P1   ; F_row REUSES the same V3 and V2
 ```
 
-#### Cost trade-off
+The "consumer count" is interesting context, but as the cost model
+below shows, **it doesn't actually drive the decision** — brc_b32
+wins on raw cost regardless of N. The real driver is opaque without
+deeper disassembly; see hypotheses below.
 
-For a **1-consumer** broadcast (q_attn):
+#### Cost calculation
 
-| Strategy        | Per-iter load | Per-iter compute | Pre-loop UB cost |
-|-----------------|--------------:|-----------------:|-----------------:|
-| `brc_b32`       | 4 B           | 1 `VCMP`         | 0                |
-| full-VL streaming through tile | 256 B | 1 `VCMP`     | 4096 B           |
+Three resources matter:
 
-`brc_b32` wins outright — same compute, much smaller UB footprint.
+1. Hardware instruction count
+2. UB footprint (bytes occupied)
+3. UB bandwidth (bytes loaded over the loop)
 
-For a **2-consumer** broadcast (q_offset):
+Let `T` = number of VLOOP iters (= 32), `N` = consumers per iter, and
+`K` ≈ 16 = the ops needed to fill a 4096 B tile via `vbrc` (one vector
+op writes 256 B = 64 i32 lanes; 1024 / 64 = 16 ops).
 
-| Strategy        | Per-iter load | Per-iter compute | Pre-loop UB cost |
-|-----------------|--------------:|-----------------:|-----------------:|
-| `brc_b32`       | 4 B           | 2 `VCMP`s        | 0                |
-| full-VL streaming through tile | 256 B | 2 `VCMP`s    | 4096 B           |
+**Strategy A — brc_b32 (per-iter scalar broadcast):**
 
-Per-iter compute is identical. The full-VL path's only "loss" is the
-4096 B UB tile, but **that tile is going to exist anyway** — the MLIR
-allocates it in Phase 1 to feed the i32→i64 widening that powers the
-scalar causal compare (Phase 6/8). Once the tile is going to be
-built, streaming through it is essentially free, and avoids needing
-to keep V4-style scalar live across two compares.
+| Cost           | Formula     | T=32, N=1 | T=32, N=2 |
+|----------------|-------------|----------:|----------:|
+| Pre-loop insns | 0           | 0         | 0         |
+| Per-iter insns | `1 + N`     | 2         | 3         |
+| **Total insns**| `T·(1 + N)` | **64**    | **96**    |
+| UB tile bytes  | 0           | 0         | 0         |
+| Bytes loaded   | `T · 4`     | 128       | 128       |
 
-#### The general rule
+**Strategy B — full-VL streaming through pre-built tile:**
 
-> **brc_b32 elimination beats tile-materialization when the broadcast
-> has one consumer; from two consumers up, streaming through a
-> pre-built tile breaks even or wins** — especially if the tile is
-> already needed for a different lowering path (here: i32→i64 widen).
+| Cost           | Formula           | T=32, N=1 | T=32, N=2 |
+|----------------|-------------------|----------:|----------:|
+| Pre-loop insns | `K` (vbrc fill)   | 16        | 16        |
+| Per-iter insns | `1 + N`           | 2         | 3         |
+| **Total insns**| `K + T·(1 + N)`   | **80**    | **112**   |
+| UB tile bytes  | 4096              | 4096      | 4096      |
+| Bytes loaded   | `T · 256`         | 8192      | 8192      |
 
-This is the same rematerialize-vs-spill trade-off any vector
-compiler makes, extended one layer deeper into
-"broadcast-at-load-time vs broadcast-into-buffer."
+**Difference (A vs B):**
+
+| Resource       | At any N             |
+|----------------|---------------------:|
+| Insn count     | A wins by `K` ≈ 16   |
+| UB footprint   | A wins by 4096 B     |
+| Bandwidth      | A wins by 8064 B     |
+
+**Strategy A always wins on every metric**, regardless of `N`. The
+per-iter compute (`N` `VCMP`s) is identical between A and B —
+`VCMP` has no implementation difference based on which load
+mode produced the operand register. So the consumer count cancels
+out of the comparison.
+
+#### Then why does hivmc-a5 keep the q_offset tile?
+
+Three plausible reasons, in rough order of likelihood:
+
+1. **The MLIR forces the tile to exist anyway**, and hivmc-a5 didn't
+   prove it dead.
+   The MLIR explicitly allocates the q_offset 32×32 i32 tile in
+   Phase 1 and uses it in a full-tile `vcmp` in Phase 5. To
+   *eliminate* the tile, hivmc-a5 must rewrite the Phase 5 consumer
+   to brc_b32 streaming AND prove no other path needs the tile.
+   For q_offset, the MLIR also wires the same source into the
+   i32→i64 widen path (Phases 2, 6, 8) — that secondary path
+   apparently complicates the dataflow analysis enough that the
+   tile-elimination rewrite doesn't fire. For q_attn there's no
+   secondary path, so elimination succeeds.
+
+2. **Hidden hardware costs not in the simple cost model.**
+   - `brc_b32` loads might pipeline differently than normal loads
+     (replication on the load path could add cycles or bus contention).
+   - There might be a per-cycle `brc_b32` issue rate ceiling, so
+     using brc_b32 for *every* column-broadcast operand could
+     serialize the load engine.
+   - Register liveness: V3 is live across two compares separated by
+     several other instructions; full-VL might schedule better than
+     brc_b32 in that window. (Speculative — not verified.)
+
+3. **Compiler heuristic, not optimum.**
+   hivmc-a5 may have a coded heuristic — e.g., "default to keeping
+   the tile when ≥2 consumers exist," or "default to streaming when
+   the source has any other downstream user" — that doesn't derive
+   from cost. Heuristics like this exist in real compilers because
+   global cost analysis is expensive.
+
+The honest answer is that **without disassembling more of the kernel
+(particularly the pre-loop tile-construction insns and the dataflow
+around the i64 path) we can't tell which hypothesis dominates.** The
+2-consumer count is a coincidence of the situation, not a derived
+break-even.
 
 #### Mirror case for V2 (k_offset)
 
@@ -556,10 +610,10 @@ q_offset  (V3 via full-VL, +512 B/iter):
          S69 ← S69 + 512   (advance past row + alignment gap)
 ```
 
-#### Compute graph — why "consumers" matter
+#### Compute graph — observed reuse (not the cost driver)
 
 ```
-q_attn   (one consumer):                  q_offset  (two consumers):
+q_attn   (one VCMP per iter):              q_offset  (two VCMPs per iter):
 
        V4 (q[i] brc)                              V3 (q[i] from tile row)
             │                                       ╲          ╲
@@ -573,54 +627,66 @@ q_attn   (one consumer):                  q_offset  (two consumers):
                                                P5 (A_row)   P4 (F_row)
 ```
 
-Single arrow vs fan-out — V3 feeds **two** compares per iter, V4
-feeds one.
+This is what the kernel does, but per the cost analysis in §6.4 it
+is **not** what causes hivmc-a5 to choose differently — both
+strategies' per-iter cost is `1 load + N compares` regardless.
 
-#### Decision diagram — break-even
+#### Decision flow — the actual question
 
 ```
-                   number of consumers per broadcast value
-                       1            2            3+
-                       │            │             │
-                       ▼            ▼             ▼
-  brc_b32          ┌──────┐    ┌──────┐      ┌──────┐
-  per-iter:        │ WIN  │    │ tie  │      │ LOSE │
-  4 B load + N     │      │    │      │      │      │
-  computes         └──────┘    └──────┘      └──────┘
-                                  
-  full-VL          ┌──────┐    ┌──────┐      ┌──────┐
-  through tile:    │ LOSE │    │ tie  │      │ WIN  │
-  256 B/iter +     │      │    │      │      │      │
-  4096 B pre-loop  └──────┘    └──────┘      └──────┘
-
-  Tiebreaker at 2 consumers: does the broadcast tile already exist
-  for some other lowering reason (e.g. i32→i64 widen)? If yes → full-VL.
-  q_offset hits this tiebreaker on the i64 widen path.
+              Does the MLIR commit to building this broadcast tile
+              for some reason hivmc-a5 cannot rewrite away?
+                                  │
+                       ┌──────────┴──────────┐
+                       no                    yes
+                       │                      │
+                  ┌────▼─────┐           ┌────▼──────┐
+                  │ brc_b32  │           │ keep tile,│
+                  │ wins on  │           │ stream    │
+                  │ all      │           │ full-VL   │
+                  │ metrics  │           │ through it│
+                  └──────────┘           └───────────┘
+                  (q_attn,                (q_offset)
+                   k_attn,
+                   k_offset)
 ```
 
-#### Why the tile is "free" for q_offset
+The numbers in §6.4 say brc_b32 always wins on op count, UB
+footprint, and bandwidth. So hivmc-a5's actual choice between A and
+B depends on **whether it can prove the tile is dead** — not on a
+clean cost-derived break-even. In practice that proof succeeds for
+q_attn / k_attn / k_offset and fails for q_offset, almost certainly
+because q_offset has the secondary i32→i64 widen path that
+complicates the dataflow.
 
-The q_offset tile isn't free in absolute terms — it costs 4096 B of
-UB and one pre-loop `vbrc` op. But hivmc-a5 sees it as free
-**relative to brc_b32**, because the MLIR commits to building a
-parallel q_offset tile *anyway* for the i64-widen + scalar-causal
-path:
+#### Why the q_offset tile survives — the secondary path
+
+The MLIR commits q_offset to two consumers at the source level:
 
 ```
 MLIR Phase 1:           vbrc q_offset 32×1 i32  → 32×32 i32 tile  (4096 B at UB c0)
+                                                 ↓
+                                        Phase 5: full-tile vcmp (F)
+
 MLIR Phase 2:           vcast    32-elem        → 32-elem i64
 MLIR Phase 6:           vbrc i64-row-vector     → 32×32 i64 tile  (8192 B at UB c19488)
 MLIR Phase 8:           scalar scf.for          → 1024×i8 result tile
 
-      [hivmc-a5 rewrites Phase 8 to a vector compare,
-       so the i64 tile becomes dead — but the i32 32×32 tile remains
-       useful as the source for the streaming full-VL load.]
+      [hivmc-a5 rewrites Phase 8 to a vector compare. The i64 tile
+       becomes dead. But the i32 32×32 tile from Phase 1 has the
+       Phase 5 full-tile vcmp as a downstream consumer the MLIR
+       explicitly wired, plus the i64 widen reads from the same
+       source row — making the source's liveness span longer than
+       q_attn's. That probably tips hivmc-a5 toward keeping the
+       tile rather than rewriting both consumers to brc_b32.]
 ```
 
-The i32 broadcast tile, originally a stepping stone for the i64
-path, becomes the storage that V3 streams through. q_attn has no
-analogous secondary use, so its tile gets eliminated outright by
-brc_b32.
+q_attn has no analogous secondary path — its source is read only by
+the Phase 1 `vbrc`, so once hivmc-a5 fuses the vbrc + Phase 5 vcmp
+into a brc_b32-driven per-row VCMP, the source can be referenced
+directly and the tile drops out. q_offset's extra outgoing edge
+(into the i64 widen) keeps the source alive and apparently keeps
+the tile-elimination rewrite from firing.
 
 ## 7. Per-iter hardware-op tally
 
