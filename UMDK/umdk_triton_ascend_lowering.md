@@ -861,4 +861,105 @@ The 9 frontend + 104 unique backend passes, by stage. Many fire multiple times (
 | InsertLoadStoreForMixCV | Insert load/store for mix CV |
 | SplitMixKernel | Split mix (AIC+AIV) kernel into separate AIC and AIV functions |
 
-After these 104 unique passes, control passes to **hivmc** (the LLVM/clang fork inside CANN), which runs the LLVM half: optimization, register allocation, scheduling, machine-code emission for hiipu64. That pipeline is opaque from MLIR's view — a separate dump-flag investigation against `hivmc` would be needed to surface it.
+After these 104 unique passes, control passes to **hivmc** for the final lowering to npubin. See §15 for the result of investigating hivmc's dump support — the short answer is that hivmc's internal pipeline is **opaque from CLI introspection** on the shipped binary.
+
+## 15. The hivmc stage — opaque from outside
+
+`hivmc` (`/usr/local/Ascend/cann-8.5.0/tools/bishengir/bin/hivmc`, version `0.1.0 (e4e2ba9841d1 2026-01-16)`, 102 MB) is the third compiler stage invoked as a subprocess of `bishengir-compile`. **Despite its name suggesting an LLVM-only role, hivmc takes MLIR as input** — specifically `module.hivm.opt.mlir`, the post-`optimize-hivm-pipeline` HIVM-dialect snapshot. It then finishes the MLIR lowering (HIVM → LLVM dialect → LLVM IR) and emits hiipu64 machine code.
+
+The actual command bishengir-compile runs:
+
+```
+hivmc /tmp/<tmpdir>/module.hivm.opt.mlir \
+  --enable-debug-info=false --enable-static-bare-ptr=true \
+  --enable-bin-relocation=true --enable-hivm-inject-barrier-all-sync=false \
+  --enable-sanitizer=false -o <out>.npubin
+```
+
+### 15.1 Every dump flag is dead
+
+Tested against `captured_input.mlir` (the intercepted hivmc input):
+
+| Flag | Result |
+|---|---|
+| `--print-after-all` (LLVM new-PM) | Accepted silently, 0 dumps |
+| `--print-before-all` | Accepted silently, 0 dumps |
+| `--print-changed=quiet \| diff` | Accepted silently, 0 dumps |
+| `--print-isel-input`, `--print-after-isel`, `--print-machine-bfi` | 0 dumps |
+| `--print-pipeline-passes` | 0 dumps |
+| `--debug-pass=Structure \| Executions` (LLVM legacy PM) | 0 dumps |
+| `--debug-pass-manager` | Rejected as unknown |
+| `--mlir-print-ir-after-all` | Rejected — flag not registered |
+| `--bishengir-print-ir-after=<post-optimize-hivm pass name>` | Accepted silently, 0 dumps for every name tried (`hivm-lower-to-loops`, `convert-hivm-to-llvm`, `convert-hivm-to-std`, `hivm-inject-sync`, `hivm-decompose-op`). Unlike bishengir-compile where `hivm-inject-sync` was hand-instrumented, none of hivmc's late-stage passes are wired to dump hooks. |
+| `--default-pipeline`, `--lower-hfusion-pipeline`, `--optimize-hivm-pipeline`, `--buffer-deallocation-pipeline` (composite pipeline-name flags) | All rejected at parse |
+
+`strings` against the binary shows the same composite pipeline names that work on `bishengir-opt` (`lower-hfusion-pipeline`, `optimize-hivm-pipeline`, `default-pipeline`, `convert-to-hivm-pipeline`, `buffer-deallocation-pipeline`, plus `torch-*` and `gpu-*` pipelines) but none are exposed via `--help` and none are callable from hivmc's CLI. **`strings | grep` is again a false-positive trap** — the tokens are present (probably from MLIR pipeline-registration code) but not connected to the parser.
+
+No env var unlocks dumps either — `strings | grep '^[A-Z_]+$'` shows only `BISHENG_INSTALL_PATH`, `MLIR_DISABLE_THREADING`, `mlir_reproducer`, `mlir_snapshot`.
+
+### 15.2 Bonus trap: `--hivmc-args=` is broken on bishengir-compile
+
+bishengir-compile exposes `--hivmc-args=<string>` to forward flags to the hivmc subprocess. It mangles the leading dashes:
+
+```
+--hivmc-args=--print-after-all   →  hivmc invocation gets ----print-after-all
+--hivmc-args=print-after-all     →  silently dropped (not prefixed with --)
+```
+
+So even if hivmc honored `--print-after-all`, you can't forward it through. Reported as found, not chased.
+
+### 15.3 The one workaround that does work — input capture
+
+You can capture hivmc's MLIR input by wrapping the binary with a copy-then-exec shim:
+
+```bash
+cat > /tmp/hivmc_wrapper.sh <<'EOF'
+#!/bin/bash
+for arg in "$@"; do
+  [[ "$arg" == *.mlir ]] && cp "$arg" /path/to/captured_input.mlir && break
+done
+exec /usr/local/Ascend/cann-8.5.0/tools/bishengir/bin/hivmc "$@"
+EOF
+chmod +x /tmp/hivmc_wrapper.sh
+mv /usr/local/Ascend/cann-8.5.0/aarch64-linux/bin/hivmc{,.bak}
+ln -s /tmp/hivmc_wrapper.sh /usr/local/Ascend/cann-8.5.0/aarch64-linux/bin/hivmc
+# … run bishengir-compile, then restore the symlink.
+```
+
+The captured `module.hivm.opt.mlir` is the **bookend to §14's 270-dump backend pipeline** — the IR snapshot at the boundary where MLIR introspection ends and hivmc takes over. For `vector_add`: 65 lines / 6.5 KB. The header carries the target system spec:
+
+```mlir
+#dlti.target_system_spec<"NPU" :
+  AI_CORE_COUNT=20, CUBE_CORE_COUNT=20, VECTOR_CORE_COUNT=40,
+  UB_SIZE=1572864, L1_SIZE=4194304, L0A_SIZE=524288, L0B_SIZE=524288, L0C_SIZE=1048576,
+  UB_ALIGN_SIZE=256, L1_ALIGN_SIZE=256, L0C_ALIGN_SIZE=4096>
+```
+
+— useful as a sanity check that the right device target was selected.
+
+### 15.4 Why running the post-optimize-hivm passes via bishengir-opt fails
+
+You might expect that since `bishengir-opt` exposes `--convert-hivm-to-llvm` and other late-stage passes, you could chain them on the captured input to surface the hivmc pipeline. It doesn't work — the first pass (`--convert-hivm-to-llvm`) errors with:
+
+```
+captured_input.mlir:34:16: error: failed to legalize operation 'memref.subview'
+that was explicitly marked illegal
+// -----// IR Dump After ConvertHIVMToLLVM Failed (convert-hivm-to-llvm) //----- //
+```
+
+The post-optimize-hivm pipeline that hivmc runs has specific constraints / preceding lowering steps that aren't reproducible by chaining individual `--convert-*` passes from outside. So **the pipeline isn't reachable from `bishengir-opt` either**.
+
+### 15.5 Conclusion
+
+The hivmc internal pipeline (HIVM-MLIR → LLVM dialect → LLVM IR → hiipu64 machine code) is opaque from CLI introspection on the shipped CANN-8.5.0 binary. To see those passes you'd need:
+
+- Build hivmc from source with debug-printing enabled (BiSheng OSS doesn't ship the late-stage passes, so this means an internal Huawei build).
+- Use a debugger or `strace` to catch intermediate buffers in process memory.
+- Wait for CANN to expose a dump flag in a future release.
+
+For the practical pipeline view of a Triton-Ascend kernel today, the ceiling sits at:
+- **9 frontend dumps** via `MLIR_PRINT_IR_AFTER_ALL=1` on the Python invocation
+- **270 backend dumps** via `bishengir-opt --lower-hfusion-pipeline --optimize-hivm-pipeline --mlir-print-ir-after-all` on the cached `.ttadapter`
+- **1 hivmc-input snapshot** (`module.hivm.opt.mlir`) via the wrapper-script trick
+
+After that snapshot, the kernel disappears into hivmc's internals and reappears as 740 B of `.text` machine code.
