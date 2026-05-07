@@ -637,6 +637,82 @@ The PC labels shift down by 4-8 bytes in the cast version because the pre-loop i
 
 5. **Pre-loop optimization**: A5's compiler hoists `D = q_offset == k_offset` out of the loop (it doesn't depend on per-row data; positions are fixed). 910B1 does this too via the early `VCMPV` cluster, but A5 does it more cleanly because the result lives in a predicate register that's free to reference inside the loop.
 
+### 4.7.3.9 A5 trace richness gap — what we can and can't see per-instruction
+
+The §4.7.3.5–4.7.3.8 mappings are at **mnemonic + pipe + PC** granularity. **Operand register names and values are NOT visible per-instruction in the A5 trace** — unlike 910B1 where every event came with full operand state.
+
+#### What raw A5 dumps actually contain
+
+`AscendOpKernelRunner` writes ~1100 dump files per camodel run (vs 16 on 910B1). Per-veccore content:
+
+| File | Content | Operand registers? |
+|---|---|---|
+| `instr_log.dump` | `(Binary: 0x02004880) (ID: 000018) MOV_XD_SPR` | ❌ Raw 32-bit encoding only — no decoded operands |
+| `reg_log.dump` | `write spr: name = COREID, val = 0x20` (cycle-stamped) | ✅ **SPRs only**, not general-purpose `Xnn` regs |
+| `rvec.EXU.dump` | `PC 10d0d208 retire 1597 vloop_id 0 ele_cnt 32 exu_id:1` | ❌ Timing + lane-count + EXU id, no operand regs |
+| `ifu.pred_log.dump` | `getInstrSet Idx:0, binary:0x2004880` | ❌ Raw binary; no decoded fields |
+| `pb.{rd,wr}_log.dump` | Predicate-buffer reads/writes | ✅ Predicate slot id, not full data flow |
+| `dcache_log.dump` | Memory access trace | Addresses only, not register source |
+
+#### What `msopgen sim` produces — A5 vs 910B1
+
+Compare actual trace event detail strings for the same kind of compare instruction:
+
+**910B1 (CANN 8.5.0):**
+```json
+"args": {"addr": "0x10d11074",
+         "detail": "dtype:S64, XD:X1=0x7fffffffffffffff, XN:X6=0x1, XM:X1=0,"}
+```
+↑ Full operand register state inlined: which regs are source/dest, and their values at issue.
+
+**A5/Ascend950PR_9572 (CANN 9.0.0):**
+```json
+"args": {"addr": "0x10d0d228",
+         "detail": "(ID: 000094) RV_VCMP_EQ Dtype: S32"}
+```
+↑ Mnemonic + dtype only. Same parser tool (`msopgen sim`), but its **A5-instruction decoder hasn't been written** to translate the raw binary into operand fields.
+
+#### Why this gap exists
+
+Two contributing factors:
+
+1. **The decoder is the missing piece**, not the data.** `instr_log.dump` carries the 32-bit instruction binary at every PC. The decoder is what would translate `0x02004880` into `MOV_XD_SPR XD:X29, SPR:SYS_VA_BASE`. CANN 9.0.0 ships A5-aware encode (compiler, runtime) but not decode (`msopgen sim` parser, llvm-objdump).
+
+2. **PTO-ISA repo's "A5 backend WIP" status** ([github.com/cannmirror/pto-isa](https://github.com/cannmirror/pto-isa)) suggests a parallel gap upstream — A5 added 2026-03-30, but the backend was still partial as of the most recent observation. The decode tooling is downstream of that work and likely has its own catch-up timeline.
+
+#### What we get vs what we're missing
+
+| Captured per-instruction (A5) | Missing per-instruction (A5, present on 910B1) |
+|---|---|
+| Mnemonic | Operand register names (Xnn, Pnn) |
+| Dtype (B8/B32/S32/etc.) | Source/destination register IDs |
+| PC | Operand register *values* at issue |
+| Pipe (`SCALAR`/`RVECEX`/`RVECLD`/`RVECST`/`MTE2`/`MTE3`) | Predicate register a logic op reads/writes |
+| Cycle timestamp + duration | Data-flow chains (which output feeds which input) |
+| Lane count (`ele_cnt`) | |
+| VLOOP iteration id (`vloop_id`) | |
+
+#### Implications for the §4.7.3.8 mapping
+
+The PC-by-PC mapping in §4.7.3.8 is **structurally correct** — it identifies which mnemonic at which PC corresponds to which source operation, based on:
+- Mnemonic name (`RV_VCMP_LE` → must be `<=`, etc.)
+- Pipe assignment (RVECEX vs RVECLD vs RVECST)
+- Position relative to `RV_VLOOP` (pre-loop hoisting vs in-body)
+- Order of dependent ops (compare → predicate → AND/OR → SEL → store)
+
+What it **cannot** verify without decoded operands:
+- Whether `RV_PAND @ 0x24c` reads the specific predicate produced by `RV_VCMP_LE @ 0x244` (vs another)
+- Whether the operand vectors `RV_VLDI` loads on each iteration are q_attn, k_attn, q_offset, k_offset (the role-mapping is inferred from kernel structure, not directly observed)
+- Register-allocation pressure / spills
+
+#### Three paths to close the gap
+
+1. **Wait for `msopgen sim`'s A5 decoder.** Likely arrives in a future CANN release. Symptom: trace events would gain `XD:Xnn=...` / `Pn=...` fields like 910B1's.
+2. **Decode the 32-bit binaries manually** via the PTO-ISA encoding reference (instruction format tables in the PTO-ISA repo, [pto-isa.github.io](https://pto-isa.github.io/)). Tedious but doable for small kernels.
+3. **Cross-reference `instr_log.dump` (PC + binary) with `reg_log.dump` (SPR writes by cycle) and `rvec.EXU.dump` (per-instruction issue/retire timing)**, then reconstruct GPR state from binary decoding. Possible end-to-end but a substantial scripting effort.
+
+For our cast-vs-bool comparison, the mnemonic-level data is sufficient to draw the headline conclusions (95% fewer events, ~19× faster, predicate ISA used as predicted). For deeper questions ("which predicate register holds A vs B vs C", "is the compiler register-allocating efficiently", "where do spills happen"), we'd need one of the three paths above.
+
 ### 4.7.4 Hypothetical A5 lowering (using the verified PTO-ISA `pto.p*` mnemonics)
 
 Mapping `mask_fn` (`(A & (B | C)) | D`) to A5's predicate ISA (per pto-isa.github.io):
@@ -804,3 +880,4 @@ Local:
 | **CANN 8.5.0 → no A5 sim; CANN 9.0.0 → full A5 sim** | Verified empirically: CANN 8.5.0 (on 218) accepts `Ascend910_9572` for compilation but has no simulator dir. **CANN 9.0.0 ships 30+ `Ascend950PR_*` simulator dirs** including `Ascend950PR_9572` with the full 16-file lib stack. Toolkit is downloadable from OBS without Huawei login (~1.16 GB). |
 | **A5 trace verifies §4.7 predictions empirically** | Compiled `mask_kernel` for `Ascend950DT_9572` and ran under `Ascend950PR_9572` simulator on CANN 9.0.0. Trace shows `RV_PAND` (32×), `RV_POR` (64×), `RV_PXOR` (1×), `RV_PSET` (3×), `RV_VSEL` (32×), `RV_VLOOP` (1×) — all the predicted predicate ops, no `MOVEMASK`/`MOVEVA`/`VNCHWCONV`. **A5 runs the same kernel at 1,431 cycles vs 27,645 on 910B1 — ~19× faster.** See §4.7.3.5. |
 | **On A5, bool and cast lower to ~identical machine code** | Re-ran cast variant on A5 too. Trace events: bool 452, cast 450 — only 2 differ (one extra `RV_PSET`, one extra `RV_PXOR`). Cycle span: identical (1,431 cyc). Camodel tick: 2240 vs 2246. **A5's predicate hardware makes the `.to(tl.int32)` distinction disappear at the lowering level** — compiler emits the same predicate-based code either way. See §4.7.3.6/3.7. |
+| **A5 trace is mnemonic-level only (no operand registers)** | `msopgen sim`'s A5 decoder is incomplete — A5 events have `mnemonic + Dtype` but no `XD:Xnn=...` operand strings like 910B1. The data is present in the raw `instr_log.dump` (32-bit binary form) but not decoded. Mapping in §4.7.3.8 is structurally correct at PC + mnemonic + pipe level, but specific source→destination register dataflow is not directly observable. See §4.7.3.9. |
