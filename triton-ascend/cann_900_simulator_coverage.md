@@ -166,6 +166,201 @@ All originally-pending items are now empirically verified — see [`helloworld_c
 
 These are the natural next steps for verifying [`helloworld_cast_vs_nocast_comparison.md`](helloworld_cast_vs_nocast_comparison.md) §4.7's hypothetical A5 lowering predictions against real compiled+simulated output.
 
+## Full reproduction recipe — verify A5 simulation from scratch
+
+### 1. Create x86 VM (~$0.20 if you stop after verification)
+
+```bash
+gcloud compute instances create cann9-test \
+  --machine-type=e2-standard-16 \
+  --boot-disk-size=200GB --boot-disk-type=pd-balanced \
+  --image-family=ubuntu-2204-lts --image-project=ubuntu-os-cloud \
+  --zone=us-central1-a
+gcloud compute ssh cann9-test --zone=us-central1-a
+```
+
+### 2. Install prereqs + download CANN 9.0.0
+
+```bash
+sudo apt-get update -qq
+sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq \
+    python3 python3-pip python3-venv \
+    libsqlite3-0 zlib1g-dev libssl-dev libffi-dev \
+    build-essential git wget curl bc
+
+pip3 install --user --quiet numpy decorator sympy cffi attrs psutil \
+    pyyaml pathlib2 cloudpickle protobuf scipy
+
+mkdir -p ~/cann_install && cd ~/cann_install
+wget --content-disposition \
+  "https://ascend-repo.obs.cn-east-2.myhuaweicloud.com/CANN/CANN%209.0.0/Ascend-cann-toolkit_9.0.0_linux-x86_64.run"
+
+chmod +x Ascend-cann-toolkit_9.0.0_linux-x86_64.run
+./Ascend-cann-toolkit_9.0.0_linux-x86_64.run --install --quiet
+```
+
+### 3. Apply CANN 9.0.0 packaging workarounds
+
+```bash
+# (1) Fix circular import in msopst.runtime
+sed -i 's|from . import AscendRTSApi|from .rts_api import AscendRTSApi|' \
+  ~/Ascend/cann-9.0.0/python/site-packages/msopst/runtime/__init__.py
+
+# (2) Write missing release_config.json for Ascend950PR_9572
+cat > ~/Ascend/ascend-toolkit/latest/x86_64-linux/simulator/Ascend950PR_9572/conf/release_config.json <<'EOF'
+{
+  "ca": ["libpem_davinci.so", "libnpu_drv_camodel.so", "libstars.so", "libmodel_top.so", "libruntime_camodel.so"],
+  "pv": ["libpem_davinci.so", "libnpu_drv_pvmodel.so", "libstars_pv.so", "libmodel_top_pv.so", "libruntime_cmodel.so"]
+}
+EOF
+
+# (3) Create empty common/data dir (runner expects it)
+mkdir -p ~/Ascend/ascend-toolkit/latest/x86_64-linux/simulator/common/data
+```
+
+### 4. Compile a Triton kernel for A5
+
+Either copy a `.ttadapter` from elsewhere (e.g., 218 dev box) or compile from a fresh Triton-Ascend run. Once you have `mask_kernel.ttadapter`:
+
+```bash
+source ~/Ascend/ascend-toolkit/latest/set_env.sh
+
+mkdir -p ~/a5_compile && cd ~/a5_compile
+# (.ttadapter source must be available)
+bishengir-compile mask_kernel.ttadapter \
+  --enable-hfusion-compile=true --enable-triton-kernel-compile=true \
+  --target=Ascend950DT_9572 \
+  -o mask_kernel_a5.npubin
+# Output is actually mask_kernel_a5.o (.npubin extension is Triton convention,
+# bishengir-compile writes ELF .o)
+
+ls -la mask_kernel_a5.o
+# ~616 bytes for the bool variant — 75% smaller than Ascend910_9362's 2496 B
+```
+
+### 5. Launcher script (`sim_a5.py`)
+
+```python
+import os, json, numpy as np
+import te.platform as tp
+tp.te_set_version("Ascend950DT_9572", core_type="AiCore")
+from msopst.common.ascend_tbe_op import AscendOpKernel, AscendOpKernelRunner
+
+DUMP_DIR = "/home/ray/a5_compile/a5_dumps"
+os.makedirs(DUMP_DIR, exist_ok=True)
+tik_json = f"{DUMP_DIR}/mask_kernel_tik.json"
+with open(tik_json, "w") as f:
+    json.dump({"kernelName": "mask_kernel", "blockDim": 1,
+               "magic": "RT_DEV_BINARY_MAGIC_ELF_AIVEC",
+               "workspace": {"size": []}}, f)
+
+M, N = 32, 32
+q_attn = np.zeros(M, dtype=np.int32); k_attn = np.zeros(N, dtype=np.int32)
+q_off = np.arange(M, dtype=np.int32); k_off = np.arange(N, dtype=np.int32)
+
+op = AscendOpKernel("/home/ray/a5_compile/mask_kernel_a5.o", tik_json)
+op.set_input_info([
+    {"shape": (M,), "dtype": "int32", "value": q_attn},
+    {"shape": (N,), "dtype": "int32", "value": k_attn},
+    {"shape": (M,), "dtype": "int32", "value": q_off},
+    {"shape": (N,), "dtype": "int32", "value": k_off},
+])
+op.set_output_info([{"shape": (M, N), "dtype": "int8"}])
+
+with AscendOpKernelRunner(
+    simulator_mode="ca",
+    soc_version="Ascend950PR_9572",
+    simulator_lib_path="/home/ray/Ascend/ascend-toolkit/latest/x86_64-linux/simulator",
+    simulator_dump_path=DUMP_DIR,
+) as runner:
+    runner.run(op, inputs=[q_attn, k_attn, q_off, k_off], block_dim=1)
+print("done", flush=True)
+```
+
+### 6. Run the simulator
+
+```bash
+cd ~/a5_compile
+ulimit -n 65536    # A5 sim opens ~1100 dump files
+export LD_LIBRARY_PATH=$HOME/Ascend/ascend-toolkit/latest/x86_64-linux/simulator/Ascend950PR_9572/lib:$LD_LIBRARY_PATH
+python3 sim_a5.py
+# Wait ~7 sec; expect "Total tick: 2240" or similar
+```
+
+### 7. Parse trace and extract mnemonics
+
+```bash
+# msopgen sim refuses dirs with too many files; subset to one core+veccore
+mkdir -p ~/a5_compile/a5_dumps_c0v0
+cp ~/a5_compile/a5_dumps/core0.veccore0.* ~/a5_compile/a5_dumps_c0v0/
+chmod -R go-w ~/a5_compile ~/a5_compile/a5_dumps_c0v0
+
+source ~/Ascend/ascend-toolkit/latest/set_env.sh
+mkdir -p ~/a5_compile/a5_trace
+msopgen sim -c core0 -subc veccore0 \
+  -d ~/a5_compile/a5_dumps_c0v0 \
+  -out ~/a5_compile/a5_trace
+# Output: a5_trace/dump2trace_core0.json
+```
+
+Extract mnemonic statistics:
+
+```python
+import json, re
+from collections import Counter
+d = json.load(open("a5_trace/dump2trace_core0.json"))
+events = d.get("traceEvents", d) if isinstance(d, dict) else d
+
+# A5's msopgen sim puts mnemonic in args.detail field, not name
+def mn(e):
+    detail = e["args"].get("detail", "")
+    m = re.match(r"\(ID:\s*\d+\)\s*([A-Z_][A-Z_0-9]*)", detail)
+    return m.group(1) if m else detail
+
+mns = Counter(mn(e) for e in events)
+for n, c in mns.most_common():
+    print(f"{n:25s}: {c}")
+```
+
+## Empirical mnemonic frequency comparison: 910B1 vs A5
+
+Same `mask_kernel` (TYPE=1, M=N=32), camodel cycle-accurate trace.
+
+| Mnemonic class | 910B1 (CANN 8.5.0) | A5/9572 (CANN 9.0.0) | Notes |
+|---|---|---|---|
+| **Vector compare** | `VCMPV` 4 + `VCMPVS` 1 = 5 | `RV_VCMP_EQ` 65 + `RV_VCMP_LE` 32 = 97 | A5 vectorizes the loop body — 1 compare per element, lane-by-lane |
+| **Predicate logic** | (none — packed-bool with `Dtype:B16`) | `RV_PAND` 32, `RV_POR` 64, `RV_PXOR` 1, `RV_PSET` 3 | A5's hardware predicate ALU |
+| **Predicate-driven select** | `VSEL` 4 (mixed F16/F32) | `RV_VSEL` 32 | A5 SEL fires per element, predicate-driven |
+| **Predicate buffer push** | (no analog) | `PUSH_PB` 1 | New: dedicated predicate-buffer hardware |
+| **Vector load/store** | `LD_XD_XN_IMM`/`ST_XD_XN_IMM` (scalar, byte-by-byte): 2082+1026 = 3108 | `RV_VLDI` 66, `RV_VSTI` 32 = 98 | A5 stores 32 bytes/op (vector); 910B1 stores 1 byte/op (scalar) |
+| **Loop control** | `LOOP` 1 + `ENDLOOP` 1024 = 1025 | `RV_VLOOP` 1 (single vector-loop primitive) | A5's `RV_VLOOP` ≡ 1024 iterations of 910B1's scalar loop |
+| **Format-conversion shuffles** | `MOVEMASK` 84 + `MOVEVA` 64 + `VNCHWCONV` 8 = 156 | 0 | Eliminated entirely on A5 — predicate registers don't need bit-layout repacking |
+| **Type conversion** | `VCONV` 3 + `VNCHWCONV` 8 | `RV_VCVT_I2I` 32 | A5 uses one canonical convert mnemonic per element |
+| **Vector duplicate (broadcast)** | `VBRCB` 2 | `RV_VDUPS` 2 | Equivalent role |
+| **Scalar (setup, addresses)** | ~1100 calls (VOR, VAND, MOVEV, INSERT_XD, SHL, etc.) | `MOV_XD_IMM` 19, `MOVK` 10, `MOV_XD_SPR` 8, `MOV_SPR_XN` 7, `ADD_IMM` 5, etc. | A5 setup is ~70 ops vs 910B1's ~8000+ |
+| **Total events** | **9,459** | **452** | **−95%** |
+| **Cycle span** | **27,645** | **1,431** | **−95% (19× faster)** |
+
+## Cost summary
+
+Total to verify A5 cycle-accurate simulation works on CANN 9.0.0 (from a fresh GCP VM):
+
+| Step | Wall-clock | Cost on `e2-standard-16` ($0.54/hr on-demand) |
+|---|---|---|
+| VM create | 30 sec | $0.005 |
+| `apt install` | 30 sec | $0.005 |
+| `pip install` | 30 sec | $0.005 |
+| Download CANN 9.0.0 (1.16 GB) | 3 min | $0.03 |
+| Install CANN 9.0.0 | 2 min | $0.02 |
+| Apply packaging workarounds | 30 sec | $0.005 |
+| Compile mask_kernel for A5 | 5 sec | $0.001 |
+| Run sim | 7 sec | $0.001 |
+| Parse trace | 2 sec | $0.001 |
+| Inspect mnemonics | <1 sec | $0.001 |
+| **Total** | **~6 min** | **~$0.07** |
+
+Stop the VM after verification (disk persists at ~$10/mo for the 200 GB pd-balanced) or delete entirely.
+
 ## References
 
 - [Huawei CANN Community Edition (account login)](https://www.hiascend.com/en/software/cann/community)
