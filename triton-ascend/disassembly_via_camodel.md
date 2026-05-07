@@ -223,6 +223,83 @@ The phase labels in §3.1–3.5 are not directly evidenced in the trace. Here's 
 **Don't take the phase labels as ground truth.** They're a reading of the assembler that's consistent with the kernel's source, the SPR names visible in the trace, and the typical Triton-Ascend lowering shape. The instruction-level data (mnemonics, operands, cycle counts, pipes) is direct.
 - **0x10d11214–0x10d11234**: `SET_FLAG` / `WAIT_FLAG` synchronization between VEC and MTE2 pipes — the load/compute/store handshake
 
+## 3.9 Reading the trace correctly — distinguishing scalar loops from vector work
+
+A trap worth flagging up front: **don't infer "this kernel is scalarized" from a high count of any single op.** A 1024-fire op may be a tight scalar loop (1024 work items × 1 op/item), OR a single vector op processing 1024 elements (1 work batch × 1 op), OR something in between. You can't tell from the count alone.
+
+This caught me when reading the `mask_kernel` trace. I saw 1024 `CMPN` instances and concluded "mask compute is scalarized" — wrong. The actual element-wise compares fired as 5 `VCMPV` / `VCMPVS` instructions on the VECTOR pipe; the 1024 `CMPN`s were inside a separate scalar loop doing per-byte int8 store unpacking. See [`helloworld_mask_camodel_walkthrough.md`](helloworld_mask_camodel_walkthrough.md) §5.7 for the corrected reading.
+
+### 3.9.1 The framework — three things to check before claiming "scalar loop"
+
+For any high-count op (100+, 1000+, etc.), check **all three**:
+
+| Check | Question | What it tells you |
+|---|---|---|
+| **Pipe (`tid`)** | Is this op on `SCALAR` or `VECTOR`? | A `VECTOR`-pipe op is doing parallel work even if it fires once per outer iteration. |
+| **Distinct PC count** | How many unique `addr` values across all fires? | Many distinct PCs → the op is unrolled / inlined many times across the static binary. ONE distinct PC fired N times → it's a loop-body op. The distinction matters. |
+| **Operand variance** | Are operand register names + values the same across all fires, or do they vary? | Constant operands → the op is fixed-input (loop-counter compare, register-held-byte test, etc.). Varying operands across fires → real per-iteration data flow. |
+
+If pipe=SCALAR + 1 distinct PC + identical operands across all fires → **it's a tight loop-body op, not the kernel's main compute**. Look elsewhere (probably on the VECTOR pipe) for what the kernel is actually doing.
+
+### 3.9.2 Worked example: distinguishing the cases
+
+For the `mask_kernel` 1024-fire `CMPN`:
+
+```python
+import json
+from collections import Counter
+events = json.load(open('mask_trace.json')).get('traceEvents', [])
+
+cmpn = [e for e in events if e['name'] == 'CMPN']
+print(f'pipe: {Counter(e["tid"] for e in cmpn)}')
+# pipe: Counter({'SCALAR': 1024})    ← scalar pipe, not vector
+
+print(f'distinct PCs: {len({e["args"]["addr"] for e in cmpn})}')
+# distinct PCs: 1                    ← all at one PC = loop body
+
+print(f'distinct operand strings: {len({e["args"]["detail"] for e in cmpn})}')
+# distinct operand strings: 1        ← identical operands → byte-generation, not data compare
+```
+
+Conclusion: this `CMPN` is a loop-body byte-generation op, **not** the kernel's element-wise mask compare. The actual compares are elsewhere — go find them on the `VECTOR` pipe.
+
+### 3.9.3 What to look for as the kernel's actual compute
+
+After ruling out high-count loop-body scalars, **look for distinct vector-pipe instructions at distinct PCs**:
+
+```python
+vec_ops = [e for e in events if e['tid'] == 'VECTOR']
+print(f'VECTOR pipe op types: {Counter(e["name"] for e in vec_ops)}')
+# typically a long tail; look for the compute-relevant names
+
+# Find the "actual compares" by name pattern
+for e in events:
+    if e['name'].startswith(('VCMP', 'VADD', 'VMUL', 'VFMA', 'VSEL', 'VAND')):
+        print(f'  PC={e["args"]["addr"]} {e["name"]} dur={e["dur"]} {e["args"]["detail"]}')
+```
+
+For mask_kernel this surfaced 5 `VCMPV`/`VCMPVS` at 5 distinct PCs — the actual `q==k`, `q<=k`, etc. tests. Match those to the source's logical operations.
+
+### 3.9.4 Cycle attribution: where time actually went
+
+After identifying the compute and the loop body separately, attribute total cycles:
+
+```python
+from collections import defaultdict
+pipe_dur = defaultdict(int); pipe_cnt = defaultdict(int)
+for e in events:
+    pipe_dur[e['tid']] += e.get('dur', 0)
+    pipe_cnt[e['tid']] += 1
+for p, d in sorted(pipe_dur.items()):
+    print(f'  {p:10s}: {d:>6} cyc / {pipe_cnt[p]:>5} instrs')
+```
+
+For mask_kernel: SCALAR 70,590 cyc total; VECTOR 8,647 cyc. Stores alone were 33K of the SCALAR pipe cycles. **Compute pipe finished long before the store-loop did** — kernel was store-bound, not compute-bound. That's the real perf finding, the one the wrong scalar-loop claim was hiding.
+
+### 3.9.5 Summary heuristic
+
+> **High count alone is not evidence of scalarization.** Always cross-check: pipe + distinct-PCs + operand-variance. Then look for the actual compute on the VECTOR pipe by name pattern, not by count.
+
 ## 4. What this does NOT give you
 
 | Limitation | Why |
