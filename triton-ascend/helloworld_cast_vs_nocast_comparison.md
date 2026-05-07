@@ -282,6 +282,150 @@ What I'm guessing:
 
 The way to get strict confirmation: re-run with `msopgen sim -reloc <kernel.npubin>`. That triggers `llvm-objdump --save-aicore-bins` which is decoder-gated, so we can't actually do this on shipped CANN-8.5.0. The mapping above is the closest you get without an internal Huawei build.
 
+## 4.6.5 The hivmc-input diff — last transparent layer before the closed compiler
+
+Captured both kernels' `module.hivm.opt.mlir` (the input to hivmc) via the wrapper-script trick on 218 (CANN 8.5.0, target=Ascend910_9362). This is the **last MLIR snapshot we can inspect** before hivmc takes over for closed machine-code generation. Sizes:
+
+| | Bool (`mask_kernel.hivm.opt.mlir`) | Cast (`mask_kernel_cast.hivm.opt.mlir`) |
+|---|---|---|
+| File size | 20,965 bytes | 21,720 bytes (**+755 B, +3.6%**) |
+| Line count | 190 | 199 (**+9 lines**) |
+
+Note: cast is **larger at the MLIR level** but **smaller at the .text level** (2,116 vs 2,496 B). The cast version has a more verbose IR but lowers to fewer instructions.
+
+### 4.6.5.1 Identical between the two
+
+- Module attributes: same target spec (`AI_CORE_COUNT=20`, `UB_SIZE=1572864`, etc.)
+- `infer_task_type_function` body: returns `i8 10` in both
+- Function signature shape: 11 args (ffts_base / sync_block_lock / workspace + 4 input memrefs + 1 output memref + 3 i32 grid metadata)
+- Function attributes: `hivm.func_core_type = AIV`, `mix_mode = "aiv"`, `parallel_mode = "simd"`
+- The 1024-iteration `scf.for` scalar loop for `q_off <= k_off`:
+  ```mlir
+  scf.for %arg11 = %c0 to %c1024 step %c1 {
+    %42 = memref.load %collapse_shape_13[%arg11] : memref<1024xi64, ...>
+    %43 = memref.load %collapse_shape_14[%arg11] : ...
+    %44 = arith.cmpi sle, %42, %43 : i64       ← position compare, scalar per element
+    %45 = arith.extui %44 : i1 to i8
+    memref.store %45, %collapse_shape_15[%arg11] : ...
+  }
+  ```
+  **Both versions emit this scalar 1024-iter loop** for the position compare. The compiler warning `Op 'hivm.hir.vcmp' will execute by scalar instruction with low efficiency` refers to this fallback. So even at the HIVM-MLIR level, the position compare is already scalarized — explaining why the final binary has 1024 `CMPN` scalar compares.
+
+### 4.6.5.2 Where bool and cast diverge
+
+#### Difference 1 — Pre-allocated constant tensors (bool only)
+
+Bool version allocates two 32×32 i32 tensors at the start, filled with constants 0 and 1:
+
+```mlir
+// BOOL only:
+hivm.hir.vbrc ins(%c0_i32 : i32) outs(%collapse_shape_0 : memref<1024xi32, ...>)  // 0-fill
+hivm.hir.vbrc ins(%c1_i32 : i32) outs(%collapse_shape_1 : memref<1024xi32, ...>)  // 1-fill
+```
+
+These are the `0` and `1` constants for `tl.where(mask, 1, 0)`. The cast version doesn't need them — it uses `(mask != 0).to(tl.int8)` which works on the predicate directly without scalar fill-tensors.
+
+#### Difference 2 — Bitwise operand types (bool: i1, cast: i32)
+
+After each compare, bool keeps the result in `i1` and operates on `i1` operands; cast uses `vcast i1 → i32` immediately and then operates on `i32`:
+
+```mlir
+// BOOL — bitwise ops on i1 (bool packed as 1024xi1):
+hivm.hir.vor ins(%collapse_shape_22, %collapse_shape_27 :
+                memref<1024xi1, ...>, memref<1024xi1, ...>)
+            outs(%collapse_shape_28 : memref<1024xi1, ...>)
+hivm.hir.vand ins(%collapse_shape_19, %collapse_shape_28 :
+                 memref<1024xi1, ...>, memref<1024xi1, ...>)
+             outs(%collapse_shape_29 : memref<1024xi1, ...>)
+
+// CAST — bitwise ops on i32 (cast result widened):
+hivm.hir.vcast ins(%collapse_shape_18 : memref<1024xi1, ...>)
+              outs(%collapse_shape_19 : memref<1024xi32, ...>)
+              temp_buffer(%20 : memref<24xi32, ...>)              ← vcast i1 → i32
+hivm.hir.vor ins(%25, %28 : memref<32x32xi32, ...>, memref<1x32xi32, ...>)
+            outs(%30 : memref<32x32xi32, ...>) broadcast = [0]    ← OR on i32
+hivm.hir.vand ins(%collapse_shape_19, %collapse_shape_26 :
+                 memref<1024xi32, ...>, memref<1024xi32, ...>)
+             outs(%collapse_shape_27 : memref<1024xi32, ...>)     ← AND on i32
+```
+
+**Cast inserts `hivm.hir.vcast i1 → i32` after every compare** (5 extra `vcast` ops total). Bool stays in `i1` throughout.
+
+#### Difference 3 — Bool uses `vnot` for De Morgan-style intermediate
+
+Bool path needs to negate one of the intermediate predicates as part of building `(B | C)`:
+
+```mlir
+// BOOL only — negation step:
+hivm.hir.vcmp ins(%collapse_shape_25, %cst : ..., f16)
+             outs(%collapse_shape_26 : memref<1024xi1, ...>)
+hivm.hir.vnot ins(%collapse_shape_26 : memref<1024xi1, ...>)     ← negate
+             outs(%collapse_shape_27 : memref<1024xi1, ...>)
+hivm.hir.vor  ins(%collapse_shape_22, %collapse_shape_27 : ...)  ← then OR with negated
+             outs(%collapse_shape_28 : ...)
+```
+
+Cast path doesn't have this `vnot` — direct `vor` on i32 values is sufficient because the compiler can keep both operands non-negated. The bool path's De Morgan rewrite is artifact of i1's trip through `vcmp` + `vcast` (i1 → f16 → vcmp ne 0 → i1 again) which produces an inverted form.
+
+#### Difference 4 — Output conversion chain
+
+```mlir
+// BOOL final output: vsel between 0/1 fill tensors, then i32→i8 trunc:
+hivm.hir.vsel ins(%collapse_shape_33, %collapse_shape_1, %collapse_shape_0 :
+                 memref<1024xi1, ...>,   // mask
+                 memref<1024xi32, ...>,  // 1-fill
+                 memref<1024xi32, ...>)  // 0-fill
+             outs(%collapse_shape_34 : memref<1024xi32, ...>)
+             temp_buffer(%36 : memref<8xi32, ...>)
+hivm.hir.vcast ins(%collapse_shape_34 : memref<1024xi32, ...>)
+              outs(%collapse_shape_35 : memref<1024xi8, ...>)
+              temp_buffer(%38 : memref<2048xi32, ...>)
+              round_mode = <truncwithoverflow>
+
+// CAST final output: vnot, then i1→f16→i8 via two casts:
+hivm.hir.vnot ins(%collapse_shape_34 : memref<1024xi1, ...>)
+             outs(%collapse_shape_35 : memref<1024xi1, ...>)
+hivm.hir.vcast ins(%collapse_shape_35 : memref<1024xi1, ...>)
+              outs(%collapse_shape_36 : memref<1024xf16, ...>)   ← i1 → f16
+              temp_buffer(%41 : memref<48xf16, ...>)
+hivm.hir.vcast ins(%collapse_shape_36 : memref<1024xf16, ...>)
+              outs(%collapse_shape_37 : memref<1024xi8, ...>)    ← f16 → i8
+```
+
+The output paths take very different shapes:
+- Bool: select between pre-built 0-fill / 1-fill i32 tensors → truncate to i8 (2 ops)
+- Cast: invert mask → cast to f16 → cast to i8 (3 ops, but uses much smaller temp buffer — 48 bytes vs 2048)
+
+#### Difference 5 — Buffer offsets shifted
+
+The exact UB offsets (`%c8320_i64`, `%c8448_i64`, etc.) differ between bool and cast because the buffer-allocator's lifetime analysis sees different intermediate value lifetimes. Not a semantic difference, just a memory-plan consequence.
+
+### 4.6.5.3 Summary diff
+
+| Aspect | Bool | Cast |
+|---|---|---|
+| File size | 20,965 B | 21,720 B (+3.6%) |
+| Line count | 190 | 199 (+9) |
+| Pre-allocated 0/1 fill tensors | 2 (for `tl.where`) | 0 |
+| `hivm.hir.vcast i1 → iN` calls | 1 (final i1→f16) | 5 (after each compare to i32) |
+| `hivm.hir.vnot` | 1 (intermediate negation) | 1 (different role: mask inversion before output cast) |
+| Bitwise op operand type | `1024xi1` | `1024xi32` |
+| Output conversion | `vsel` + `vcast i32→i8` | `vnot` + `vcast i1→f16→i8` |
+| Constants added | `%c1_i32` | `%cst_0 = 0.0f32` |
+
+### 4.6.5.4 Why this matters for the §4.5 mnemonic-level findings
+
+The HIVM-MLIR-level differences explain the §4.5 cycle/instruction counts:
+
+- **Cast path's 5 `vcast i1 → i32` calls** at HIVM level lower to ~5 extra `VCONV B32` instructions in the final binary (matches the §4.5.2 `+VCONV` count growth)
+- **Bool path's `vsel` + `i32 → i8 vcast`** lowers to the heavy `VSEL F32` + 8× `VNCHWCONV B8` chain (the 828 cyc of `VNCHWCONV` we attributed to "bool packing")
+- **Cast path's `i1 → f16 → i8`** lowers to 1× `VCONV` + final cast — much fewer `VNCHWCONV` calls
+- **Both paths' 1024-iter `scf.for` scalar loop for the position compare** explains the 1024 `CMPN` + `ENDLOOP` + `ST_XD_XN_IMM` triplet seen in the trace — this isn't a 910B1-specific lowering choice, it's already a structural feature of the HIVM-MLIR
+
+That last point is the most important: **the scalar unpack-store loop is baked in at the HIVM-MLIR level, before hivmc**. It's a `scf.for` writing one byte per iteration. hivmc just translates it to scalar instructions. So the bottleneck `1024 byte stores on 910B1` finding is forced by the upstream `--optimize-hivm-pipeline` choosing scalar-loop lowering for the position compare, not by hivmc making a bad codegen choice.
+
+The compiler warning `Op 'hivm.hir.vcmp' will execute by scalar instruction with low efficiency` (visible during compile) explicitly flags this as a fallback. The position compare is `i64 sle i64` after broadcast/widening, and the vector unit doesn't support 64-bit lane-wise compare on 910B1, hence the scalar fallback. On A5, this likely changes — A5's wider vector ALU + predicate-register hardware could handle the same compare without the scalar loop.
+
 ## 4.7 Architectural context — why bool needs MOVEMASK/MOVEVA/VNCHWCONV on 910B1, while A5 has dedicated mask hardware
 
 The expensive shuffle work (`VNCHWCONV` × 8, `MOVEVA` × 64, `MOV_UB_TO_UB` × 1) the bool path emits — and which the cast path eliminates — exists because of a fundamental architectural difference between AICore generations.
