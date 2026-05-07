@@ -285,11 +285,79 @@ L2 cache parameters from `config.json` (for 910_9362):
 
 ### 3.5 Timing caveat
 
-Camodel is genuinely cycle-accurate, which means **slow**. Our trivial vector_add of 1024 elements didn't complete within a 60-second timeout — the run was cut off mid-AIC-attach. For successful end-to-end camodel runs:
+Camodel is genuinely cycle-accurate, which means **slow**. For successful end-to-end camodel runs:
 
 1. Set the env (CAMODEL_CONFIG_PATH + LD_PRELOAD) as above.
 2. **Allow ≥5 minutes wall-clock per simple kernel.**
 3. Look for dump output in the working directory.
+
+### 3.6 The PyTorch / torch_npu trap — and why it doesn't actually save you
+
+The natural path is `LD_PRELOAD=…/libruntime_camodel.so python vector_add.py`. **It crashes** at `torch_npu._C._npu_init()` with:
+
+```
+RuntimeError: SetPrecisionMode: NPU function error: at_npu::native::AclSetCompileopt(
+    aclCompileOpt::ACL_PRECISION_MODE, precision_mode), error code is 500001
+[ERROR] FEOpsKernelInfoStore: Initialize custom and builtin sub-information library failed
+[ERROR] OpsManager initialize failed.
+```
+
+Reason: camodel mocks the **runtime** layer (`libruntime_camodel.so`) but PyTorch-NPU also calls into the **GE / FE / OpCompiler** layers (`libge_runner.so`, `libfe.so`, etc.) which have no camodel mock. They try to talk to a real driver, fail at `AclSetCompileopt(ACL_PRECISION_MODE)`, and PTA crashes during `_npu_init`.
+
+So Python + `torch_npu` is a dead end under camodel. You need to bypass torch and call ACL/rt directly via ctypes or a C++ launcher.
+
+### 3.7 Pure-ctypes launcher gets further — but kernel still doesn't execute
+
+A custom Python ctypes launcher that loads `libascendcl.so` + `libruntime.so` and calls the ACL/rt layer directly **does** get past `_npu_init` and **does** trigger camodel attach (24 AICs banner, FuncCache config). Boilerplate:
+
+```python
+import ctypes
+acl = ctypes.CDLL("libascendcl.so", mode=ctypes.RTLD_GLOBAL)
+runtime = ctypes.CDLL("libruntime.so", mode=ctypes.RTLD_GLOBAL)
+acl.aclInit(None)                                 # ret=0
+acl.aclrtSetDevice(0)                             # ret=0 (camodel banner now appears)
+ctx = ctypes.c_void_p()
+acl.aclrtCreateContext(ctypes.byref(ctx), 0)      # ret=0
+acl.aclrtSetCurrentContext(ctx)                   # ret=0
+
+# Register the npubin
+class rtDevBinary_t(ctypes.Structure):
+    _fields_ = [("magic", ctypes.c_uint32), ("version", ctypes.c_uint32),
+                ("data", ctypes.c_void_p), ("length", ctypes.c_uint64)]
+buf = ctypes.create_string_buffer(open("add_kernel.npubin","rb").read())
+devbin = rtDevBinary_t(0x41415246, 0, ctypes.cast(buf, ctypes.c_void_p), len(buf.raw))
+hdl = ctypes.c_void_p()
+runtime.rtDevBinaryRegister(ctypes.byref(devbin), ctypes.byref(hdl))   # ret=0
+stub = ctypes.c_size_t(0)
+runtime.rtFunctionRegister(hdl, ctypes.byref(stub),
+                           b"add_kernel", ctypes.c_char_p(b"add_kernel"), 0)  # ret=0
+```
+
+Up to this point everything succeeds. But:
+
+```python
+# These all fail with 107002 = ACL_ERROR_RT_CONTEXT_NULL
+runtime.rtGetC2cCtrlAddr(...)      # 107002
+runtime.rtKernelLaunch(...)        # 107002
+runtime.rtStreamSynchronize(...)   # 107002
+```
+
+Result: kernel never dispatches onto a simulated core. All 288 per-core dump files (`core{0..23}.{cubecore0,veccore{0,1}}.{instr_log,instr_popped_log,dcache_log,ifu.icache_log}.dump`) are written **but stay 0 bytes** — `op_gen.simulator.simulator -d <dump-dir> -reloc add_kernel.npubin` therefore has nothing to parse.
+
+### 3.8 Why kernel launch fails — TLS / context binding mismatch
+
+The camodel runtime mock (`libruntime_camodel.so`, LD_PRELOAD'd) and the user-side `libascendcl.so` use **different TLS slots for the current context**. `aclrtSetCurrentContext()` writes the ACL slot; the camodel-interposed `rt*` calls read a different slot that ACL never populates. The runtime sees "no current context" and returns `ACL_ERROR_RT_CONTEXT_NULL` (107002).
+
+Bypassing ACL with the rt-level API doesn't help either — `rtCtxCreate` (camodel-mocked) returns `507033` (`ACL_ERROR_INVALID_DEVICE`) when called without prior aclInit/aclrtSetDevice, because camodel's bookkeeping requires the ACL-layer init for some reason.
+
+The `[DRVSTUB_LOG] sendSwapBuf:sq:0..3` lines that *do* appear in the log show that **some** submit-queue activity reaches the camodel driver-stub — but kernel dispatch happens after the failing context-resolve path, so the cores never actually execute the binary.
+
+**Workarounds (none tried):**
+1. Patch `libruntime_camodel.so` to share TLS slot with `libascendcl.so` — needs reverse-engineering the offset.
+2. Find an older CANN release where the rt-level mock is more complete (camodel was historically used for AscendC kernel debugging).
+3. Use a vendor-provided AscendC sample under camodel — Huawei's internal `ace_sample` / `aclnn` kits may include a working camodel-launch example. Public CANN-8.5.0 doesn't ship one.
+
+**Practical recommendation:** for cycle data, use real-device `msprof` (§2). It's fast, accurate, and works today without any of this. Camodel under shipped CANN-8.5.0 is gated behind the TLS mismatch above and would need either an internal CANN build or substantial reverse-engineering to bring up.
 
 The dump format is a per-AIC binary stream that `op_gen.simulator.simulator` can post-parse:
 
