@@ -815,6 +815,79 @@ The mapping in §4.7.3.8 is at PC + mnemonic + pipe granularity. With the partia
 
 Future work to fully decode A5 traces is the disassembly-validation harness above, or waiting for CANN to ship the upgraded `msopgen sim` parser.
 
+### 4.7.3.11 Mnemonic-meaning evidence levels — what's documented vs. inferred
+
+The mappings in §4.7.3.5/3.6/3.8 use mnemonic names like `RV_PAND`, `RV_VCMP_EQ`, `RV_VLDI`, `RV_VSTI` etc. I should be transparent about how I know what each one does.
+
+#### Three evidence tiers for the mnemonic interpretations
+
+**Tier A — Documented in PTO-ISA manual** ([pto-isa.github.io](https://pto-isa.github.io/) "Predicate Generation And Algebra" section). High confidence:
+
+| PTO-ISA name | Trace mnemonic | Match strength |
+|---|---|---|
+| `pto.pand` | `RV_PAND` | Strong — same suffix |
+| `pto.por` | `RV_POR` | Strong |
+| `pto.pxor` | `RV_PXOR` | Strong |
+| `pto.pset_b{8,16,32}` | `RV_PSET Dtype: B32` | Strong — exact dtype-suffix match |
+| `pto.psel` | `RV_VSEL` | Moderate — semantic match (predicate-driven select), but PTO-ISA name uses "psel"/"PSEL" while trace uses "VSEL". May be different mnemonics for the same operation, or the compiler uses VSEL with a predicate operand. |
+
+Caveat: PTO-ISA documents the *tile-IR* level. The compiler may lower `pto.pand` 1:1 to `RV_PAND` or to a sequence; I'm assuming 1:1 based on naming match.
+
+**Tier B — Naming-convention inference**. Medium confidence: standard ISA design (ARM/MIPS/RISC-V conventions) suggests these decompositions but I have no A5-specific spec to confirm:
+
+| Trace mnemonic | My interpretation | Convention |
+|---|---|---|
+| `RV_VCMP_EQ` / `RV_VCMP_LE` | Vector CoMPare EQual / Less-Equal | V=vector, CMP=compare, EQ/LE=condition |
+| `RV_VLDI` | Vector LoaD Immediate-mode | V=vector, LD=load, I=immediate-form |
+| `RV_VSTI` | Vector STore Immediate-mode | V=vector, ST=store, I=immediate-form |
+| `RV_VDUPS` | Vector DUPlicate Scalar (broadcast) | DUP=duplicate, S=scalar |
+| `RV_VLOOP` | Vector LOOP control primitive | self-evident |
+| `RV_VCVT_I2I` | Vector ConVerT Int-to-Int | CVT=convert, I2I=int→int |
+| `RV_SMOV` / `RV_SMOVI` | Scalar MOVe (with Immediate variant) | S=scalar |
+| `RV_SEND` | Send signal | inferred from end-of-VLOOP role |
+
+Roles are corroborated by trace structure (right pipe, right data-flow, right element count). Exact details (e.g. signed-vs-unsigned compares, addressing modes) — guessed.
+
+**Tier C — Pattern matching from kernel structure**. Lower confidence; I'm reasoning backwards from "what makes sense in context":
+
+| Mnemonic | Inference | What's actually evidenced |
+|---|---|---|
+| `RVECEX` (pipe) | "Real Vector EXecute" | Pipe holds vector ALU ops — confirmed by op types |
+| `RVECLD` / `RVECST` | "Real Vector LoaD / STore" | Pipe holds VLDI/VSTI ops |
+| `RVECSU` | "Real Vector Special-Unit" or "Scalar-Unit"? | Holds `RV_SMOV` — "SU" abbreviation is ambiguous |
+| `RVECLP` | "Real Vector LooP" | Holds `RV_VLOOP` |
+| `PUSHQ` | "Push-Queue" | Holds `PUSH_PB` (push to predicate buffer) |
+| `MOVEMASK` (910B1) | "Move/build mask register" | Naming + bool-packing role |
+| `MOVEVA` (910B1) | "Move Vector Arithmetic" | Pure name guess |
+| `VNCHWCONV` (910B1) | "Vector NCHW-format CONVert" | Domain-knowledge guess (NCHW = tensor layout) |
+
+#### What would constitute authoritative verification
+
+| Source | Have access? |
+|---|---|
+| Internal Huawei A5 ISA reference document | ❌ Not public |
+| Mind Studio's instruction reference UI | ❌ Need installed Mind Studio with A5 plugin |
+| BiSheng `llvm-objdump --disassemble-aicore` working output | ❌ Decoder gated |
+| `msopgen sim` with full operand decode for A5 | ❌ Not yet shipped (see §4.7.3.9) |
+| PTO-ISA `pto.*` semantic descriptions | ✅ But at tile-IR level, not machine ISA |
+
+#### Why the §4.7 conclusions still hold
+
+The headline narrative — predicate ISA replaces packing/unpacking, bool and cast converge on A5, A5 runs 19× faster than 910B1 — relies on **mnemonic counts, pipe assignments, and cycle timing**, not on each mnemonic's exact byte-by-byte semantics. Those three properties come directly from the trace and don't depend on my mnemonic glosses being precisely correct.
+
+So if my "RV_VSTI = store contiguous 32-byte vector to memory at base+offset" gloss turns out to be slightly off (e.g. it's actually "non-temporal store with SB-bypass") — the conclusion that **A5 issues 32 vector stores where 910B1 issues 1024 scalar byte-stores** still holds. The 32 vs 1024 ratio is from event counts in the trace.
+
+#### Summary table — what's safe to cite from this doc
+
+| Claim | Confidence basis |
+|---|---|
+| "A5 emits `RV_PAND` / `RV_POR` / `RV_PXOR` / `RV_PSET` predicate ops" | **Verified** — PTO-ISA documents these as the predicate-class instructions; trace shows them firing |
+| "A5 has dedicated MaskReg hardware" | **Verified** — local arch ref + PTO-ISA |
+| "1024 byte-stores on 910B1 → 32 vector stores on A5" | **Verified** — trace event counts directly |
+| "A5 cycle span is 1431 cyc, 19× faster than 910B1's 27645 cyc" | **Verified** — camodel `Total tick` and trace `ts+dur` |
+| "Bool and cast on A5 differ by only 2 instructions" | **Verified** — diff of trace mnemonic counts |
+| Specific bit-level operand details for individual A5 instructions | **Mostly inferred** — see §4.7.3.10 for what's tractable, §4.7.3.11 for confidence on each mnemonic name |
+
 ### 4.7.4 Hypothetical A5 lowering (using the verified PTO-ISA `pto.p*` mnemonics)
 
 Mapping `mask_fn` (`(A & (B | C)) | D`) to A5's predicate ISA (per pto-isa.github.io):
