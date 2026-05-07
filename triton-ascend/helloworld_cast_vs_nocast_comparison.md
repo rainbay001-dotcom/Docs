@@ -713,6 +713,108 @@ What it **cannot** verify without decoded operands:
 
 For our cast-vs-bool comparison, the mnemonic-level data is sufficient to draw the headline conclusions (95% fewer events, ~19× faster, predicate ISA used as predicted). For deeper questions ("which predicate register holds A vs B vs C", "is the compiler register-allocating efficiently", "where do spills happen"), we'd need one of the three paths above.
 
+### 4.7.3.10 Manual A5 binary decoding — what's tractable, what isn't
+
+I tried to bridge the §4.7.3.9 trace-richness gap by manually decoding the 32-bit A5 instruction binaries. Result: **at least one scalar instruction format is fully reverse-engineerable from the trace alone**. Others need more data.
+
+#### Approach
+
+The raw `instr_log.dump` carries each instruction's binary alongside its mnemonic and PC:
+
+```
+[info] [00000712] (PC: 0x10d0d000) SCALAR : (Binary: 0x02004880) (ID: 000000) MOV_XD_SPR
+[info] [00000718] (PC: 0x10d0d014) SCALAR : (Binary: 0x077b000f) (ID: 000005) MOVK
+[info] [00000717] (PC: 0x10d0d010) SCALAR : (Binary: 0x073afee0) (ID: 000004) MOV_XD_IMM
+```
+
+For each mnemonic class, group same-mnemonic instances and look for bit fields that vary while the mnemonic stays constant. The varying fields are operands; the constant fields are the opcode.
+
+#### MOV_XD_IMM — fully decoded (17/17 instances verified)
+
+Encoding format:
+```
+[31:24]  = 0x07         (opcode)
+[23:17]  = XD           (destination register, 7-bit, supports X0..X127)
+[16]     = 0            (reserved/flag)
+[15:0]   = imm16        (immediate value, 16 bits)
+```
+
+Verification — every observed instance decodes cleanly:
+
+| Binary | XD | imm16 | Inferred role |
+|---|---|---|---|
+| `0x073afee0` | X29 | 0xfee0 | stack-frame-base seed |
+| `0x07207fff` | X16 | **0x7fff** | mask-register seed (matches expected value!) |
+| `0x070c003c` | X6 | **0x003c** | parameter-load offset |
+| `0x070e0010` | X7 | **0x0010** | small const |
+| `0x070c0030` | X6 | **0x0030** | parameter-load offset |
+| `0x070a0000` | X5 | 0x0000 | scratch zero |
+| `0x070c0080` | X6 | **0x0080** | BLOCK = 128 |
+| `0x07060080` | X3 | 0x0080 | BLOCK |
+| `0x07040100` | X2 | **0x0100** | tile size |
+| `0x07000180` | X0 | **0x0180** | tile size |
+| `0x07060000` | X3 | 0x0000 | scratch zero |
+| `0x07040001` | X2 | 0x0001 | small const |
+| `0x07000400` | X0 | **0x0400 = 1024** | N×M total elements |
+| `0x0708001e` | X4 | **0x001e = 30** | loop_iter - 1 |
+
+(Bold values are imm16 matches that confirm the field interpretation — for instance, the `0x7fff` mask seed and `0x0400 = 1024 = M*N` are unambiguous from kernel context.)
+
+**Confidence: high.** All 17 instances fit. Immediate field is verifiable directly from observed values; register field is inferred from positional consistency (X29 appears in early prologue ⟹ stack-frame-base, X0 appears in loop counters ⟹ low-numbered scratch, etc.).
+
+#### ADD_IMM — partially decoded
+
+Tentative format (bits 31:24 are the opcode; remaining is structural inference):
+```
+[31:24]  = 0x08         (opcode for ADD_IMM)
+[23:18]  = XD           (destination, 6-bit)
+[17:12]  = XN           (source, 6-bit)
+[11:0]   = imm12        (12-bit signed/unsigned immediate)
+```
+
+Examples:
+| Binary | XD | XN | imm12 |
+|---|---|---|---|
+| `0x08020030` | X0 | X32 | 0x030 = 48 |
+| `0x08060020` | X1 | X32 | 0x020 = 32 |
+| `0x08231002` | X8 | X49 | 0x002 = 2 |
+| `0x081ef001` | X7 | X47 | 0x001 = 1 |
+| `0x083dd788` | X15 | X29 | 0x788 = 1928 |
+
+Confidence: **moderate**. The imm12 values look like reasonable strides/offsets. The register fields (XN values up to 49) imply a register file ≥50 entries, which fits A5's wider register state. But without operand-text ground truth I can't confirm the exact bit positions of the two register fields.
+
+#### What stops full reverse engineering
+
+To unambiguously decode a register field, you'd need two instances of the same mnemonic where:
+- The destination register is **known to be different** (so I can see which bits change)
+- The other operands are constant (so non-register bits stay fixed)
+
+The trace doesn't give us that ground truth. The 910B1 trace did — every event spelled out `XD:X29=...` — but A5 doesn't.
+
+The mnemonic classes I can decode partially or fully from trace alone:
+- **Immediate-only** (MOV_XD_IMM, MOV_XD_SPR — fully decodable; SPR-name field also has finite enumeration that's verifiable by SPR write-events in `reg_log.dump`)
+- **Register + immediate** (ADD_IMM, MOVK — partial; the imm field is verifiable, register fields are inferred)
+- **Register-only** (ADD, AND, MUL, etc. — *not* trace-decodable; no observed values to anchor)
+- **Vector ops** (RV_PAND, RV_VCMP_*, etc. — *not* trace-decodable; operand state lives in vector register file we have no read-out for)
+
+#### Practical option for full A5 decoding
+
+The cleanest path is to **build a small disassembly-validation harness**:
+1. Write 5–10 micro-kernels each containing a single instruction with known operands (e.g., `MOV X29, 0x1234`)
+2. Compile each → inspect the .o → isolate the binary encoding for that one instruction
+3. Tabulate (mnemonic, known operands, observed binary) → derive the encoding by direct comparison
+
+This would take a few hours of work and would build a complete A5 decoder. Without it, manual decoding is bounded to formats that are self-evident from the trace (like MOV_XD_IMM).
+
+#### What this section adds to §4.7.3.8's mapping
+
+The mapping in §4.7.3.8 is at PC + mnemonic + pipe granularity. With the partial decoder above, we can now also resolve:
+- For every `MOV_XD_IMM` in §4.7.3.8: full operand state (XD register + immediate value)
+- For every `ADD_IMM`: imm12 directly; register fields inferred
+- For most `RV_*` vector ops: still mnemonic + dtype + pipe only (these are the bulk of the kernel, unfortunately)
+
+Future work to fully decode A5 traces is the disassembly-validation harness above, or waiting for CANN to ship the upgraded `msopgen sim` parser.
+
 ### 4.7.4 Hypothetical A5 lowering (using the verified PTO-ISA `pto.p*` mnemonics)
 
 Mapping `mask_fn` (`(A & (B | C)) | D`) to A5's predicate ISA (per pto-isa.github.io):
