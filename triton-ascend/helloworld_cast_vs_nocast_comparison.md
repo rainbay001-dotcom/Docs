@@ -345,6 +345,31 @@ def mn_stats(events):
     return dur, cnt
 ```
 
+## 6.5 Microarchitecture caveat — what model the camodel actually ran
+
+The kernel was **compiled for `Ascend910_9362`** (the silicon variant on dev box 218; per `mask_kernel.json`'s `target.arch` field). The camodel was launched with `soc_version="Ascend910B1"` for the runs in §3–§4.6 above. To check whether this mattered, I re-ran both kernels with `soc_version="Ascend910_9362"` and compared.
+
+**Result: instruction traces are bit-identical between the two settings.**
+
+| Run | events | unique PCs | span | SCALAR | VECTOR | MTE2 | camodel `Total tick` |
+|---|---|---|---|---|---|---|---|
+| bool, soc=910B1 | 9,459 | 624 | 27,645 | 70,590 | 8,647 | 3,658 | 28,573 |
+| bool, soc=9362 | 9,459 | 624 | 27,645 | 70,590 | 8,647 | 3,658 | 28,709 |
+| cast, soc=910B1 | 9,364 | 529 | 27,995 | 71,608 | 8,383 | 3,656 | 28,937 |
+| cast, soc=9362 | 9,364 | 529 | 27,995 | 71,608 | 8,383 | 3,656 | 28,857 |
+
+The msopgen-parsed instruction stream is identical. Camodel's own `Total tick` counter varies by ±200 cycles between runs but doesn't track the soc_version — these are run-to-run variations in init/teardown bookkeeping, not microarchitecture differences.
+
+Why: the simulator loads `Ascend910B1/lib/config_stars.json` regardless of `te_set_version` / `soc_version`. The doc note in [`ascend_cycle_profiling.md`](ascend_cycle_profiling.md) §3.3 ("CAMODEL_CONFIG_PATH may not be honored as expected — the camodel has its own platform-detection that picks a closest available config") explains this. **In CANN-8.5.0, the camodel infrastructure is hardcoded to 910B1 internally**; passing `Ascend910_9362` doesn't activate a different microarchitecture model.
+
+Implications:
+- The cycle numbers in §3, §4, §4.5, §4.6 are **910B1-model values**, regardless of how the run was launched.
+- The bool-vs-cast comparison is internally consistent (same model ran both, same compilation settings) — so the 4.5%/15% deltas, the VECTOR-pipe diffs, and the source-mapping all hold.
+- They don't directly map to real-silicon Ascend910_9362 cycles. The closest comparison for that is **msprof on real device**, e.g. the 12,658 AIV cycles measured for `vector_add` in [`helloworld_mask_camodel_walkthrough.md`](helloworld_mask_camodel_walkthrough.md) §2.
+- To get a "true" Ascend910_9362 simulator, you'd need either an internal Huawei build with the 9362-specific config wired up or a direct silicon measurement via msprof.
+
+What this means in practice: **treat camodel cycle numbers as model-relative, not silicon-absolute.** Diffs between two camodel runs are valid signal; absolute cycles aren't directly comparable to vendor 910_9362 datasheets.
+
 ## 7. Where everything lives
 
 Server (192.168.25.218):
@@ -352,12 +377,15 @@ Server (192.168.25.218):
 - `/home/Ray/triton_hello/helloworld_cast_runner.py` — cast kernel
 - `/home/Ray/triton_hello/mask_cache/<hash>/mask_kernel.npubin` — bool compiled
 - `/home/Ray/triton_hello/mask_cast_cache/<hash>/mask_kernel_cast.npubin` — cast compiled
-- `/home/Ray/triton_hello/camodel_run/mask_dumps/` + `mask_cast_dumps/` — per-core dumps
-- `/home/Ray/triton_hello/camodel_run/mask_trace/` + `mask_cast_trace/` — parsed traces
+- `/home/Ray/triton_hello/camodel_run/mask{,_cast}_dumps{,_9362}/` — per-core dumps for all 4 runs
+- `/home/Ray/triton_hello/camodel_run/mask{,_cast}_dumps_9362_trace/` — parsed traces (9362)
+- `/home/Ray/triton_hello/camodel_run/mask{,_cast}_trace/` — parsed traces (910B1)
 
 Local:
-- `/tmp/mask_trace.json` — bool trace (1.95 MB)
-- `/tmp/mask_cast_trace.json` — i32 trace (1.93 MB)
+- `/tmp/mask_trace.json` — bool trace 910B1 (1.95 MB)
+- `/tmp/mask_cast_trace.json` — cast trace 910B1 (1.93 MB)
+- `/tmp/mask_9362_trace.json` — bool trace 9362 (identical to 910B1)
+- `/tmp/mask_cast_9362_trace.json` — cast trace 9362 (identical to 910B1)
 
 ## 8. TL;DR
 
@@ -369,3 +397,4 @@ Local:
 | `WAIT_FLAG`/`SET_FLAG`/`BAR` (+1K cyc) added by cast | i32-width path needs more inter-pipe sync |
 | **Loop body and 1024 stores unchanged** | The kernel's bottleneck is the scalar unpack-store loop, not the upstream type. Cast doesn't touch it. |
 | **To actually speed up**: change the output type | Pack output as bitmap or wider int → cut store cost ~8×. Casting intermediates can't fix what the output type forces. |
+| **Camodel μarch caveat** | `te_set_version("Ascend910_9362")` doesn't change the simulator behavior — camodel locks to 910B1 internally. All cycle numbers are 910B1-model. Real-silicon 910_9362 numbers need msprof. See §6.5. |

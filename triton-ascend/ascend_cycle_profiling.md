@@ -247,6 +247,21 @@ Then run your kernel. Confirmation that camodel took over comes from its own sta
 ... (attaches AIC 0 through AIC 21 — 22 simulated AI Cores)
 ```
 
+### 3.2.1 The simulator is locked to 910B1 internally (verified 2026-05-07)
+
+`te_set_version("Ascend910_9362")` and `soc_version="Ascend910_9362"` in `AscendOpKernelRunner` do NOT activate a 9362-specific simulator. Verified by running the same kernel twice with both `soc_version` settings and diffing the parsed traces:
+
+| `soc_version=` | events | unique PCs | span (cyc) | SCALAR cyc | VECTOR cyc | MTE2 cyc |
+|---|---|---|---|---|---|---|
+| `Ascend910B1` | 9,459 | 624 | 27,645 | 70,590 | 8,647 | 3,658 |
+| `Ascend910_9362` | **same** | **same** | **same** | **same** | **same** | **same** |
+
+The `msopgen sim`-parsed instruction streams are bit-identical. Camodel's own `Total tick` counter varies by ±200 cyc between runs (28,573 vs 28,709 for the bool variant) but it's run-to-run init/teardown variance, not a microarchitecture signal.
+
+The simulator banner gives the explanation: regardless of `soc_version`, it loads `/usr/local/Ascend/cann-8.5.0/aarch64-linux/simulator/Ascend910B1/lib/config_stars.json`. CAMODEL's platform-detection is hardcoded to 910B1 in CANN-8.5.0.
+
+**Implication: treat camodel cycle numbers as 910B1-model values, not silicon-specific.** Diffs between two camodel runs (different kernels, different inputs) are valid signal; absolute cycles aren't comparable to vendor 910_9362 / 910C / 910A datasheets. For real-silicon cycle data on 910_9362, use msprof on the 218 dev box.
+
 ### 3.3 Surprises observed
 
 Two things worth knowing:

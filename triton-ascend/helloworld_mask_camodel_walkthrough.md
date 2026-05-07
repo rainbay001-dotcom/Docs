@@ -292,6 +292,10 @@ The loop body shows what the mask kernel actually does at the instruction level:
 - **`0x10d11270`** is the loop end-check: compare loop counter against `0x2000` and branch back if not equal. This `CMP` fires 1024 times (matching the `ENDLOOP` count) — confirming the inner loop trip count.
 - **`MOVEV`** at the end moves the computed mask vector to its destination.
 
+### 5.7.0 Microarchitecture caveat
+
+Cycle numbers in this walkthrough are from the camodel with `soc_version="Ascend910B1"`. Although the kernel was compiled for `Ascend910_9362` and `te_set_version("Ascend910_9362")` is supported by the launcher, **the camodel internally locks to 910B1's config** regardless. Verified: identical traces under both `soc_version` settings. See [`helloworld_cast_vs_nocast_comparison.md`](helloworld_cast_vs_nocast_comparison.md) §6.5 for the diff. Treat camodel cycle numbers as 910B1-model values; for real-silicon Ascend910_9362 numbers, use msprof on the 218 dev box (yesterday's vector_add measurement: 12,658 AIV cycles).
+
 ### 5.7 Corrected reading: where the mask compute actually happens
 
 **An earlier version of §5.3 above claimed "Triton lowered the 2-D mask compute as a flat scalar loop, not a vectorized comparison" based on the 1024 `CMPN` instructions matching M×N. That was wrong — see the evidence here.**
