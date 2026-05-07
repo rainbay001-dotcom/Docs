@@ -636,3 +636,63 @@ TRITON_PRINT_AUTOTUNING=1       # autotuner picks
 ```
 
 For the `LD_LIBRARY_PATH` needed to actually run anything against an Ascend device, the `~/.bashrc` block is in `reference_npu_server.md` (memory).
+
+## 14. Capturing every MLIR pass dump (~270 dumps)
+
+The `vector_add` kernel runs through ~104 unique MLIR passes from `.ttadapter` to `.npubin`, but they're hidden from `--mlir-print-ir-after-all` on `bishengir-compile` because the entire backend is wrapped in a single composite pass `adapt-triton-kernel` that builds its inner pipeline imperatively (not via a nested PassManager).
+
+The same inner pipeline IS reachable from `bishengir-opt` via composite *pipeline* names — `--lower-hfusion-pipeline` and `--optimize-hivm-pipeline` — that DO decompose normally:
+
+```bash
+# Triton frontend dumps (Python side) — 9 passes
+MLIR_PRINT_IR_AFTER_ALL=1 TRITON_KERNEL_DUMP=1 MLIR_DISABLE_THREADING=1 \
+  python vector_add.py 2> frontend.log
+
+# Backend dumps via bishengir-opt — 270 dumps (104 unique passes)
+bishengir-opt cache_dir/<hash>/add_kernel.ttadapter \
+  --lower-hfusion-pipeline \
+  --optimize-hivm-pipeline \
+  --mlir-print-ir-after-all \
+  --mlir-disable-threading \
+  2> backend.log >/dev/null
+```
+
+The backend run segfaults at the very end (after the last pass writes its dump) — harmless, all 270 dumps are captured before the crash. On the tiny `vector_add` this produces ~770 KB / ~8950 lines of MLIR IR.
+
+### 14.1 Why `--mlir-print-ir-after-all` doesn't work on `bishengir-compile`
+
+Three traps worth knowing:
+
+1. **`bishengir-compile --mlir-print-ir-after-all` is rejected at the CLI parser.** The string is in the binary (`strings | grep mlir-print-ir-after-all` matches) but it's not surfaced to the option parser. `strings | grep flag` is a false-positive trap — always verify with `--help` or by trying the flag.
+2. **`bishengir-compile --print-after-all` is accepted BUT goes to hivmc** (the LLVM clang stage), not the MLIR PassManager. Names look identical to MLIR's flag; behavior diverges.
+3. **`bishengir-compile --bishengir-print-ir-after=<pass-name>` accepts ~hundreds of registered names but only `hivm-inject-sync` is actually wired to a dump hook.** All other names accept silently and produce nothing. cl::opt is single-value; multiple `--bishengir-print-ir-after=` flags only honor the last one.
+
+So the path forward — for any future Triton-Ascend kernel where you want pass-by-pass IR — is the `bishengir-opt` chain in §14.
+
+### 14.2 Examples of the 104 unique passes captured
+
+Frontend (`MLIR_PRINT_IR_AFTER_ALL=1` on the Python invocation):
+- Inliner, Canonicalizer, TritonCombineOps, TritonReorderBroadcast, CSE, LoopInvariantCodeMotion, SymbolDCE, TritonLoopUnroll (9 dumps total)
+
+Backend `lower-hfusion-pipeline` (~101 dumps):
+- ConvertLinalgToHFusion, ConvertTensorToHFusion, ConvertArithToHFusion, ConvertMathToHFusion, ConvertGenericToNamedOp
+- HFusionOpFusion, HoistTensorEmpty, FoldTensorEmpty, FoldSymbolicDim, UnfoldSymbolicDim
+- HFusionInlineBrc, NormalizeSliceOps, NormalizeLastDimUnalignedTensorOp, ReorderOpsByBFS, OutlineSingleOp
+- AutoSchedule, Decompose, DecomposeMulti, FlattenOps
+- ExtendedCanonicalizer / CSE / ConvertArithToAffine (each fires multiple times between transforms)
+
+Backend `optimize-hivm-pipeline` (~116 dumps):
+- ConvertToHIVMOp, InferHIVMDataLayout, InferHIVMMemScope, InferFuncCoreType
+- MarkRealCoreType, MarkStrideAlign, MarkMultiBuffer, EnableMultiBuffer, EnableStrideAlign
+- AddFFTSAddr, AddFFTSToSyncBlockSetOp, BindWorkSpaceArg, BindSyncBlockLockArg, InitEntryKernel
+- HIVMDecomposeOp, HIVMAggregatedDecomposeOp, HIVMFlattenOps, HIVMInlineOTFLoadStore, HIVMRecognizeDeinterleaveOp
+- AlignAllocSize, AllocExtraBuffer, AutoInferBufferSize, ConstantizeBufferSize, SetBufferSize
+- TileAndBindSubBlock, TileBatchMMIntoLoop, MapForToForall, HIVMMapForallToBlocks
+- InjectSync, InjectBlockSync, SyncBlockHoisting, LowerCreateSyncBlockLock
+- CVPipelining, PlanMemory, OneShotBufferize, MemrefDeadStoreEliminationOp
+- HIVMLowerToLoops (final lowering before LLVM-IR emission)
+- InlineFixpipe, InlineLoadCopy, InlineOTFBroadcast (lowering-time inlining)
+- SCFForLoopCanonicalization, RemoveRedundantLoopInit, LoopInvariantSubsetHoisting, LiftLowestStride
+- InsertInferTaskTypeFunc, InsertInferSyncBlockLockNumAndInitFunc, InsertWorkSpaceForMixCV (kernel-launch metadata)
+
+After this comes the LLVM half (handled by hivmc as a subprocess of bishengir-compile, not visible in MLIR dumps): LLVM optimization, register allocation, scheduling, and machine-code emission for hiipu64.
