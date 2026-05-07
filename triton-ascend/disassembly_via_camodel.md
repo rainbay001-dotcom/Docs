@@ -69,6 +69,8 @@ You get the full **dynamic execution trace with operand values** — strictly mo
 
 68 instructions executed on core0/veccore0 over a 1053-cycle span, sorted by PC and grouped by phase.
 
+> **Phase labels are interpretive, not directly evidenced.** The trace gives PC + mnemonic + operand state + pipeline; **it does not give source-line annotations** (that path requires `msopgen sim -reloc <npubin>` which triggers the gated BiSheng llvm-objdump decoder). The phase boundaries below are inferred from explicit SPR names in operands (`SYS_VA_BASE`, `COREID`, `PARA_BASE`, `BLOCKID`, `CTRL`), `JUMPC` targets, and pattern-matching on Triton-Ascend's typical lowering shape. **See §3.8 for what's solid vs guessed.**
+
 ### 3.1 Phase 1 — Setup (PC 0x10d11000–0x10d11030)
 
 Register init, special-purpose register reads, mask register init.
@@ -188,6 +190,37 @@ The full `.text` is **740 bytes / 185 instructions**. We executed 68 here. The o
 - Possibly an outer tile loop for larger `n`
 - Error/abort handlers
 Run the kernel with different inputs (e.g., `n=1023`) to surface them.
+
+### 3.8 Solid evidence vs. inference — how reliable are the phase labels?
+
+The phase labels in §3.1–3.5 are not directly evidenced in the trace. Here's what's strong, what's pattern-matched, and what's a guess.
+
+**Directly observable in the trace** (these are facts):
+
+| Signal | Where it appears | What it tells you |
+|---|---|---|
+| SPR names in operand details | `SPR:SYS_VA_BASE`, `SPR:COREID`, `SPR:PARA_BASE`, `SPR:BLOCKID`, `SPR:CTRL` | Architectural register being read — explicit in the trace |
+| `JUMPC` target PC | `Target PC:0x10d111d8, cond_flag:1` | Defines branch boundary — explicit |
+| `SET_FLAG` / `WAIT_FLAG` operands | `PIPE:VEC, TRIGGER PIPE:MTE2, FLAG ID:0` | Pipe-pair sync semantics — explicit |
+| `cname` field | "startup" on PC 0x10d11000–0x10d111fc, "rail_response" on `JUMPC`, "cq_build_failed" on VEC ops, "thread_state_iowait" on `WAIT_FLAG` | Camodel render-color hint, **not a kernel-phase label** — but suggestive |
+| Per-instruction `dur` | `LD_XD_XN_IMM`=361, `DIV`=21, `STI_XN_IMM`=259, etc. | Direct cycle cost — explicit |
+
+**Inferred phase labels** (these are interpretation):
+
+| Phase | Inference basis | Strength |
+|---|---|---|
+| §3.1 Setup | First reads of `SYS_VA_BASE` + `COREID` SPRs; `cname="startup"` on these PCs; mask-register init via `MOVEMASK` | **Strong** — SPRs by convention read in kernel prologue; `MOVEMASK` initializes vector mask |
+| §3.2 Parameter loading | `MOV_XD_SPR PARA_BASE` then `LD/LDP` from `PARA_BASE+offset` | **Strong — SPR is literally named "parameter base"** |
+| §3.3 program_id computation | `MOV_XD_SPR BLOCKID` then `DIV` and `REM` | Moderate — DIV/REM after BLOCKID is the textbook block-id → program_id pattern, but the trace doesn't say so. Could plausibly be tile-coordinate math. |
+| §3.4 Mask check + branch | `CMP_IMM ... 0x7f, GT` immediately followed by `JUMPC` | **Weak — the most interpretive label.** It's a compare-and-branch; calling it "mask check" assumes Triton's `mask = offsets < n_elements` lowering. The `0x7f = 127` immediate is consistent with "is tile size > 127" matching our `BLOCK=128`, which is circumstantial correlation but not proof. |
+| §3.5 Full-tile fast path | The PC region after the taken `JUMPC` | Moderate — labeling it "fast path" assumes the not-taken branch is slow (masked-tail), which is just my framing. The trace doesn't tag it. |
+
+**What would make the labels rigorous:**
+- `msopgen sim -reloc <npubin>` would map PCs to source lines — but the underlying `llvm-objdump --save-aicore-bins` decoder is gated.
+- Re-running with `n=1023` (non-128-aligned) would force `JUMPC` the other way; whichever PC range becomes the executed-branch this time IS the masked-tail path. Whichever stays unexecuted IS the fast path. That confirms §3.4 and §3.5 directly.
+- Reading the Triton-Ascend pattern that emits the mask-check IR-to-asm lowering would close §3.3 and §3.4.
+
+**Don't take the phase labels as ground truth.** They're a reading of the assembler that's consistent with the kernel's source, the SPR names visible in the trace, and the typical Triton-Ascend lowering shape. The instruction-level data (mnemonics, operands, cycle counts, pipes) is direct.
 - **0x10d11214–0x10d11234**: `SET_FLAG` / `WAIT_FLAG` synchronization between VEC and MTE2 pipes — the load/compute/store handshake
 
 ## 4. What this does NOT give you
