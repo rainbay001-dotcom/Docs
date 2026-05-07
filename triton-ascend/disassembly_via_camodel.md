@@ -65,34 +65,129 @@ Each event encodes:
 
 You get the full **dynamic execution trace with operand values** — strictly more information than a static `objdump -d` dump, for the inputs you ran.
 
-## 3. Worked example — `vector_add`
+## 3. Worked example — full executed assembler for `vector_add`
 
-68 instructions executed on core0/veccore0 over a 1053-cycle span. Sample slice:
+68 instructions executed on core0/veccore0 over a 1053-cycle span, sorted by PC and grouped by phase.
+
+### 3.1 Phase 1 — Setup (PC 0x10d11000–0x10d11030)
+
+Register init, special-purpose register reads, mask register init.
 
 ```
-PC          Mnemonic     Operands                                Pipe    Cycle  Dur
-0x10d11000  MOV_XD_IMM   X29=0x7f80, IMM:0x7f80                  SCALAR  ts=688  dur=2
-0x10d11004  MOVK         X29=0x107f80, IMM:0x10, UIMM:0x1        SCALAR  ts=689  dur=2
-0x10d11008  MOV_XD_SPR   X15=0,  SPR:SYS_VA_BASE                 SCALAR  ts=689  dur=2
-0x10d1100c  ADD          X29=0x107f80, X29, X15  (S64)           SCALAR  ts=691  dur=2
-0x10d11010  MOV_XD_SPR   X15=0x19, SPR:COREID                    SCALAR  ts=695  dur=2
-0x10d11014  MOV_XD_IMM   X16=0x7fff, IMM:0x7fff                  SCALAR  ts=695  dur=2
-0x10d1101c  AND          X15=0x19, X15, X16                      SCALAR  ts=696  dur=2
-0x10d1102c  MOVEMASK     XN:X0=0xff..ff, Pos:0, Id:11            VECTOR  ts=699  dur=17
-0x10d11074  DIV          X1=…, X6=0x19, X1=0    (S64)            SCALAR  ts=1069 dur=21  ← prog_id divide
-0x10d11084  REM          X1=…, X1, X4           (S64)            SCALAR  ts=1090 dur=21  ← prog_id mod
-0x10d110b0  CMP_IMM      X4=0x80, IMM:0x7f, GT                   SCALAR  ts=1116 dur=2
-0x10d110b4  JUMPC        Target=0x10d111d8, cond=1               FLOWCTL ts=1117 dur=1   ← jump (taken)
-0x10d11214  SET_FLAG     PIPE:VEC, TRIGGER:MTE2, FLAG:0          VECTOR  ts=1484 dur=1   ← VEC→MTE2 sync
-0x10d1121c  WAIT_FLAG    PIPE:VEC, TRIGGER:MTE2, FLAG:0          MTE2    ts=1485 dur=1
-0x10d11234  SET_FLAG     (last)                                  VECTOR  ts=1741 dur=1
+0x10d11000  MOV_XD_IMM   X29 = 0x7f80                                    ; SCALAR  2 cyc
+0x10d11004  MOVK         X29 = 0x107f80   (insert 0x10 at UIMM:1)        ; SCALAR  2 cyc
+0x10d11008  MOV_XD_SPR   X15 = SYS_VA_BASE                               ; SCALAR  2 cyc
+0x10d1100c  ADD          X29 = X29 + X15                  (S64)          ; SCALAR  2 cyc
+0x10d11010  MOV_XD_SPR   X15 = COREID         (= 0x19)                   ; SCALAR  2 cyc
+0x10d11014  MOV_XD_IMM   X16 = 0x7fff                                    ; SCALAR  2 cyc
+0x10d11018  MOV_XD_IMM   X0  = 0x1                                       ; SCALAR  2 cyc
+0x10d1101c  AND          X15 = X15 & X16                  (B64)          ; SCALAR  2 cyc
+0x10d11020  MOV_XD_IMM   X17 = 0x8000                                    ; SCALAR  2 cyc
+0x10d11024  NEG          X0  = -X0          (= 0xff..ff)  (S64)          ; SCALAR  2 cyc
+0x10d11028  MADD         X29 = X15*X17 + X29 = 0x1cff80   (S64)          ; SCALAR  4 cyc  ← stack-frame base = COREID*0x8000 + ffts_base
+0x10d1102c  MOVEMASK     pos:0  id:11    XN:X0=0xff..ff                  ; VECTOR  17 cyc ← initialize vector mask register
+0x10d11030  MOVEMASK     pos:1  id:12    XN:X0=0xff..ff                  ; VECTOR  17 cyc
 ```
 
-You can see the kernel's structure unfold:
+### 3.2 Phase 2 — Parameter loading (PC 0x10d11034–0x10d11058)
 
-- **0x10d11000–0x10d1101c**: register init — read special-purpose registers (`SYS_VA_BASE`, `COREID`), build base addresses
-- **0x10d11074–0x10d11088**: `DIV`/`REM`/`SHL` — compute `program_id` from `COREID` and tile decomposition (each `DIV` is 21 cycles, ~10× a typical scalar op)
-- **0x10d110b0–0x10d110b4**: mask check (`CMP_IMM` + `JUMPC`) — Triton's `mask = offsets < n_elements` skip path
+Read kernel args from PARA_BASE: x_ptr, y_ptr, n_elements, gridX/Y/Z.
+
+```
+0x10d11034  ADD_IMM      X30 = X29 + 0x770   (= 0x1d06f0)                ; SCALAR  2 cyc   ← workspace pointer
+0x10d11038  MOV_XD_SPR   X1  = PARA_BASE     (= 0x1022fe00)              ; SCALAR  2 cyc
+0x10d1103c  ADD_IMM      X6  = X1 + 0x38     (= 0x1022fe38)              ; SCALAR  2 cyc
+0x10d11040  ADD_IMM      X0  = X1 + 0x20     (= 0x1022fe20)              ; SCALAR  2 cyc
+0x10d11044  LD_XD_XN_IMM X5  = [X1 + 0x18]   (B64)                       ; SCALAR  361 cyc ← load FFTS-related metadata (cache miss)
+0x10d11048  ADD_IMM      X2  = X1 + 0x30                                 ; SCALAR  2 cyc
+0x10d1104c  LDP_XI_XJ_XN X1,X6 = [X6]        (B32 pair)                  ; SCALAR  361 cyc ← load gridX, gridY (cache miss)
+0x10d11050  LDP_XI_XJ_XN X3,X0 = [X0]        (B64 pair)                  ; SCALAR  361 cyc ← load 2 ptrs (x_ptr, y_ptr)
+0x10d11054  MUL          X1  = X6 * X1                    (S64)          ; SCALAR  3 cyc
+0x10d11058  LDP_XI_XJ_XN X2,X4 = [X2]        (B32 pair)                  ; SCALAR  6 cyc   ← load (gridZ, n_elements)
+```
+
+### 3.3 Phase 3 — program_id computation + bounds (PC 0x10d1105c–0x10d110ac)
+
+`DIV`/`REM` on BLOCKID to get program_id; clamp to valid offset range.
+
+```
+0x10d1105c  MOV_XD_SPR   X7 = CTRL                                       ; SCALAR  2 cyc
+0x10d11060  MOV_XD_SPR   X6 = BLOCKID        (= 0x1)                     ; SCALAR  2 cyc   ← which grid block this is
+0x10d11064  INSERT_XD    X7 bit-insert (POS:0x38)                        ; SCALAR  2 cyc
+0x10d11068  SIGNEXT      X6 = (S32) X6                                   ; SCALAR  2 cyc
+0x10d1106c  SIGNEXT      X1 = (S32) X1                                   ; SCALAR  2 cyc
+0x10d11070  MOV_SPR_XN   CTRL = X7                                       ; SCALAR  1 cyc
+0x10d11074  DIV          X1 = X6 / X1                     (S64)          ; SCALAR  21 cyc  ← BLOCKID / gridX_total → program_id
+0x10d11078  SIGNEXT      X4 = (S32) X4                                   ; SCALAR  2 cyc
+0x10d1107c  SIGNEXT      X2 = (S32) X2                                   ; SCALAR  2 cyc
+0x10d11080  SIGNEXT      X1 = (S32) X1                                   ; SCALAR  2 cyc
+0x10d11084  REM          X1 = X1 % X4                     (S64)          ; SCALAR  21 cyc  ← within-row index
+0x10d11088  SHL          X1 = imm 0x7   (= 0xff..ff80, i.e. -128)        ; SCALAR  2 cyc
+0x10d1108c  SIGNEXT      X6 = (S32) X1                                   ; SCALAR  2 cyc
+0x10d11090  MAX          X1 = max(X2, X6)                 (S64)          ; SCALAR  2 cyc   ← lower bound
+0x10d11094  ADD_IMM      X2 = X6 + 0x80                                  ; SCALAR  2 cyc   ← upper bound = base + BLOCK
+0x10d11098  MIN          X7 = min(X2, X1)                 (S64)          ; SCALAR  2 cyc
+0x10d1109c  SUB          X4 = X7 - X6                     (= 0x80)       ; SCALAR  2 cyc   ← effective tile size
+0x10d110a0  MOV_XD_XN    X1 = X6                          (S64)          ; SCALAR  2 cyc
+0x10d110a4  MOV_XD_XN    X2 = X4                          (S64)          ; SCALAR  2 cyc
+0x10d110a8  SHL          X1 = X1 << 0x2  (×4 for f32 byte offset)        ; SCALAR  2 cyc
+0x10d110ac  SHL          X2 = imm 0x12                                   ; SCALAR  2 cyc
+```
+
+### 3.4 Phase 4 — Mask check + branch (PC 0x10d110b0–0x10d110b4)
+
+Triton's `mask = offsets < n_elements` lowering: full-tile fast path vs masked-tail slow path.
+
+```
+0x10d110b0  CMP_IMM      X4 vs 0x7f, GT?                                 ; SCALAR  2 cyc   ← is tile size > 127 (full BLOCK)?
+0x10d110b4  JUMPC        if cond=1 → PC=0x10d111d8                       ; FLOWCTRL 1 cyc  ← TAKEN (skip masked-tail path)
+```
+
+### 3.5 Phase 5 — Full-tile fast path (PC 0x10d111d8–0x10d11234)
+
+DMA descriptor build + VEC↔MTE2 sync handshake. The actual element-wise add lives at PCs we didn't reach in this run (in the masked-tail or in tile-loop iterations).
+
+```
+0x10d111d8  SHL          X4 = imm 0x2     (= 0x200)                      ; SCALAR  2 cyc
+0x10d111dc  ADD_IMM      X6 = X4 + 0x1f   (= 0x21f)                      ; SCALAR  2 cyc
+0x10d111e0  MOV_XD_IMM   X7 = 0xe0                                       ; SCALAR  2 cyc
+0x10d111e4  AND          X6 = X6 & X7     (= 0)         (B64)            ; SCALAR  2 cyc
+0x10d111e8  SUB          X4 = X6 - X4     (= 0xff..fe00)                 ; SCALAR  2 cyc
+0x10d111ec  MOV_XD_IMM   X6 = 0                                          ; SCALAR  2 cyc
+0x10d111f0  SHL          X4 = imm 0x34    (= 0xe000_0000_0000_0000)      ; SCALAR  2 cyc
+0x10d111f4  MOVK         X6 = 0xfc0_0000_0000_0000  (insert at UIMM:3)   ; SCALAR  2 cyc
+0x10d111f8  AND          X4 = X4 & X6     (= 0)                          ; SCALAR  2 cyc
+0x10d111fc  MOV_XD_IMM   X6 = 0                                          ; SCALAR  2 cyc
+0x10d11200  MOVK         X6 = 0xfffc_0000  (insert at UIMM:1)            ; SCALAR  2 cyc
+0x10d11204  STI_XN_IMM   [X30 + 0x880] = ZERO  (B32, store-immediate)    ; SCALAR  259 cyc ← clear MTE descriptor slot (cache miss)
+0x10d11208  MOVK         X6 = 0x1f_fffc_0000  (insert at UIMM:2)         ; SCALAR  2 cyc
+0x10d1120c  LD_XD_XN_IMM X7 = [X30 + 0x880] (B64)                        ; SCALAR  257 cyc ← reload after store (cache miss)
+0x10d11210  AND          X6 = X2 & X6     (= 0x2000000)  (B64)           ; SCALAR  2 cyc
+0x10d11214  SET_FLAG     PIPE:VEC, TRIGGER:MTE2, FLAG_ID:0               ; VECTOR  1 cyc   ← signal MTE2: load is ready
+0x10d11218  OR           X4 = X6 | X4     (= 0x2000000)                  ; SCALAR  2 cyc
+0x10d1121c  WAIT_FLAG    PIPE:VEC, TRIGGER:MTE2, FLAG_ID:0               ; MTE2    1 cyc   ← MTE2 receives the signal
+0x10d11220  ADD          X5 = X5 + X1                                    ; SCALAR  2 cyc
+0x10d11224  INSERT_XD    X4 = bit-insert at POS:0x4                      ; SCALAR  2 cyc
+0x10d11228  MOV_XD_IMM   X6 = 0                                          ; SCALAR  2 cyc
+0x10d11234  SET_FLAG     (final fence — kernel done)                     ; VECTOR  1 cyc
+```
+
+### 3.6 What this listing tells you about Triton's lowering
+
+- **No actual `VEC.ADD` / element-wise vector instruction appears.** The `vector_add` semantics (`x + y`) is in the masked-tail path the `JUMPC` skipped, or in tile-loop iterations that didn't fire on this BLOCKID. The 68 instructions we see are setup + parameter loading + program-id math + bounds clamping + sync — i.e. the part of the kernel that runs once per dispatch regardless of which path the data takes.
+- **53 of 68 instructions are pure setup before the branch.** Spending three quarters of a kernel on setup is plausible for a 1024-element add; with a larger `n` and more tile iterations the ratio amortizes.
+- **Heavy memory-stall costs:** three loads at 361 cycles each (`LD_XD_XN_IMM`/`LDP_XI_XJ_XN` on first access to the kernel param block — first-touch cache miss), plus a 259/257-cycle store/reload pair at 0x10d11204. These dominate the SCALAR-pipe busy count (1757 of 1053 span cycles — pipes overlap).
+- **Pipe-pair sync** (`SET_FLAG` VEC→MTE2 + `WAIT_FLAG` MTE2 receives) appears once. Triton's lowering uses one VEC↔MTE2 handshake per tile load.
+- **Branch taken**: `JUMPC` at 0x10d110b4 → 0x10d111d8 skips ~290 bytes of masked-tail code that's invisible in this trace. Surfacing it would need a non-128-aligned `n` (e.g. 1023 or 1100).
+
+### 3.7 What's NOT in the executed slice
+
+The full `.text` is **740 bytes / 185 instructions**. We executed 68 here. The other ~117 are:
+- Masked-tail path (PC range ~0x10d110b8–0x10d111d4) — taken when `tile_size <= 127`
+- The actual `VEC_ADD` (or equivalent element-wise op) and its surrounding load/store
+- Possibly an outer tile loop for larger `n`
+- Error/abort handlers
+Run the kernel with different inputs (e.g., `n=1023`) to surface them.
 - **0x10d11214–0x10d11234**: `SET_FLAG` / `WAIT_FLAG` synchronization between VEC and MTE2 pipes — the load/compute/store handshake
 
 ## 4. What this does NOT give you
