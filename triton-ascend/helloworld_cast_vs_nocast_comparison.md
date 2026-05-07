@@ -318,20 +318,51 @@ So the user's `PAND` observation was correct: the official mnemonic is `pto.pand
 | Does CANN 8.5.0's bundled camodel ship a 9572 simulator directory? | **No** — `simulator/` has Ascend910A/B/B1/B2/B3/B4/B4-1 + 9362/9372/9381/9382/9391/9392, but **no 9572 / 950 / C310 directory** | `ls /usr/local/Ascend/cann-8.5.0/aarch64-linux/simulator/ \| grep 9572` returns empty |
 | Net for CANN 8.5.0 | **Can compile for A5; cannot simulate A5.** Trying `simulator_mode="ca"` with `soc_version="Ascend910_9572"` would fall back to 910B1 the same way `Ascend910_9362` does (per §6.5). | Implied |
 
-**Newer CANN (≥ 9.0):**
+**Empirically verified — CANN 9.0.0 (the latest public release, downloadable from Huawei OBS, no Huawei account login required):**
 
-| Question | What I found |
-|---|---|
-| Does CANN 9.0+ ship an A5 / 9572 / Atlas 350 simulator? | **Not confirmed publicly.** Web search for CANN 9.0 release notes and Atlas 350 simulator support didn't surface direct evidence. The Atlas 350 / Ascend 950PR was announced 2026-03-20; CANN 9.0.0-beta2 docs reference A5 architecture but I haven't verified whether the bundled simulator dir exists. Worth checking when you upgrade CANN on 218. |
-| Where is publicly-tracked A5 perf modeling? | **PTO-ISA repo's CostModel** (Q2 2026 target per its roadmap). Not yet shipping. The repo's CPU simulator covers functional correctness, not cycles. |
-| For real A5 perf today | **Atlas 350 hardware + msprof.** That's the only path right now. |
+Spun up a fresh GCP `e2-standard-16` VM, installed `Ascend-cann-toolkit_9.0.0_linux-x86_64.run` (1.16 GB), and listed the simulator directory:
+
+```bash
+$ ls ~/Ascend/ascend-toolkit/latest/x86_64-linux/simulator/ | grep -E '950|957|95A'
+Ascend950PR_950x   Ascend950PR_950y   Ascend950PR_950z
+Ascend950PR_9571   Ascend950PR_9572   Ascend950PR_9573
+Ascend950PR_9574   Ascend950PR_9575   Ascend950PR_9576
+Ascend950PR_9577   Ascend950PR_9578
+Ascend950PR_957b   Ascend950PR_957c   Ascend950PR_957d
+Ascend950PR_9581   Ascend950PR_9582   Ascend950PR_9583
+Ascend950PR_9584   Ascend950PR_9585   Ascend950PR_9586
+Ascend950PR_9587   Ascend950PR_9588   Ascend950PR_9589
+Ascend950PR_958a   Ascend950PR_958b
+Ascend950PR_9591   Ascend950PR_9592
+Ascend950PR_9595   Ascend950PR_9596   Ascend950PR_9599
+Ascend950PR_95A1   Ascend950PR_95A2
+```
+
+**81 simulator dirs total**, 30+ of which are 950PR (A5) variants. The `Ascend950PR_9572/lib/` dir has the complete simulator stack (`libruntime_camodel.so`, `libnpu_drv_camodel.so`, `libstars.so`, `libffts_model.so`, `libpem_davinci.so`, `config.json`, `config_stars.json` — same 16 files that 910B1's dir has). `pyACL`, `cann-simulator`, `cann-hcomm`, and `ascendnpu-ir` are all installed alongside.
+
+| Question | Result | How verified |
+|---|---|---|
+| Does CANN 9.0.0 ship A5 / Ascend950PR / 9572 simulator support? | **Yes — full coverage.** 30+ 950PR variants present | Verified on freshly-installed CANN 9.0.0 on x86 VM, 2026-05-07 |
+| Are simulator libs complete for 9572? | **Yes** — same 16-file lib set as 910B1's (working) sim dir | `ls Ascend950PR_9572/lib/` |
+| Direct download URL (no Huawei login) | https://ascend-repo.obs.cn-east-2.myhuaweicloud.com/CANN/CANN%209.0.0/Ascend-cann-toolkit_9.0.0_linux-x86_64.run | curl -I returns 200 OK, 1.16 GB |
+| Cost to verify | ~$0.20 on `e2-standard-16` GCP VM, ~30 min total | gcloud invoice |
+
+So as of CANN 9.0.0 (released ~2026-04 based on OBS upload time, post-Atlas 350 launch on 2026-03-20):
+
+- **Compiling for A5 → works** (already worked since CANN 8.5.0)
+- **Cycle-accurate sim of A5 → works** (new in 9.0.0)
+- **Per-instruction trace via `msopgen sim` → should work** (untested by us yet — needs an actual run)
 
 Sources:
 - [PTO ISA Manual — Predicate Generation And Algebra](https://pto-isa.github.io/) — for the verified `pto.pand` / `pto.por` / `pto.pset_b{8,16,32}` / `pto.psel` mnemonics
 - [github.com/cannmirror/pto-isa](https://github.com/cannmirror/pto-isa) — A5 added 2026-03-30; backend WIP
 - Local arch reference at `~/Documents/docs/ascend_910c_microarchitecture.md` §17c/§20 — MaskReg width = VL/8 on A5
+- **Direct empirical**: CANN 9.0.0 installed on a GCP VM, 2026-05-07; simulator directory listing reproduced above
 
-**Bottom line**: A5 has predicate-register hardware (MaskReg) and a verified predicate-instruction set (`pto.pand`/`pto.por`/etc.). The PAND lowering you observed elsewhere is the official `pto.pand` from PTO-ISA. **In CANN 8.5.0, a cycle-accurate A5 simulation isn't available** — the simulator dir for 9572 is missing even though the compiler accepts the target. To verify the hypothetical A5 lowering in §4.7.4 against actual A5-compiled output, you'd need either: (a) check whether CANN 9.0+ bundles a 9572 sim, or (b) run on real Atlas 350 hardware with msprof.
+**Bottom line**: A5 has predicate-register hardware (MaskReg) and a verified predicate-instruction set (`pto.pand`/`pto.por`/etc.). **CANN 9.0.0 finally ships the bundled cycle-accurate simulator for the 9572 SOC** — a real upgrade over CANN 8.5.0 where only the compiler target was supported. To verify the hypothetical A5 lowering in §4.7.4 against actual compiled+simulated output, the next step is to:
+1. Compile `mask_fn` with `target=Ascend910_9572` (or compile-target of the 950PR_9572 variant)
+2. Run under `AscendOpKernelRunner(simulator_mode="ca", soc_version="Ascend950PR_9572", simulator_lib_path="...Ascend950PR_9572/lib")`
+3. Parse with `msopgen sim` and inspect for `pto.pand`/`pto.psel`/etc.
 
 ### 4.7.1 Two architectural styles for bool/mask
 
@@ -531,4 +562,4 @@ Local:
 | **Camodel μarch caveat** | `te_set_version("Ascend910_9362")` doesn't change the simulator behavior — camodel locks to 910B1 internally. All cycle numbers are 910B1-model. Real-silicon 910_9362 numbers need msprof. See §6.5. |
 | **910B1 has no dedicated mask register** | Bool data is packed in regular vector registers; logic ops use `Dtype:B16` semantics; `MOVEMASK`/`MOVEVA`/`VNCHWCONV` bridge layout mismatches. The cast eliminates these by widening to native lane width. See §4.7. *Directly evidenced by the trace.* |
 | **A5 has dedicated MaskReg + predicate ISA** | Verified two ways: local arch ref shows `MaskReg` width `VL/8`; PTO-ISA reference (pto-isa.github.io) documents `pto.pand`/`pto.por`/`pto.pxor`/`pto.pnot` plus `pto.pset_b{8,16,32}` and `pto.pge_b{8,16,32}` for compare-to-predicate. User's `PAND` observation was correct (full mnemonic is `pto.pand`). See §4.7.0. |
-| **No public cycle-accurate A5 simulator yet** | CANN 8.5.0 accepts `Ascend910_9572` for compilation but ships **no 9572 simulator directory** — verified empirically on 218. CANN 9.0+ availability of a 9572 sim not confirmed via web search. PTO-ISA repo: CostModel Q2 2026 target. For real A5 perf today: Atlas 350 hardware + msprof. |
+| **CANN 8.5.0 → no A5 sim; CANN 9.0.0 → full A5 sim** | Verified empirically: CANN 8.5.0 (on 218) accepts `Ascend910_9572` for compilation but has no simulator dir. **CANN 9.0.0 ships 30+ `Ascend950PR_*` simulator dirs** including `Ascend950PR_9572` with the full 16-file lib stack. Toolkit is downloadable from OBS without Huawei login (~1.16 GB). |

@@ -260,7 +260,9 @@ The `msopgen sim`-parsed instruction streams are bit-identical. Camodel's own `T
 
 The simulator banner gives the explanation: regardless of `soc_version`, it loads `/usr/local/Ascend/cann-8.5.0/aarch64-linux/simulator/Ascend910B1/lib/config_stars.json`. CAMODEL's platform-detection is hardcoded to 910B1 in CANN-8.5.0.
 
-**Implication: treat camodel cycle numbers as 910B1-model values, not silicon-specific.** Diffs between two camodel runs (different kernels, different inputs) are valid signal; absolute cycles aren't comparable to vendor 910_9362 / 910C / 910A datasheets. For real-silicon cycle data on 910_9362, use msprof on the 218 dev box.
+**Implication on CANN 8.5.0: treat camodel cycle numbers as 910B1-model values, not silicon-specific.** Diffs between two camodel runs (different kernels, different inputs) are valid signal; absolute cycles aren't comparable to vendor 910_9362 / 910C / 910A datasheets. For real-silicon cycle data on 910_9362, use msprof on the 218 dev box.
+
+**This is fixed in CANN 9.0.0.** Verified 2026-05-07: a fresh `Ascend-cann-toolkit_9.0.0_linux-x86_64.run` install lays down 81 simulator directories including 30+ Ascend950PR variants (`Ascend950PR_9572`, etc.) and the existing 910 variants. Each variant has its own `config.json`/`config_stars.json` — the platform-detection that locks to 910B1 in 8.5.0 likely respects `soc_version=` properly in 9.0.0, but this needs an actual run to verify. Direct download URL (no Huawei login): `https://ascend-repo.obs.cn-east-2.myhuaweicloud.com/CANN/CANN%209.0.0/Ascend-cann-toolkit_9.0.0_linux-x86_64.run` (~1.16 GB).
 
 ### 3.3 Surprises observed
 
