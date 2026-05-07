@@ -963,3 +963,94 @@ For the practical pipeline view of a Triton-Ascend kernel today, the ceiling sit
 - **1 hivmc-input snapshot** (`module.hivm.opt.mlir`) via the wrapper-script trick
 
 After that snapshot, the kernel disappears into hivmc's internals and reappears as 740 B of `.text` machine code.
+
+## 16. Quick reference: getting the pass dumps
+
+Three commands, three boundaries. Run on the NPU server (CANN-8.5.0).
+
+### 16.1 Frontend (~9 dumps) — Python side
+
+```bash
+cd /home/Ray/triton_hello
+source /usr/local/Ascend/ascend-toolkit/latest/bin/setenv.bash
+source /home/Ray/venv/bin/activate
+
+MLIR_PRINT_IR_AFTER_ALL=1 \
+TRITON_KERNEL_DUMP=1 \
+MLIR_DISABLE_THREADING=1 \
+TRITON_CACHE_DIR=$PWD/cache_kdump \
+  python vector_add.py 2> frontend.log
+
+grep -c 'IR Dump' frontend.log         # → 9
+```
+
+Captures the TT-IR / TTGPU-IR passes: Inliner, Canonicalizer, TritonCombineOps, TritonReorderBroadcast, CSE, LoopInvariantCodeMotion, SymbolDCE, TritonLoopUnroll. Stops at TTAdapter — `bishengir-compile` is a subprocess and ignores the env var.
+
+### 16.2 Backend (270 dumps, 104 unique passes) — `bishengir-opt`
+
+Input is the `.ttadapter` from any prior Triton-Ascend compile of the same kernel; it's deposited in the Triton cache:
+
+```bash
+find $TRITON_CACHE_DIR -name '*.ttadapter' | head
+# e.g. /home/Ray/triton_hello/cache_kdump/<hash>/add_kernel.ttadapter
+```
+
+Then:
+
+```bash
+source /usr/local/Ascend/ascend-toolkit/latest/bin/setenv.bash
+
+bishengir-opt add_kernel.ttadapter \
+  --lower-hfusion-pipeline \
+  --optimize-hivm-pipeline \
+  --mlir-print-ir-after-all \
+  --mlir-disable-threading \
+  2> backend.log >/dev/null
+
+grep -c 'IR Dump' backend.log                                       # → 270
+grep -oE 'IR Dump After [A-Za-z]+' backend.log | sort -u | wc -l    # → 104
+```
+
+The chain segfaults at the very end after the last pass writes its dump — **harmless, all 270 dumps are captured before the crash.** Output is ~770 KB / ~8950 lines of MLIR IR for the tiny `vector_add` kernel.
+
+### 16.3 hivmc-input snapshot — wrapper-script trick
+
+`hivmc` is a symlink, so swap it for a shim:
+
+```bash
+cat > /tmp/hivmc_wrapper.sh <<'EOF'
+#!/bin/bash
+for arg in "$@"; do
+  [[ "$arg" == *.mlir ]] && cp "$arg" /home/Ray/triton_hello/captured.mlir && break
+done
+exec /usr/local/Ascend/cann-8.5.0/tools/bishengir/bin/hivmc "$@"
+EOF
+chmod +x /tmp/hivmc_wrapper.sh
+
+# swap the symlink
+mv /usr/local/Ascend/cann-8.5.0/aarch64-linux/bin/hivmc{,.bak}
+ln -s /tmp/hivmc_wrapper.sh /usr/local/Ascend/cann-8.5.0/aarch64-linux/bin/hivmc
+
+# run bishengir-compile normally — it'll invoke our wrapper transparently
+export PATH=/usr/local/Ascend/cann-8.5.0/aarch64-linux/bin:$PATH
+bishengir-compile add_kernel.ttadapter \
+  --enable-hfusion-compile=true --enable-triton-kernel-compile=true \
+  --target=Ascend910_9362 -o add_kernel.npubin
+
+# restore — important, don't leave the shim in place
+rm /usr/local/Ascend/cann-8.5.0/aarch64-linux/bin/hivmc
+mv /usr/local/Ascend/cann-8.5.0/aarch64-linux/bin/hivmc{.bak,}
+```
+
+`/home/Ray/triton_hello/captured.mlir` (~65 lines / 6.5 KB) is the bookend — what comes out of the 270-dump pipeline and goes into hivmc. Everything after this snapshot is opaque (see §15).
+
+### 16.4 Existing artifacts on 218
+
+If you don't want to re-run, the canonical outputs from the 2026-05-07 session are:
+
+| File | Content | Size |
+|---|---|---|
+| `/home/Ray/triton_hello/kernel_dump_err.log` | 9 frontend dumps | ~25 KB / 390 lines |
+| `/home/Ray/triton_hello/bishengir_dump/clean_pipeline.log` | 270 backend dumps | ~770 KB / 8948 lines |
+| `/home/Ray/triton_hello/bishengir_dump/llvm_dump/captured_input.mlir` | hivmc-input snapshot | 6.5 KB / 65 lines |
+| `/home/Ray/triton_hello/cache_kdump/<hash>/add_kernel.npubin` | final npubin (ELF64 hiipu64) | 740 B `.text` |
