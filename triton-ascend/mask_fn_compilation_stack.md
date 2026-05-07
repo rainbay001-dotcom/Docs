@@ -16,7 +16,7 @@ This consolidates prior docs:
 ```
 Python @triton.jit              ← user writes (helloworld.py / helloworld_cast.py)
     │
-    ▼  Triton frontend (in liburma's Python decorator chain)
+    ▼  Triton frontend (`@triton.jit` decorator → upstream Triton compiler passes)
 TTIR (tt dialect)               ← cached as mask_kernel.ttir
     │
     ▼  Triton-Ascend TTAdapter pass
@@ -66,7 +66,7 @@ Triton's frontend captures the function's AST when `@triton.jit` is applied, the
 
 ## Stage 2 — TTIR (Triton IR, `tt` dialect)
 
-**Tool:** Triton frontend (Python-side passes in `triton.compiler`).
+**Tool:** upstream Triton compiler frontend (`triton.compiler` Python-side passes — the same chain Triton uses for NVIDIA backends; the Triton-Ascend backend plugs in below this).
 **Format:** MLIR with the `tt` (Triton) dialect.
 **File:** `<cache>/<hash>/mask_kernel.ttir`.
 
