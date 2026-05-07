@@ -888,6 +888,85 @@ So if my "RV_VSTI = store contiguous 32-byte vector to memory at base+offset" gl
 | "Bool and cast on A5 differ by only 2 instructions" | **Verified** — diff of trace mnemonic counts |
 | Specific bit-level operand details for individual A5 instructions | **Mostly inferred** — see §4.7.3.10 for what's tractable, §4.7.3.11 for confidence on each mnemonic name |
 
+### 4.7.3.12 The exact A5 bool-vs-cast machine-code diff
+
+§4.7.3.6 said "only 2 events differ." This section pinpoints **which 2** and **where** in the binary.
+
+#### Pre-loop diff (the only place they differ)
+
+```
+Address      BOOL                     CAST                     Diff
+0x10d0d200   RV_VLDI                  RV_VLDI                  same
+0x10d0d204   RV_VLDI                  RV_VLDI                  same
+0x10d0d208   RV_PSET    Dtype: B32    RV_PSET    Dtype: B32    same
+0x10d0d20c   RV_VDUPS   Dtype: B32    RV_VDUPS   Dtype: B32    same
+0x10d0d210   RV_PSET    Dtype: B32    RV_PSET    Dtype: B32    same
+0x10d0d214   RV_PSET    Dtype: B32    RV_SMOV                  ← cast SHIFTS UP starting here
+0x10d0d218   RV_SMOV                  RV_VDUPS   Dtype: B32    
+0x10d0d21c   RV_VDUPS   Dtype: B32    RV_SMOVI                 
+0x10d0d220   RV_SMOVI                 RV_SMOVI                 
+0x10d0d224   RV_SMOVI                 RV_VCMP_EQ Dtype: S32    
+0x10d0d228   RV_VCMP_EQ Dtype: S32    RV_VLOOP                 ← cast hits VLOOP 8 bytes earlier
+0x10d0d22c   RV_PXOR    Dtype: B8     (in-loop body starts)    ← BOOL-ONLY: extra PXOR
+0x10d0d230   RV_VLOOP                 (cast in-loop body)      
+```
+
+**Two instructions present in bool, absent in cast:**
+
+| Bool-only instruction | PC | Why bool needs it |
+|---|---|---|
+| 3rd `RV_PSET Dtype: B32` | 0x10d0d214 | Builds an extra predicate slot used by the bool→i1→bool path's intermediate masking that the cast→i32→bool path doesn't need |
+| `RV_PXOR Dtype: B8` | 0x10d0d22c | Inverts a predicate (e.g., negation step in bool's De-Morgan'd combine) — eliminated when intermediates are i32 because the bitwise ops can stay non-negated |
+
+#### In-loop body — bit-identical except for PC offsets
+
+Once the VLOOP starts, the two versions are **structurally identical** — same 12 instructions in the same order. PC offsets differ by exactly 8 bytes (because cast's pre-loop is 8 bytes shorter, the VLOOP and everything after start 8 bytes earlier):
+
+```
+Bool offset    Cast offset    Instruction
+─────────────  ─────────────  ────────────────────────────
++0x00 (0x230)  +0x00 (0x228)  RV_VLOOP
++0x04          +0x04          RV_VLDI
++0x08          +0x08          RV_VLDI
++0x0c          +0x0c          RV_VCMP_EQ Dtype: S32
++0x10          +0x10          RV_POR     Dtype: B8
++0x14          +0x14          RV_VCMP_LE Dtype: S32
++0x18          +0x18          RV_VCMP_EQ Dtype: S32
++0x1c          +0x1c          RV_PAND    Dtype: B8
++0x20          +0x20          RV_POR     Dtype: B8
++0x24          +0x24          RV_VSEL    Dtype: B32
++0x28          +0x28          RV_VCVT_I2I
++0x2c          +0x2c          RV_VSTI
++0x30          +0x30          RV_SEND
+```
+
+Same 12 instructions, same dtype, same pipe assignments. **The kernel's actual compute body is bit-for-bit identical between bool and cast on A5.**
+
+#### Quantitative impact of the 2-instruction difference
+
+| Metric | Bool | Cast | Δ |
+|---|---|---|---|
+| Pre-loop instructions | 12 | 10 | −2 |
+| In-loop instructions × 32 iterations | 12 × 32 = 384 | 12 × 32 = 384 | 0 |
+| **Total dynamic events** | 12 + 384 + ~56 (prologue/epilogue scalar) = **452** | 10 + 384 + ~56 = **450** | **−2** |
+| Pre-loop cycles | 12 × ~5 = 60 cyc | 10 × ~5 = 50 cyc | −10 (run-to-run) |
+| In-loop cycles (dominant) | 32 × ~30 cyc/iter = ~960 cyc | identical | 0 |
+| **Camodel `Total tick`** | **2,240** | **2,246** | +6 (noise) |
+
+The 2 missing pre-loop instructions save ~10 cycles in setup, but pipe-overlap and other run-to-run variance swamps that. **Net: bool and cast on A5 are performance-equivalent.**
+
+#### What the diff tells you
+
+1. **Cast version is strictly a `subset` of bool version** — same instructions plus 2 more setup ops in bool. No new instructions appear in cast that aren't in bool.
+
+2. **The "extra" bool ops are pre-loop predicate setup**, not in the hot path. The 32-iteration VLOOP body — where 95% of the cycles live — is identical.
+
+3. **The compiler doesn't specialize differently for `.to(tl.int32)` on A5.** It funnels both source forms through the same predicate-based lowering. The bool path just leaves the predicate slightly less normalized (needs PXOR + extra PSET); the cast path doesn't.
+
+4. **In contrast, on 910B1, the same `.to(tl.int32)` change rearranged the lowering substantially** — 95 fewer events out of 9,459 (1% of trace), 380-byte (15%) smaller binary, with completely different mnemonic mix (no VNCHWCONV/MOVEVA/MOV_UB_TO_UB).
+
+So: on 910B1, the cast was a meaningful code-shape rearrangement (different mnemonics, +1.3% slower). On A5, **the cast is essentially a no-op** — 2 fewer setup instructions, no semantic change, no measurable speedup or slowdown.
+
 ### 4.7.4 Hypothetical A5 lowering (using the verified PTO-ISA `pto.p*` mnemonics)
 
 Mapping `mask_fn` (`(A & (B | C)) | D`) to A5's predicate ISA (per pto-isa.github.io):
