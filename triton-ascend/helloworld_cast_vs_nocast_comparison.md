@@ -523,6 +523,120 @@ On A5 with predicate-register hardware:
 
 **The headline that matters:** A5 makes the bool-vs-cast distinction nearly meaningless at the machine-code level, while simultaneously running the same kernel ~19× faster than 910B1. The architectural upgrade (predicate registers + native vector loop + vector stores) is dramatic.
 
+### 4.7.3.8 A5 source-to-asm mapping (both bool and cast)
+
+The A5 binary is structured as a small **launcher prologue** that sets up DMA + predicate-buffer state, then issues a single `VF` (Vector Function) call that fires the **VLOOP body** containing the actual mask compute. The VLOOP body lives at PCs ≥ 0x10d0d200 and runs 32 iterations (one per output row).
+
+#### 4.7.3.8.1 Bool path: VLOOP body (PC 0x10d0d200–0x10d0d260)
+
+```
+PC          Mnem            Pipe     dur   Maps to                                       Loop?
+0x10d0d200  RV_VLDI         RVECLD   10    Load constants (TILE_OFFSETS, masks)          pre
+0x10d0d204  RV_VLDI         RVECLD   10    Load constants                                pre
+0x10d0d208  RV_PSET    B32  RVECEX    7    Set predicate (lane-mask-all-true)            pre
+0x10d0d20c  RV_VDUPS   B32  RVECEX    7    Broadcast q_offset positions to lanes         pre
+0x10d0d210  RV_PSET    B32  RVECEX    7    Set predicate (row-mask)                      pre
+0x10d0d214  RV_PSET    B32  RVECEX    7    Set predicate (col-mask)                      pre
+0x10d0d218  RV_SMOV         RVECSU    2    Scalar move (loop-iv start)                   pre
+0x10d0d21c  RV_VDUPS   B32  RVECEX    7    Broadcast k_offset positions to lanes         pre
+0x10d0d220  RV_SMOVI        RVECSU    1    Scalar move-immediate (BLOCK = 32)            pre
+0x10d0d224  RV_SMOVI        RVECSU    1    Scalar move-immediate (loop bound)            pre
+0x10d0d228  RV_VCMP_EQ S32  RVECEX    7  ★ D = q_offset == k_offset (pre-computed once)  pre  
+0x10d0d22c  RV_PXOR    B8   RVECEX    8    Invert tail/loop-end predicate                pre
+0x10d0d230  RV_VLOOP        RVECLP    1    ★ vector loop start (32 iterations)           ─
+0x10d0d234  RV_VLDI         RVECLD   10    Load q_attn[i] vector                         in
+0x10d0d238  RV_VLDI         RVECLD   11    Load k_attn vector (for this row)             in
+0x10d0d23c  RV_VCMP_EQ S32  RVECEX    7  ★ B = q_attn[i] == k_attn                       in
+0x10d0d240  RV_POR     B8   RVECEX    8  ★ B | C  (C precomputed from k_attn == 0)       in
+0x10d0d244  RV_VCMP_LE S32  RVECEX    7  ★ A = q_offset[i] <= k_offset                   in
+0x10d0d248  RV_VCMP_EQ S32  RVECEX    7  ★ C = k_attn == 0  (recomputed per row?)        in
+0x10d0d24c  RV_PAND    B8   RVECEX    8  ★ A & (B | C)                                   in
+0x10d0d250  RV_POR     B8   RVECEX    8  ★ (A & (B | C)) | D — final mask                in
+0x10d0d254  RV_VSEL    B32  RVECEX    7  ★ tl.where(mask, 1, 0)  — 1.0 if true else 0.0  in
+0x10d0d258  RV_VCVT_I2I     RVECEX    8    Convert i32→i8 for output                     in
+0x10d0d25c  RV_VSTI         RVECST   14    ★ Store 32-byte vector to out_ptr[i*N..]      in
+0x10d0d260  RV_SEND         RVECST   10    Signal VLOOP iteration done                   in
+```
+
+(★ marks instructions that map to source-level operations; "in" = inside VLOOP, "pre" = pre-loop setup. The VLOOP runs 32 iterations.)
+
+**Compared to 910B1's lowering of the same kernel:**
+- Pre-loop predicate setup (12 ops): does once what 910B1 needed `MOVEMASK ×84` + `MOVEVA ×64` to do
+- VLOOP body (14 ops): runs 32 times → 32 vector ops per logical compare (vs 910B1's 1024-iter scalar loop)
+
+The 4 source compares map to:
+| Source | A5 instruction (PC) | 910B1 instruction (PC) |
+|---|---|---|
+| `q_offset <= k_offset` | `RV_VCMP_LE S32` @ 0x244 | `VCMPV F16` @ 0x10d1142c |
+| `q_attn == k_attn` | `RV_VCMP_EQ S32` @ 0x23c | `VCMPV S32` @ 0x10d114f0 |
+| `k_attn == 0` | `RV_VCMP_EQ S32` @ 0x248 | `VCMPVS F16` @ 0x10d115e4 |
+| `q_offset == k_offset` | `RV_VCMP_EQ S32` @ 0x228 | `VCMPV S32` @ 0x10d11684 |
+
+The 3 source bitwise ops:
+| Source | A5 | 910B1 |
+|---|---|---|
+| `B \| C` | `RV_POR B8` @ 0x240 | `VOR B16` @ 0x10d11648 |
+| `A & (B \| C)` | `RV_PAND B8` @ 0x24c | `VAND B16` @ 0x10d1166c |
+| `(A & (B\|C)) \| D` | `RV_POR B8` @ 0x250 | `VOR B16` @ 0x10d1169c |
+
+The final `tl.where(mask, 1, 0).to(tl.int8)`:
+| Step | A5 | 910B1 |
+|---|---|---|
+| select 1/0 | `RV_VSEL B32` @ 0x254 | `VSEL F32` @ 0x10d11704 |
+| convert | `RV_VCVT_I2I` @ 0x258 | `VNCHWCONV B8` ×8 (0x10d11840+) |
+| store | `RV_VSTI` @ 0x25c (32 bytes/op) | `ST_XD_XN_IMM` ×1024 (1 byte/op, 0x10d11360) |
+
+#### 4.7.3.8.2 Cast path: VLOOP body (PC 0x10d0d200–0x10d0d258)
+
+```
+PC          Mnem            Pipe     dur   Maps to                                       Loop?
+0x10d0d200  RV_VLDI         RVECLD   10    Load constants                                pre
+0x10d0d204  RV_VLDI         RVECLD   10    Load constants                                pre
+0x10d0d208  RV_PSET    B32  RVECEX    7    Set lane-mask predicate                       pre
+0x10d0d20c  RV_VDUPS   B32  RVECEX    7    Broadcast q_offset                            pre
+0x10d0d210  RV_PSET    B32  RVECEX    7    Set row/col predicate                         pre
+0x10d0d214  RV_SMOV         RVECSU    2    Scalar move                                   pre
+0x10d0d218  RV_VDUPS   B32  RVECEX    7    Broadcast k_offset                            pre
+0x10d0d21c  RV_SMOVI        RVECSU    1    Scalar move-immediate                         pre
+0x10d0d220  RV_SMOVI        RVECSU    1    Scalar move-immediate                         pre
+0x10d0d224  RV_VCMP_EQ S32  RVECEX    7  ★ D = q_offset == k_offset (pre-computed once)  pre
+0x10d0d228  RV_VLOOP        RVECLP    1    ★ vector loop start (32 iterations)           ─
+0x10d0d22c  RV_VLDI         RVECLD   10    Load q_attn[i]                                in
+0x10d0d230  RV_VLDI         RVECLD   11    Load k_attn                                   in
+0x10d0d234  RV_VCMP_EQ S32  RVECEX    7  ★ B = q_attn[i] == k_attn                       in
+0x10d0d238  RV_POR     B8   RVECEX    8  ★ B | C                                         in
+0x10d0d23c  RV_VCMP_LE S32  RVECEX    7  ★ A = q_offset[i] <= k_offset                   in
+0x10d0d240  RV_VCMP_EQ S32  RVECEX    7  ★ C = k_attn == 0                               in
+0x10d0d244  RV_PAND    B8   RVECEX    8  ★ A & (B | C)                                   in
+0x10d0d248  RV_POR     B8   RVECEX    8  ★ (A & (B | C)) | D — final mask                in
+0x10d0d24c  RV_VSEL    B32  RVECEX    7  ★ (mask != 0).to(tl.int8)                       in
+0x10d0d250  RV_VCVT_I2I     RVECEX    8    Convert to i8                                 in
+0x10d0d254  RV_VSTI         RVECST   16    ★ Store 32-byte vector to out_ptr[i*N..]      in
+0x10d0d258  RV_SEND         RVECST   11    Signal iteration done                         in
+```
+
+#### 4.7.3.8.3 The 2-instruction difference between bool and cast
+
+The cast version has **two fewer instructions** in the pre-loop:
+- Bool has 3× `RV_PSET` (B32) at 0x208, 0x210, 0x214; cast has only 2× (at 0x208, 0x210). Bool uses one extra PSET to invert/build a tail mask.
+- Bool has `RV_PXOR B8` at 0x22c that's absent in cast. PXOR negates a predicate — used for some intermediate mask inversion that the bool→i1→bool flow needs but the cast→i32 flow doesn't.
+
+Net: 8 fewer bytes in cast's `.text`, 2 fewer events per VLOOP iteration. **Inside the loop body, the two versions are bit-identical** — same `RV_VCMP_EQ`/`RV_VCMP_LE`/`RV_PAND`/`RV_POR`/`RV_VSEL`/`RV_VCVT_I2I`/`RV_VSTI` sequence at the same offsets relative to `RV_VLOOP`.
+
+The PC labels shift down by 4-8 bytes in the cast version because the pre-loop is shorter, but the actual compute body is structurally identical.
+
+#### 4.7.3.8.4 What the mapping reveals
+
+1. **A5 emits all 4 source compares as native `RV_VCMP_*` instructions on the VECTOR pipe** — no special-casing per dtype. Compare to 910B1 which emitted F16 for some position compares (a vendor lowering quirk; see §4.6.5).
+
+2. **The combine logic is one-to-one with source.** `B | C` → `RV_POR`; `A & (B|C)` → `RV_PAND`; `… | D` → `RV_POR`. Each combine is one predicate-pipe instruction, no shuffles needed.
+
+3. **The 1024-iteration scalar unpack-store loop on 910B1 is replaced by 32 vector stores** (one `RV_VSTI` per VLOOP iteration, each storing a 32-element vector = 32 bytes int8). Total stores: 1024 (910B1) → 32 (A5), each storing 32× the data per call.
+
+4. **Cast's `.to(tl.int32)` casts are invisible at the A5 machine-code level.** The compiler sees through them — only difference is the 2-instruction PXOR/PSET pair that handles bool's slightly different intermediate form.
+
+5. **Pre-loop optimization**: A5's compiler hoists `D = q_offset == k_offset` out of the loop (it doesn't depend on per-row data; positions are fixed). 910B1 does this too via the early `VCMPV` cluster, but A5 does it more cleanly because the result lives in a predicate register that's free to reference inside the loop.
+
 ### 4.7.4 Hypothetical A5 lowering (using the verified PTO-ISA `pto.p*` mnemonics)
 
 Mapping `mask_fn` (`(A & (B | C)) | D`) to A5's predicate ISA (per pto-isa.github.io):
