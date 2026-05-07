@@ -661,6 +661,8 @@ bishengir-opt cache_dir/<hash>/add_kernel.ttadapter \
 
 The backend run segfaults at the very end (after the last pass writes its dump) — harmless, all 270 dumps are captured before the crash. On the tiny `vector_add` this produces ~770 KB / ~8950 lines of MLIR IR.
 
+> **Note:** the 270 figure is "after" snapshots only. We use `--mlir-print-ir-after-all` (not `--mlir-print-ir-before-all`). Adding `--mlir-print-ir-before-all` would produce ~540 dumps but most of the new "before-N" snapshots equal the previous "after-(N-1)" — duplicate data. The only genuinely-new info from `--before-all` is the input to pass 0 (= the `.ttadapter` file itself, which we already have separately). For tracking lowering progression, `--after-all` alone is the right choice. Use `--before-all` if debugging a specific pass's input/output mutation; use `--mlir-print-ir-after-change` to filter to only passes that actually changed the IR.
+
 ### 14.1 Why `--mlir-print-ir-after-all` doesn't work on `bishengir-compile`
 
 Three traps worth knowing:
