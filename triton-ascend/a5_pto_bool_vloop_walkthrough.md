@@ -703,6 +703,78 @@ row index `i`. So computing it once before the loop and reusing it
 across all 32 iters is the right structure. The question is *how*
 to keep it alive across iters.
 
+#### What "row-invariant" means here, concretely
+
+The VLOOP iterates over **rows of the output tile**. Each iter `i`
+produces one full row `mask[i, :]` (all 32 columns), with the
+column index `j` varying *across the lanes of one vreg* — not across
+iterations.
+
+```
+                    j (column, varies across vreg lanes within ONE iter)
+                    ──────────────────────────────────────►
+                    j=0   j=1   j=2   …   j=31
+                  ┌───────────────────────────────┐
+i=0  (iter 0):   │  mask[0,0]  mask[0,1]   …      │   ◄── computed by iter 0
+i=1  (iter 1):   │  mask[1,0]  mask[1,1]   …      │   ◄── computed by iter 1
+…                 │              …                 │
+i=31 (iter 31):  │  mask[31,0]            …       │   ◄── computed by iter 31
+                  └───────────────────────────────┘
+                    ▲
+                    │
+                  i (row index, what the VLOOP advances over)
+```
+
+For one row `i`, the per-element formula is:
+
+```
+mask[i, j] = (triu_causal[i,j] & (B[i,j] | C[j])) | F[i,j]
+```
+
+| Quantity                              | Depends on `i`? | Depends on `j`? |
+|---------------------------------------|:---:|:---:|
+| `triu_causal[i,j] = q_offset[i] ≤ k_offset[j]` | yes | yes |
+| `B[i,j]           = q_attn[i]  == k_attn[j]`   | yes | yes |
+| **`C[j]           = k_attn[j]  == 0`**         | **no**  | yes |
+| `F[i,j]           = q_offset[i] == k_offset[j]`| yes | yes |
+
+`C[j]` carries no `i` index. Iter 0 needs `(k_attn[0]==0, k_attn[1]==0,
+…, k_attn[31]==0)`; iter 1 needs the same 32 values; so does iter 31.
+
+#### Why iter `i+1` doesn't fetch a "next round" of `k_attn`
+
+Because each iter consumes **the entire `k_attn` row** (all 32
+elements at once, one per vreg lane). There is no "next batch" to
+advance to:
+
+```
+operand          shape    iter 0          iter 1         iter 31     advances per iter?
+─────────        ─────    ───────         ───────        ───────     ─────────────────
+q_attn[:,None]   32       q_attn[0]       q_attn[1]      q_attn[31]  ✓ (one scalar per iter; brc_b32, +4 B)
+k_attn[None,:]   32       k_attn[0..31]   k_attn[0..31]  k_attn[..]  ✗ (FULL row reused; full-VL, #p=0)
+q_offset[:,None] 32       q_offset[0]     q_offset[1]    q_offset[..] ✓ (per-row, via tile or brc_b32)
+k_offset[None,:] 32       k_offset[0..31] k_offset[..]   k_offset[..] ✗ (FULL row reused; full-VL, #p=0)
+```
+
+This is the asymmetry from the broadcast directions: `[:, None]`
+operands (q_attn, q_offset) are *column-broadcast*, so per-row data
+is one scalar that advances; `[None, :]` operands (k_attn, k_offset)
+are *row-broadcast*, so the same 32-element row feeds every row of
+the output. The assembly reflects this directly — V5 (k_attn) and V2
+(k_offset) both load with `#p=0` (no advance) and stay in their
+vregs for all 32 iters.
+
+So C, being computed only from `k_attn`, inherits that
+row-invariance. There is exactly **one** k_attn per kernel
+invocation; `[None, :]` is just a broadcast declaration, not an
+"iterate over k_attn" instruction. Every row of the output sees the
+same C.
+
+(Across different program blocks of a larger launch, the kernel will
+be invoked again with potentially different k_attn data — and a
+fresh pre-loop computation will produce a fresh C. The "reuse
+across 32 iters" only applies within one invocation.)
+
 #### What hivmc-a5 actually does
 
 In the captured assembly:
