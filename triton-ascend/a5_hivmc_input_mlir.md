@@ -1,9 +1,10 @@
 # Last MLIR before HIVMC for A5 — `mask_kernel` (bool vs cast)
 
 This doc lists the **last transparent MLIR** that flows into `hivmc-a5` (the
-A5-target HIVM Compiler) for the two `mask_fn` source variants, and maps each
-HIVM op back to the original Triton-Python source. After this layer, hivmc-a5
-takes over and the IR is no longer textual MLIR.
+A5-target HIVM Compiler) for the two `mask_fn` source variants, with the
+**complete annotated MLIR** for each — every phase mapped back to the
+original Triton-Python expression. After this layer, hivmc-a5 takes over
+and the IR is no longer textual MLIR.
 
 Companion docs:
 - `helloworld_cast_vs_nocast_comparison.md` — full A5 vs 910B1 cast-vs-bool
@@ -52,10 +53,9 @@ HIVMC_CAPTURE_DEST=/tmp/hivmc_a5_cast.mlir bishengir-compile-a5 \
 
 The driver passed each MLIR to hivmc-a5 as
 `/tmp/bishengir-compile-XXXXXX/module.hivm.opt.mlir` — confirming that the
-last transparent layer is the **post-`hivm-opt`** MLIR, just as it is for
-the 910B1 path.
+last transparent layer is the **post-`hivm-opt`** MLIR.
 
-Captured artifacts (also committed alongside this doc):
+Captured artifacts (committed alongside this doc):
 - `captures_hivmc_input_a5_bool.mlir` — 15,804 B, 146 lines
 - `captures_hivmc_input_a5_cast.mlir` — 18,095 B, 172 lines
 
@@ -64,8 +64,7 @@ Captured artifacts (also committed alongside this doc):
 Both captures carry:
 
 ```mlir
-hacc.target = #hacc.target<"Ascend910B1">
-... ARCH = "dav-c220" ...
+hacc.target = #hacc.target<"Ascend910B1">, ARCH = "dav-c220"
 ```
 
 The `.ttadapter` inputs were generated on 218 (CANN 8.5.0, target 910B1)
@@ -85,12 +84,12 @@ selects the A5 codegen; the binary path (`hivmc-a5`) is.
 @triton.jit
 def mask_fn(q_attn_arg, k_attn_arg, q_offset, k_offset, TYPE: tl.constexpr):
     if TYPE == 1:
-        triu_causal = (q_offset[:, None] <= k_offset[None, :])
+        triu_causal = (q_offset[:, None] <= k_offset[None, :])           # A
         return(
-            (triu_causal &
-            ((q_attn_arg[:, None] == k_attn_arg[None, :]) |
-            (k_attn_arg[None, :] == 0))) |
-            (q_offset[:, None] == k_offset[None, :]))
+            (triu_causal &                                                # E = A & D
+            ((q_attn_arg[:, None] == k_attn_arg[None, :]) |               # B
+            (k_attn_arg[None, :] == 0))) |                                # C ⇒ D = B | C
+            (q_offset[:, None] == k_offset[None, :]))                     # F ⇒ result = E | F
 
 # cast variant (helloworld_cast.py)
 @triton.jit
@@ -105,113 +104,458 @@ def mask_fn(q_attn_arg, k_attn_arg, q_offset, k_offset, TYPE: tl.constexpr):
 ```
 
 Tile shape: 32×32 (1024 elements). All four operand tensors are i32.
-Result is i8 for bool, i8 (downcast from i32) for cast.
+Result is i8.
 
-## 3. Mapping — bool variant (146 lines)
+Throughout the annotated MLIR below, we use the shorthand:
+- **A** = `triu_causal = (q_offset[:, None] <= k_offset[None, :])`
+- **B** = `(q_attn_arg[:, None] == k_attn_arg[None, :])`
+- **C** = `(k_attn_arg[None, :] == 0)`
+- **D** = `B | C`
+- **E** = `A & D`
+- **F** = `(q_offset[:, None] == k_offset[None, :])`
+- **result** = `E | F`
 
-The bool path keeps every comparison result as native `i1` (1-bit
-predicate) and combines them with `i1`-typed `vand`/`vor`/`vnot`. A
-single `i1→i8` materialization at the very end produces the byte mask
-to store. The op sequence below corresponds to the high-level Triton
-expression in the order they appear in the captured MLIR.
+## 3. Annotated bool variant — full MLIR
 
-| Capture line | HIVM op | Maps to Triton expression |
-|---|---|---|
-| 33–37 | `vbrc 32x1xi32 → 32x32xi32` (UB c19232 → c0) | `q_offset[:, None]` broadcast (LHS of `<=`) |
-| 38–41 | `vbrc 1x32xi32 → 32x32xi32` (UB c19360 → c5120) | `k_offset[None, :]` broadcast (RHS of `<=`) |
-| 42–46 | `vbrc 32x1xi32 → 32x32xi32` (UB c18976 → c9216) | `q_attn_arg[:, None]` broadcast (LHS of `==`) |
-| 48–51 | `vbrc 1x32xi32 → 32x32xi32` (UB c19104 → c14336) | `k_attn_arg[None, :]` broadcast (RHS of inner `==`) |
-| 52–53 | `vcast i32→i64` on `q_offset` row scalars | i32→i64 widening before per-element causal cmp loop (lines 96–102) |
-| 54–55 | `vcast i32→i64` on `k_offset` row scalars | i32→i64 widening, same |
-| 56–57 | `vcmp i32,0 → 32xi1` (`%12`) | `(k_attn_arg[None, :] == 0)` along the row (32-elem result) |
-| 59–70 | `hivm.hir.load` ×4 (gm→ub) | DMA-in for `q_attn_arg`, `k_attn_arg`, `q_offset`, `k_offset` |
-| 71 | `reinterpret_cast %arg6 → 32x32xi8 gm` | result tensor view |
-| 72–76 | `vcmp 1024xi32,1024xi32 → 1024xi1` (`%13`) | `q_attn_arg[:, None] == k_attn_arg[None, :]` (full tile) |
-| 77–80 | `vcmp 1024xi32,1024xi32 → 1024xi1` (`%14`) | `q_offset[:, None] == k_offset[None, :]` (full tile, equality) |
-| 81–87 | `expand_shape` + `vbrc i64` for both q_off and k_off i64 broadcast | broadcast i64 versions for the causal loop |
-| 89–91 | `vcast 32xi1→32xf16` + temp_buffer (`%18`, round_mode=trunc) | per-row materialization of `(k_attn[None,:] == 0)` for later broadcast — **f16 is just intermediate** |
-| 92–102 | `scf.for 0..1024 step 1 { cmpi sle i64,i64; extui i1→i8; store }` (writes i8 at UB `c19488`, `%20`) | scalar fallback for `(q_offset[:, None] <= k_offset[None, :])` — **`triu_causal`** stored as i8 packed in UB |
-| 104–107 | `vcast 1024xi8→1024xf16` (`%21`) | hoist `triu_causal` from i8 packing back into f16 lane for vector-pipe path |
-| 108–109 | `vbrc f16 0.0 → 1024xf16` (`%22`) | broadcast f16 zero (constant for `triu_causal != 0`) |
-| 111–112 | `vcmp 1024xf16,1024xf16 (ne) → 1024xi1` (`%23`) | rematerialize `triu_causal != 0` as i1 — i.e. recover `triu_causal` as boolean |
-| 113–115 | `expand_shape 32xf16` + `vbrc 1x32xf16 → 32x32xf16` (`%24`) of `%18` | broadcast `(k_attn[None, :] == 0)` to full tile (still f16) |
-| 116–119 | `vcmp 1024xf16,f16(0.0) → 1024xi1` (`%25`) | recover the broadcasted `(k_attn[None, :] == 0)` as i1 |
-| 120–122 | `vnot i1 → i1` (`%26`) | **NB:** the canonicalizer recasts the original disjunction; this is the masking polarity bit-flip preceding the inner OR (see line 125) |
-| 123–125 | `vor 1024xi1, 1024xi1 → 1024xi1` (`%27`) | `(q_attn==k_attn) | (k_attn==0)` — but with the polarity inverted relative to source (matches §4.6.5 finding for 910B1) |
-| 126–128 | `vand 1024xi1, 1024xi1 → 1024xi1` (`%28`) | `triu_causal & (...)` |
-| 129–131 | `vor 1024xi1, 1024xi1 → 1024xi1` (`%29`) | `(triu_causal & (...)) | (q_off==k_off)` — top-level OR |
-| 132–135 | `vsel i1, 1, 0 → 1024xi32` (`%30`) | i1 → i32 widening (1 if true, 0 if false) |
-| 136–139 | `vcast 1024xi32 → 1024xi8` truncwithoverflow (`%32`) | i32 → i8 narrowing for the i8 result |
-| 141–143 | `hivm.hir.store 1024xi8 → gm` (collapse_shape of arg6) | DMA-out result tensor |
+```mlir
+// =====================================================================
+// captures_hivmc_input_a5_bool.mlir  (146 lines, 15,804 B)
+// =====================================================================
+module attributes {
+  dlti.target_system_spec = #dlti.target_system_spec<"NPU" : #hacc.target_device_spec<
+    AI_CORE_COUNT=24, CUBE_CORE_COUNT=24, VECTOR_CORE_COUNT=48,
+    UB_SIZE=1572864, L1_SIZE=4194304, L0A_SIZE=524288, L0B_SIZE=524288,
+    L0C_SIZE=1048576, UB_ALIGN_SIZE=256, L1_ALIGN_SIZE=256, L0C_ALIGN_SIZE=4096,
+    ARCH="dav-c220">>,
+  hacc.target = #hacc.target<"Ascend910B1">,
+  hivm.module_core_type = #hivm.module_core_type<AIV>
+} {
+  func.func @mask_kernel(
+      %arg0: ... gm,    // SyncBlockLock workspace (unused in body)
+      %arg1: ... gm,    // Workspace
+      %arg2: i32 gm,    // q_attn_arg     (Triton: q_attn_arg)
+      %arg3: i32 gm,    // k_attn_arg     (Triton: k_attn_arg)
+      %arg4: i32 gm,    // q_offset       (Triton: q_offset)
+      %arg5: i32 gm,    // k_offset       (Triton: k_offset)
+      %arg6: i8  gm,    // result         (Triton return value, 32×32 i8)
+      %arg7..%arg12: i32) attributes {... mix_mode="aiv" ...} {
 
-**Bool-variant summary:** comparisons stay in i1 land. The only
-materialization through f16 is to round-trip the `(k_attn == 0)` row
-and the `triu_causal` byte buffer through the f16 broadcast lane —
-the AIV vector pipe wants typed memrefs, and i1 broadcasts go via f16
-on dav-c220 (this is *not* the same as the cast variant's i32 round
-trip). The inner Boolean algebra is `vand`/`vor`/`vnot` directly on
-i1.
+    // ───── Constants & UB byte offsets (allocator output) ─────
+    %c1, %c0, %c1024 = arith.constant 1, 0, 1024 : index
+    %c47392_i64..%c0_i64 = arith.constant ... : i64       // 17 UB byte addresses
+    %cst       = arith.constant 0.000000e+00 : f16
+    %c1_i32    = arith.constant 1 : i32
+    %c0_i32    = arith.constant 0 : i32
 
-## 4. Mapping — cast variant (172 lines)
+    // ─────────────────────────────────────────────────────────
+    // Phase 1 — broadcast operand row/col scalars to 32×32 i32 tiles in UB.
+    // These tiles are the inputs to the full-tile vcmp's of Phase 5.
+    // ─────────────────────────────────────────────────────────
 
-The `.to(tl.int32)` annotation on every comparison forces every i1
-intermediate to be widened to i32 immediately. The Boolean algebra
-(`&`/`|`) is then done as bitwise i32 ops, and the final result
-narrows i32 → i8. The main consequences vs. the bool variant:
+    // Triton:  q_offset[:, None]   →   32×32 tile at UB c0
+    %0 = hivm.hir.pointer_cast(%c19232_i64) : 32x1xi32 ub        // q_offset row scalars
+    %collapse_shape = collapse %0 → 32xi32                       // flat alias (used for i64 widen + DMA-load dst)
+    %1 = hivm.hir.pointer_cast(%c0_i64)     : 32x32xi32 ub
+    %2 = hivm.hir.pointer_cast(%c4096_i64)  : 256xi32 ub          // temp_buffer
+    hivm.hir.vbrc ins(%0) outs(%1) temp_buffer(%2) broadcast_dims=[1]
+        // ◄═══ q_offset[:, None]
 
-1. **Each compare grows two extra `vcast` ops**: `i1 → f16 → i32`.
-   AIV doesn't have a direct i1→i32 path on dav-c220, so it goes
-   through f16 lane.
-2. **Bitwise on i32**: `vor i32` and `vand i32` instead of `vor i1`,
-   `vand i1`. Larger throughput requirement (32 b vs 1 b lanes).
-3. **One extra `vcast i32 → f32` + `vcmp f32, 0.0 → i1` + `vnot i1`
-   trip**: required to go back from the i32 algebra into an i1 mask
-   before the final i8 narrowing.
-4. **Two extra constants** (`%cst_0 = 0.0 : f32` shows up; bool
-   variant uses `%c1_i32`+`%c0_i32` pair instead).
+    // Triton:  k_offset[None, :]   →   32×32 tile at UB c5120
+    %3 = hivm.hir.pointer_cast(%c19360_i64) : 1x32xi32 ub
+    %collapse_shape_0 = collapse %3 → 32xi32
+    %4 = hivm.hir.pointer_cast(%c5120_i64)  : 32x32xi32 ub
+    hivm.hir.vbrc ins(%3) outs(%4) broadcast_dims=[0]
+        // ◄═══ k_offset[None, :]
 
-| Capture line | HIVM op | Maps to Triton expression |
-|---|---|---|
-| 40–48 | `vbrc` ×2 (q_off, k_off scalar broadcasts) | same as bool |
-| 49–53 | `vbrc` (q_attn broadcast) | same as bool |
-| 55–58 | `vbrc` (k_attn broadcast) | same as bool |
-| 59–62 | `vcast i32→i64` ×2 | same as bool |
-| 63–64 | `vcmp i32,0 → 32xi1` (`%12`) | `(k_attn[None,:] == 0)` |
-| 66–77 | `hivm.hir.load` ×4 | DMA-in operands, same as bool |
-| 78–87 | `vcmp 1024xi32,1024xi32 → 1024xi1` ×2 (`%13`, `%14`) | `(q_attn==k_attn)` and `(q_off==k_off)` |
-| 88–94 | `expand`+`vbrc i64` for causal broadcast | same as bool |
-| 96–98 | `vcast 32xi1→32xf16` (`%18`) | `(k_attn==0).to(int32)` step 1 of 2 |
-| 99–102 | `vcast 1024xi1→1024xf16` (`%20`) of `%13` (q_attn==k_attn) | `(q_attn==k_attn).to(int32)` step 1 of 2 |
-| 103–105 | `vcast 1024xi1→1024xf16` (`%22`) of `%14` (q_off==k_off) | `(q_off==k_off).to(int32)` step 1 of 2 |
-| 106–116 | scalar `scf.for` causal loop → packed i8 at `%24` (UB c19488) | `triu_causal = (q_off[:,None] <= k_off[None,:]).to(int32)` byte form |
-| 117–120 | `vcast 1024xi8→1024xf16` (`%25`) | hoist `triu_causal` to vector lane |
-| 121–122 | `vbrc f16 0.0 → 1024xf16` (`%26`) | constant for the `triu_causal != 0` recovery |
-| 124–125 | `vcmp 1024xf16,1024xf16 (ne) → 1024xi1` (`%27`) | recover `triu_causal` as i1 (only inside the loop's polarity machinery; the cast path does *not* keep it as i32) |
-| 126–127 | **`vcast 32xf16→32xi32`** (`%28`) | `.to(tl.int32)` on `(k_attn==0)` (final step from f16→i32) |
-| 128–129 | **`vcast 1024xf16→1024xi32`** (`%29`) | `.to(tl.int32)` on `(q_attn==k_attn)` (final step) |
-| 130–132 | `collapse_shape` + `vcast 1024xf16→1024xi32` (`%collapse_shape_17`) | `.to(tl.int32)` on `(q_off==k_off)` (final step) |
-| 133–136 | `vcast 1024xi1→1024xf16` (`%31`) of `%27` | re-widening of the `triu_causal != 0` result for the next vcast (see line 140) |
-| 137–138 | `expand_shape 32xi32 → 1x32xi32` of `%28` | reshape `(k_attn==0).to(int32)` for broadcast OR |
-| 140 | `vcast 1024xf16→1024xi32` (`%33`) of `%31` | finish recovering `triu_causal` as i32 |
-| 141–142 | **`vor 32x32xi32, 1x32xi32 → 32x32xi32` broadcast=[0]** (`%34`) | `(q_attn==k_attn).to(int32)) | (k_attn==0).to(int32))` — broadcast OR of cast (k_attn==0) row across the tile |
-| 143–146 | **`vand 1024xi32, 1024xi32 → 1024xi32`** (`%35`) | `triu_causal & (...)` — bitwise AND on i32 |
-| 147–149 | **`vor 1024xi32, 1024xi32 → 1024xi32`** (`%36`) | `(triu_causal & ...) | (q_off==k_off).to(int32)` — top-level OR on i32 |
-| 150–152 | **`vcast 1024xi32 → 1024xf32`** (`%37`) | i32 → f32 (preparing the final i32 → i1 conversion via f32 != 0) |
-| 153–155 | **`vcmp 1024xf32, f32(0.0) → 1024xi1`** (`%38`) | f32 → i1 mask: `result != 0` |
-| 156–158 | `vnot i1 → i1` (`%39`) | polarity flip (matches the canonical pattern, same role as bool variant line 122) |
-| 159–162 | `vcast 1024xi1→1024xf16` (`%40`) | i1 → f16 (step 1 of 2 for i1→i8) |
-| 163–165 | `vcast 1024xf16→1024xi8` (`%42`) | f16 → i8 (step 2 of 2) |
-| 167–169 | `hivm.hir.store 1024xi8 → gm` | DMA-out result tensor |
+    // Triton:  q_attn_arg[:, None] →   32×32 tile at UB c9216
+    %5 = hivm.hir.pointer_cast(%c18976_i64) : 32x1xi32 ub
+    %collapse_shape_1 = collapse %5 → 32xi32
+    %6 = hivm.hir.pointer_cast(%c9216_i64)  : 32x32xi32 ub
+    %7 = hivm.hir.pointer_cast(%c13312_i64) : 256xi32 ub
+    hivm.hir.vbrc ins(%5) outs(%6) temp_buffer(%7) broadcast_dims=[1]
+        // ◄═══ q_attn_arg[:, None]
 
-**Cast-variant summary:** the cast path inserts **6 extra vector ops**
-that are pure type-juggling: 3 `i1→f16→i32` widenings (one per
-`.to(int32)` site) and an `i32→f32→i1→f16` round-trip to recover an i1
-mask for the final byte narrowing. None of these ops change the value;
-they only change the storage type. This is exactly why the A5 cast
-variant takes ≈the same cycles as the bool variant despite spending
-more lines of MLIR — the extra ops are AIV vector ops which retire 1
-per VECTOR cycle on A5 (see `helloworld_cast_vs_nocast_comparison.md`
-§4.7).
+    hivm.hir.set_flag[<PIPE_V>, <PIPE_MTE2>, <EVENT_ID0>]    // V→MTE2 fence
+
+    // Triton:  k_attn_arg[None, :] →   32×32 tile at UB c14336
+    %8 = hivm.hir.pointer_cast(%c19104_i64) : 1x32xi32 ub
+    %collapse_shape_2 = collapse %8 → 32xi32
+    %9 = hivm.hir.pointer_cast(%c14336_i64) : 32x32xi32 ub
+    hivm.hir.vbrc ins(%8) outs(%9) broadcast_dims=[0]
+        // ◄═══ k_attn_arg[None, :]
+
+    // ─────────────────────────────────────────────────────────
+    // Phase 2 — i32 → i64 widening of q_offset / k_offset for the scalar
+    // causal compare (Phase 8). The Scalar pipe needs i64.
+    // ─────────────────────────────────────────────────────────
+    %10 = hivm.hir.pointer_cast(%c18432_i64) : 32xi64 ub
+    hivm.hir.vcast ins(%collapse_shape) outs(%10)            // q_offset i32→i64
+    %11 = hivm.hir.pointer_cast(%c18688_i64) : 32xi64 ub
+    hivm.hir.vcast ins(%collapse_shape_0) outs(%11)          // k_offset i32→i64
+
+    // ─────────────────────────────────────────────────────────
+    // Phase 3 — Triton:  C = (k_attn_arg[None, :] == 0)   per-row 32×i1
+    // ─────────────────────────────────────────────────────────
+    %12 = hivm.hir.pointer_cast(%c18944_i64) : 32xi1 ub
+    hivm.hir.vcmp ins(%collapse_shape_2, %c0_i32) outs(%12)
+        // ◄═══ C  (held as a 32-wide i1 row, broadcasted later)
+
+    hivm.hir.set_flag[<PIPE_V>, <PIPE_MTE2>, <EVENT_ID1>]
+
+    // ─────────────────────────────────────────────────────────
+    // Phase 4 — DMA-load operand tiles from gm into UB scratch buffers
+    // (the same UB locations whose row/col scalar versions Phase 1 broadcasted).
+    // ─────────────────────────────────────────────────────────
+    %reinterpret_cast = reinterpret_cast %arg2 → 32xi32 gm
+    hivm.hir.wait_flag[<PIPE_V>, <PIPE_MTE2>, <EVENT_ID0>]
+    hivm.hir.load ins(%reinterpret_cast) outs(%collapse_shape_1)   // q_attn_arg gm→ub
+
+    %reinterpret_cast_3 = reinterpret_cast %arg3 → 1x32xi32 gm
+    %collapse_shape_4   = collapse %reinterpret_cast_3 → 32xi32 gm
+    hivm.hir.wait_flag[<PIPE_V>, <PIPE_MTE2>, <EVENT_ID1>]
+    hivm.hir.load ins(%collapse_shape_4) outs(%collapse_shape_2)   // k_attn_arg gm→ub
+
+    %reinterpret_cast_5 = reinterpret_cast %arg4 → 32xi32 gm
+    hivm.hir.load ins(%reinterpret_cast_5) outs(%collapse_shape)   // q_offset gm→ub
+
+    %reinterpret_cast_6 = reinterpret_cast %arg5 → 1x32xi32 gm
+    %collapse_shape_7   = collapse %reinterpret_cast_6 → 32xi32 gm
+    hivm.hir.load ins(%collapse_shape_7) outs(%collapse_shape_0)   // k_offset gm→ub
+
+    %reinterpret_cast_8 = reinterpret_cast %arg6 → 32x32xi8 gm     // result tile gm view
+
+    // ─────────────────────────────────────────────────────────
+    // Phase 5 — full-tile vcmp's   F  and  B
+    // ─────────────────────────────────────────────────────────
+    %collapse_shape_9  = collapse %1 → 1024xi32       // q_offset[:,None] tile flat
+    %collapse_shape_10 = collapse %4 → 1024xi32       // k_offset[None,:] tile flat
+    %13 = hivm.hir.pointer_cast(%c0_i64)    : 1024xi1 ub      // alias over %1's slot
+    hivm.hir.pipe_barrier[<PIPE_V>]
+    hivm.hir.vcmp ins(%collapse_shape_9, %collapse_shape_10) outs(%13)   // default cmp = eq
+        // ◄═══ F = (q_offset[:, None] == k_offset[None, :])
+
+    %collapse_shape_11 = collapse %6 → 1024xi32       // q_attn[:,None] tile flat
+    %collapse_shape_12 = collapse %9 → 1024xi32       // k_attn[None,:] tile flat
+    %14 = hivm.hir.pointer_cast(%c9216_i64) : 1024xi1 ub      // alias over %6's slot
+    hivm.hir.vcmp ins(%collapse_shape_11, %collapse_shape_12) outs(%14)
+        // ◄═══ B = (q_attn_arg[:, None] == k_attn_arg[None, :])
+
+    // ─────────────────────────────────────────────────────────
+    // Phase 6 — i64-tile broadcast of q_offset / k_offset for the scalar causal loop.
+    // ─────────────────────────────────────────────────────────
+    %expand_shape    = expand %10 → 32x1xi64
+    %15 = hivm.hir.pointer_cast(%c19488_i64) : 32x32xi64 ub
+    %16 = hivm.hir.pointer_cast(%c27680_i64) : 0xi64 ub               // 0-byte temp
+    hivm.hir.vbrc ins(%expand_shape) outs(%15) temp_buffer(%16) broadcast_dims=[1]
+    %expand_shape_13 = expand %11 → 1x32xi64
+    %17 = hivm.hir.pointer_cast(%c27680_i64) : 32x32xi64 ub
+    hivm.hir.vbrc ins(%expand_shape_13) outs(%17) broadcast_dims=[0]
+    hivm.hir.set_flag[<PIPE_V>, <PIPE_S>, <EVENT_ID0>]                // V→S fence
+
+    // ─────────────────────────────────────────────────────────
+    // Phase 7 — i1 → f16 trunc of C row scalars (for Phase 10 broadcast).
+    // ─────────────────────────────────────────────────────────
+    %18 = hivm.hir.pointer_cast(%c35872_i64) : 32xf16 ub      // C-as-f16
+    %19 = hivm.hir.pointer_cast(%c35936_i64) : 48xf16 ub      // temp
+    hivm.hir.vcast ins(%12) outs(%18) temp_buffer(%19) round_mode=<trunc>
+        // (C: i1 → f16   — { false→0.0, true→1.0 })
+
+    // ─────────────────────────────────────────────────────────
+    // Phase 8 — scalar causal loop:   A = (q_offset[:,None] <= k_offset[None,:])
+    // Stored as 1024×i8 in UB (1=true, 0=false). Why scalar-pipe?
+    // — i64 sle isn't a vector op; the i32→i64 widen above set this up.
+    // ─────────────────────────────────────────────────────────
+    %collapse_shape_14 = collapse %15 → 1024xi64
+    %collapse_shape_15 = collapse %17 → 1024xi64
+    %20 = hivm.hir.pointer_cast(%c19488_i64) : 1024xi8 ub             // A bytes (alias over the i64 tile)
+    hivm.hir.wait_flag[<PIPE_V>, <PIPE_S>, <EVENT_ID0>]
+    scf.for %arg13 = %c0 to %c1024 step %c1 {
+      %34 = memref.load %collapse_shape_14[%arg13]                    // q_off[i] : i64
+      %35 = memref.load %collapse_shape_15[%arg13]                    // k_off[i] : i64
+      %36 = arith.cmpi sle, %34, %35                                  // A[i] : i1
+      %37 = arith.extui %36 : i1 to i8
+      memref.store %37, %20[%arg13]
+    }
+        // ◄═══ A = triu_causal stored as 1024×i8 at UB c19488
+    hivm.hir.set_flag[<PIPE_S>, <PIPE_V>, <EVENT_ID0>]                // S→V fence
+
+    // ─────────────────────────────────────────────────────────
+    // Phase 9 — recover A as i1 (lift through f16 lane).
+    //   i8 → f16 → vcmp(ne, 0.0) → i1
+    // ─────────────────────────────────────────────────────────
+    %21 = hivm.hir.pointer_cast(%c36032_i64) : 1024xf16 ub            // A-as-f16
+    hivm.hir.wait_flag[<PIPE_S>, <PIPE_V>, <EVENT_ID0>]
+    hivm.hir.pipe_barrier[<PIPE_V>]
+    hivm.hir.vcast ins(%20) outs(%21)                                 // A: i8 → f16
+    %22 = hivm.hir.pointer_cast(%c38080_i64) : 1024xf16 ub
+    hivm.hir.vbrc  ins(%cst) outs(%22)                                // f16 0.0 tile
+    %23 = hivm.hir.pointer_cast(%c36032_i64) : 1024xi1 ub             // alias
+    hivm.hir.pipe_barrier[<PIPE_V>]
+    hivm.hir.vcmp ins(%21, %22) outs(%23) compare_mode=<ne>
+        // ◄═══ A as 1024×i1   (= A_f16 != 0.0)
+
+    // ─────────────────────────────────────────────────────────
+    // Phase 10 — broadcast C from the 32-wide row to the full 32×32 tile,
+    // recover as i1. The double-vcmp+vnot is the canonicalizer's chosen
+    // pattern (cf. §4.6.5 in helloworld_cast_vs_nocast_comparison.md).
+    // ─────────────────────────────────────────────────────────
+    %expand_shape_16 = expand %18 → 1x32xf16
+    %24 = hivm.hir.pointer_cast(%c40128_i64) : 32x32xf16 ub
+    hivm.hir.vbrc ins(%expand_shape_16) outs(%24) broadcast_dims=[0]   // C: 1×32 f16 → 32×32 f16
+    %collapse_shape_17 = collapse %24 → 1024xf16
+    %25 = hivm.hir.pointer_cast(%c40128_i64) : 1024xi1 ub              // alias
+    hivm.hir.pipe_barrier[<PIPE_V>]
+    hivm.hir.vcmp ins(%collapse_shape_17, %cst) outs(%25)              // (C_f16 == 0.0) → !C
+    %26 = hivm.hir.pointer_cast(%c40128_i64) : 1024xi1 ub
+    hivm.hir.pipe_barrier[<PIPE_V>]
+    hivm.hir.vnot ins(%25) outs(%26)
+        // ◄═══ C as 1024×i1 (broadcasted to full tile)
+
+    // ─────────────────────────────────────────────────────────
+    // Phase 11 — boolean algebra in i1   (D = B | C ; E = A & D ; result = E | F)
+    // ─────────────────────────────────────────────────────────
+    %27 = hivm.hir.pointer_cast(%c9216_i64)  : 1024xi1 ub              // overwrites B's slot
+    hivm.hir.pipe_barrier[<PIPE_V>]
+    hivm.hir.vor ins(%14, %26) outs(%27)
+        // ◄═══ D = B | C
+
+    %28 = hivm.hir.pointer_cast(%c36032_i64) : 1024xi1 ub              // overwrites A's slot
+    hivm.hir.pipe_barrier[<PIPE_V>]
+    hivm.hir.vand ins(%23, %27) outs(%28)
+        // ◄═══ E = A & D
+
+    %29 = hivm.hir.pointer_cast(%c0_i64)     : 1024xi1 ub              // overwrites F's slot
+    hivm.hir.pipe_barrier[<PIPE_V>]
+    hivm.hir.vor ins(%28, %13) outs(%29)
+        // ◄═══ result = E | F   (still as 1024×i1)
+
+    // ─────────────────────────────────────────────────────────
+    // Phase 12 — i1 → i32 → i8 narrowing for the i8 result tensor.
+    //   bool path uses vsel(i1, 1, 0) (1 op), then vcast i32→i8.
+    // ─────────────────────────────────────────────────────────
+    %30 = hivm.hir.pointer_cast(%c42176_i64) : 1024xi32 ub
+    %31 = hivm.hir.pointer_cast(%c46272_i64) : 24xi32 ub               // temp
+    hivm.hir.pipe_barrier[<PIPE_V>]
+    hivm.hir.vsel ins(%29, %c1_i32, %c0_i32) outs(%30) temp_buffer(%31)
+    %32 = hivm.hir.pointer_cast(%c46368_i64) : 1024xi8 ub
+    %33 = hivm.hir.pointer_cast(%c47392_i64) : 2048xi32 ub             // temp
+    hivm.hir.pipe_barrier[<PIPE_V>]
+    hivm.hir.vcast ins(%30) outs(%32) temp_buffer(%33) round_mode=<truncwithoverflow>
+    hivm.hir.set_flag[<PIPE_V>, <PIPE_MTE3>, <EVENT_ID0>]              // V→MTE3 fence
+
+    // ─────────────────────────────────────────────────────────
+    // Phase 13 — DMA-store result (1024×i8) to gm.
+    // ─────────────────────────────────────────────────────────
+    %collapse_shape_18 = collapse %reinterpret_cast_8 → 1024xi8 gm
+    hivm.hir.wait_flag[<PIPE_V>, <PIPE_MTE3>, <EVENT_ID0>]
+    hivm.hir.store ins(%32) outs(%collapse_shape_18)
+        // ◄═══ *result_ptr = result
+    return
+  }
+}
+```
+
+**Bool variant — physical op count:**
+3× `vbrc` (i32 tiles) + 1× `vbrc` (i32 tile, no temp) + 2× `vcast i32→i64`
++ 1× `vcmp i32` + 4× `hivm.hir.load` + 2× `vcmp 1024xi32` (B, F) + 2×
+`vbrc i64` + 1× `vcast i1→f16` (C) + 1× `scf.for 0..1024` (A as i8) + 1×
+`vcast i8→f16` (A→f16) + 1× `vbrc f16` + 1× `vcmp f16,f16,ne` (A as i1) +
+1× `vbrc f16` (C tile) + 1× `vcmp f16,f16` + 1× `vnot` (C as i1) + 1×
+`vor i1` (D) + 1× `vand i1` (E) + 1× `vor i1` (result) + 1× `vsel i1,i32`
++ 1× `vcast i32→i8` + 1× `hivm.hir.store`. Boolean algebra is **fully in
+i1**.
+
+## 4. Annotated cast variant — full MLIR
+
+```mlir
+// =====================================================================
+// captures_hivmc_input_a5_cast.mlir  (172 lines, 18,095 B)
+// =====================================================================
+module attributes {... same dlti / hacc.target / module_core_type ...} {
+  func.func @mask_kernel_cast(
+      %arg0..%arg6: ... ,    // same signature as bool variant; arg6 still 1024×i8 result
+      %arg7..%arg12: i32) attributes {... mix_mode="aiv" ...} {
+
+    // ───── Constants & UB byte offsets (22 of them — 5 more than bool) ─────
+    %c1, %c0, %c1024 = ...index
+    %c61024_i64 .. %c0_i64 = ... : i64
+    %cst   = arith.constant 0.000000e+00 : f16
+    %cst_0 = arith.constant 0.000000e+00 : f32     // ★ NEW vs bool
+    %c0_i32 = arith.constant 0 : i32               // (no %c1_i32 — vsel is gone)
+
+    // ─────────────────────────────────────────────────────────
+    // Phase 1 — broadcast operand row/col scalars to 32×32 tiles.
+    // IDENTICAL to bool variant.
+    // ─────────────────────────────────────────────────────────
+    // ... same 4× vbrc i32 producing %1, %4, %6, %9
+    //     (q_offset[:,None] tile, k_offset[None,:] tile,
+    //      q_attn_arg[:,None] tile, k_attn_arg[None,:] tile)
+
+    // ─────────────────────────────────────────────────────────
+    // Phase 2 — i32 → i64 widen of q/k offsets   — same as bool
+    // ─────────────────────────────────────────────────────────
+    // %10 = i64 q_offset row,  %11 = i64 k_offset row
+
+    // ─────────────────────────────────────────────────────────
+    // Phase 3 — C = (k_attn_arg[None, :] == 0)   as 32×i1   — same as bool
+    // ─────────────────────────────────────────────────────────
+    %12 = hivm.hir.pointer_cast(%c18944_i64) : 32xi1 ub
+    hivm.hir.vcmp ins(%collapse_shape_3, %c0_i32) outs(%12)
+        // ◄═══ C  (as 32×i1)
+
+    // ─────────────────────────────────────────────────────────
+    // Phase 4 — DMA-load 4× operands from gm   — same as bool
+    // ─────────────────────────────────────────────────────────
+    // ... 4× hivm.hir.load
+
+    // ─────────────────────────────────────────────────────────
+    // Phase 5 — full-tile vcmp's   F  then  B   — same as bool, same result types
+    // ─────────────────────────────────────────────────────────
+    %13 = hivm.hir.pointer_cast(%c0_i64)    : 1024xi1 ub
+    hivm.hir.vcmp ins(...q_off, k_off) outs(%13)            // ◄═══ F
+    %14 = hivm.hir.pointer_cast(%c9216_i64) : 1024xi1 ub
+    hivm.hir.vcmp ins(...q_attn, k_attn) outs(%14)          // ◄═══ B
+
+    // ─────────────────────────────────────────────────────────
+    // Phase 6 — i64-tile broadcast for causal scalar loop   — same as bool
+    // ─────────────────────────────────────────────────────────
+
+    // ═════════════════════════════════════════════════════════
+    //  ★ DIVERGENCE STARTS HERE — `.to(tl.int32)` forces i1 → f16 → i32
+    //  for every comparison, then boolean algebra runs as i32 bitwise.
+    // ═════════════════════════════════════════════════════════
+
+    // ─── Phase 7a — vcast i1 → f16 of   C, F, B   (3 sites) ───
+    //   Note: this is just step 1 of 2 for `(...)→.to(int32)`.
+    //   The bool variant only does this for C (single 32-wide row).
+
+    %18 = hivm.hir.pointer_cast(%c35872_i64) : 32xf16 ub
+    %19 = hivm.hir.pointer_cast(%c35936_i64) : 48xf16 ub
+    hivm.hir.vcast ins(%12) outs(%18) temp_buffer(%19)              // C  (32×i1 → 32×f16)
+        // (no round_mode = trunc here; the bool variant did emit one)
+
+    %20 = hivm.hir.pointer_cast(%c36032_i64) : 1024xf16 ub
+    %21 = hivm.hir.pointer_cast(%c38080_i64) : 48xf16 ub
+    hivm.hir.pipe_barrier[<PIPE_V>]
+    hivm.hir.vcast ins(%13) outs(%20) temp_buffer(%21)              // ★ F (1024×i1 → 1024×f16) — extra vs bool
+                                                                     //   (Triton: (q_off==k_off).to(int32) step 1)
+
+    %22 = hivm.hir.pointer_cast(%c38176_i64) : 1024xf16 ub
+    %23 = hivm.hir.pointer_cast(%c40224_i64) : 48xf16 ub
+    hivm.hir.vcast ins(%14) outs(%22) temp_buffer(%23)              // ★ B (1024×i1 → 1024×f16) — extra vs bool
+                                                                     //   (Triton: (q_attn==k_attn).to(int32) step 1)
+
+    // ─── Phase 8 — scalar causal loop   A = (q_off ≤ k_off)   ───
+    //   IDENTICAL to bool — stores 1024×i8 at UB c19488 (=%24).
+    %collapse_shape_15 = collapse %15 → 1024xi64
+    %collapse_shape_16 = collapse %17 → 1024xi64
+    %24 = hivm.hir.pointer_cast(%c19488_i64) : 1024xi8 ub
+    hivm.hir.wait_flag[<PIPE_V>, <PIPE_S>, <EVENT_ID0>]
+    scf.for ... { cmpi sle i64; extui i1→i8; store }
+        // ◄═══ A = triu_causal as 1024×i8
+
+    hivm.hir.set_flag[<PIPE_S>, <PIPE_V>, <EVENT_ID0>]
+
+    // ─── Phase 9a — recover A as i1   (same shape as bool Phase 9, no compare_mode arg differs)
+    %25 = hivm.hir.pointer_cast(%c40320_i64) : 1024xf16 ub
+    hivm.hir.wait_flag[<PIPE_S>, <PIPE_V>, <EVENT_ID0>]
+    hivm.hir.vcast ins(%24) outs(%25)                                // A: i8 → f16
+    %26 = hivm.hir.pointer_cast(%c42368_i64) : 1024xf16 ub
+    hivm.hir.vbrc  ins(%cst) outs(%26)                               // f16(0.0) tile
+    %27 = hivm.hir.pointer_cast(%c40320_i64) : 1024xi1 ub
+    hivm.hir.pipe_barrier[<PIPE_V>]
+    hivm.hir.vcmp ins(%25, %26) outs(%27) compare_mode=<ne>
+        // ◄═══ A as 1024×i1
+
+    // ─── Phase 7b — vcast f16 → i32   (3 sites)   — STEP 2 of `.to(int32)` ───
+    %28 = hivm.hir.pointer_cast(%c44416_i64) : 32xi32 ub
+    hivm.hir.vcast ins(%18) outs(%28)                                // ★ C: 32xf16 → 32xi32
+        // ◄═══ (k_attn==0).to(int32)   (32 wide)
+
+    %29 = hivm.hir.pointer_cast(%c44544_i64) : 1024xi32 ub
+    hivm.hir.vcast ins(%20) outs(%29)                                // ★ F: 1024xf16 → 1024xi32
+        // ◄═══ (q_offset==k_offset).to(int32)   (1024 wide)
+
+    %30 = hivm.hir.pointer_cast(%c48640_i64) : 32x32xi32 ub
+    %collapse_shape_17 = collapse %30 → 1024xi32
+    hivm.hir.vcast ins(%22) outs(%collapse_shape_17)                 // ★ B: 1024xf16 → 1024xi32 (32x32 tile)
+        // ◄═══ (q_attn==k_attn).to(int32)
+
+    // ─── Phase 7c — also widen A to i32 (via i1 → f16 → i32) ───
+    %31 = hivm.hir.pointer_cast(%c52736_i64) : 1024xf16 ub
+    %32 = hivm.hir.pointer_cast(%c54784_i64) : 48xf16 ub
+    hivm.hir.pipe_barrier[<PIPE_V>]
+    hivm.hir.vcast ins(%27) outs(%31) temp_buffer(%32)               // A: i1 → f16
+    %expand_shape_18 = expand %28 → 1x32xi32                          // C-as-i32 reshape for broadcast OR
+    %33 = hivm.hir.pointer_cast(%c54880_i64) : 1024xi32 ub
+    hivm.hir.pipe_barrier[<PIPE_V>]
+    hivm.hir.vcast ins(%31) outs(%33)                                // A: f16 → i32
+        // ◄═══ A.to(int32)
+
+    // ═════════════════════════════════════════════════════════
+    // Phase 10 — boolean algebra is now BITWISE i32   (replaces bool's i1 algebra)
+    // ═════════════════════════════════════════════════════════
+
+    %34 = hivm.hir.pointer_cast(%c48640_i64) : 32x32xi32 ub
+    hivm.hir.vor ins(%30, %expand_shape_18) outs(%34) broadcast=[0]
+        // ◄═══ D = B.to(int32) | C.to(int32)   (broadcast OR: 32x32 ∨ 1x32)
+
+    %collapse_shape_19 = collapse %34 → 1024xi32
+    %35 = hivm.hir.pointer_cast(%c54880_i64) : 1024xi32 ub
+    hivm.hir.pipe_barrier[<PIPE_V>]
+    hivm.hir.vand ins(%33, %collapse_shape_19) outs(%35)
+        // ◄═══ E = A.to(int32) & D
+
+    %36 = hivm.hir.pointer_cast(%c44544_i64) : 1024xi32 ub
+    hivm.hir.pipe_barrier[<PIPE_V>]
+    hivm.hir.vor ins(%35, %29) outs(%36)
+        // ◄═══ result_i32 = E | F.to(int32)
+
+    // ─────────────────────────────────────────────────────────
+    // Phase 11 — recover an i1 mask from the i32 result, then i1 → i8.
+    //   path:    i32 → f32 → vcmp(eq, 0.0) → vnot → i1 → f16 → i8
+    //   This is the cast variant's overhead vs bool's single vsel(i1,1,0).
+    // ─────────────────────────────────────────────────────────
+    %37 = hivm.hir.pointer_cast(%c44544_i64) : 1024xf32 ub
+    hivm.hir.pipe_barrier[<PIPE_V>]
+    hivm.hir.vcast ins(%36) outs(%37)                                // ★ result: i32 → f32
+    %38 = hivm.hir.pointer_cast(%c44544_i64) : 1024xi1 ub
+    hivm.hir.pipe_barrier[<PIPE_V>]
+    hivm.hir.vcmp ins(%37, %cst_0) outs(%38)                         // ★ (result_f32 == 0.0)  → !result
+    %39 = hivm.hir.pointer_cast(%c44544_i64) : 1024xi1 ub
+    hivm.hir.pipe_barrier[<PIPE_V>]
+    hivm.hir.vnot ins(%38) outs(%39)
+        // ◄═══ result as i1   (= (result_i32) != 0)
+
+    %40 = hivm.hir.pointer_cast(%c58976_i64) : 1024xf16 ub
+    %41 = hivm.hir.pointer_cast(%c61024_i64) : 48xf16 ub
+    hivm.hir.pipe_barrier[<PIPE_V>]
+    hivm.hir.vcast ins(%39) outs(%40) temp_buffer(%41)               // ★ i1 → f16
+    %42 = hivm.hir.pointer_cast(%c58976_i64) : 1024xi8 ub
+    hivm.hir.pipe_barrier[<PIPE_V>]
+    hivm.hir.vcast ins(%40) outs(%42)                                // ★ f16 → i8
+    hivm.hir.set_flag[<PIPE_V>, <PIPE_MTE3>, <EVENT_ID0>]
+
+    // ─────────────────────────────────────────────────────────
+    // Phase 12 — DMA-store result (1024×i8) to gm   — same as bool
+    // ─────────────────────────────────────────────────────────
+    %collapse_shape_20 = collapse %reinterpret_cast_9 → 1024xi8 gm
+    hivm.hir.wait_flag[<PIPE_V>, <PIPE_MTE3>, <EVENT_ID0>]
+    hivm.hir.store ins(%42) outs(%collapse_shape_20)
+        // ◄═══ *result_ptr = result
+    return
+  }
+}
+```
+
+**Cast variant — extra ops vs bool** (each marked ★ above):
+- 2× `vcast i1 → f16` for B and F (Phase 7a) — bool only widens C
+- 3× `vcast f16 → i32` for B, C, F (Phase 7b) — bool has none
+- 1× `vcast f16 → i32` for A (Phase 7c, after the existing i1→f16) — bool keeps A in i1
+- `vcast i32 → f32` + `vcmp f32,0.0` + `vnot` (Phase 11) — bool uses `vsel(i1,1,0)` instead
+- `vcast i1 → f16` + `vcast f16 → i8` (Phase 11 tail) — bool uses single `vcast i32 → i8`
+
+Net: **+8 vector ops** vs the bool variant, all pure type-juggling.
 
 ## 5. Bool vs cast — structural diff
 
@@ -226,7 +570,7 @@ per VECTOR cycle on A5 (see `helloworld_cast_vs_nocast_comparison.md`
 | Per-compare widening to i32 | none | 2 vcasts each (`i1→f16`, `f16→i32`) × 3 sites = +6 |
 | Constant pool | i32 1, i32 0 | f32 0.0 (no i32 1) |
 | `vnot` count | 1 | 1 |
-| Final store type | 1024xi8 | 1024xi8 |
+| Final store type | 1024×i8 | 1024×i8 |
 
 The qualitative pattern matches the 910B1 hivmc-input diff documented in
 `helloworld_cast_vs_nocast_comparison.md` §4.6.5: hivmc has not yet
@@ -277,10 +621,10 @@ sudo ln -sf ../../tools/bishengir/bin/hivmc-a5 \
   argument to `hivmc-a5`.
 - Captured for both variants by symlink-hijacking
   `/home/ray/Ascend/cann-9.0.0/x86_64-linux/bin/hivmc-a5`.
-- Bool variant (146 L): boolean algebra in i1; one i1→i32→i8
+- Bool variant (146 L): boolean algebra in i1; one `i1→i32→i8`
   materialization at the end via `vsel`.
 - Cast variant (172 L): boolean algebra in i32; six extra
-  `i1↔f16↔i32` type-juggle vcasts; final i32→f32→i1→f16→i8 chain.
+  `i1↔f16↔i32` type-juggle vcasts; final `i32→f32→i1→f16→i8` chain.
 - A5 vs 910B1 hivmc-input is essentially identical at this layer
   (same module attributes propagate from the `.ttadapter`); the
   divergence in machine-code semantics happens **inside** hivmc-a5
