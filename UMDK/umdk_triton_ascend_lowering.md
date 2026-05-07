@@ -669,30 +669,196 @@ Three traps worth knowing:
 
 So the path forward — for any future Triton-Ascend kernel where you want pass-by-pass IR — is the `bishengir-opt` chain in §14.
 
-### 14.2 Examples of the 104 unique passes captured
+### 14.2 What each pass does
 
-Frontend (`MLIR_PRINT_IR_AFTER_ALL=1` on the Python invocation):
-- Inliner, Canonicalizer, TritonCombineOps, TritonReorderBroadcast, CSE, LoopInvariantCodeMotion, SymbolDCE, TritonLoopUnroll (9 dumps total)
+The 9 frontend + 104 unique backend passes, by stage. Many fire multiple times (CSE, ExtendedCanonicalizer, ConvertArithToAffine each repeat between distinct transforms — that's why total dumps is 270, not 113).
 
-Backend `lower-hfusion-pipeline` (~101 dumps):
-- ConvertLinalgToHFusion, ConvertTensorToHFusion, ConvertArithToHFusion, ConvertMathToHFusion, ConvertGenericToNamedOp
-- HFusionOpFusion, HoistTensorEmpty, FoldTensorEmpty, FoldSymbolicDim, UnfoldSymbolicDim
-- HFusionInlineBrc, NormalizeSliceOps, NormalizeLastDimUnalignedTensorOp, ReorderOpsByBFS, OutlineSingleOp
-- AutoSchedule, Decompose, DecomposeMulti, FlattenOps
-- ExtendedCanonicalizer / CSE / ConvertArithToAffine (each fires multiple times between transforms)
+#### Triton frontend (9 passes — Python side, TT-IR level)
 
-Backend `optimize-hivm-pipeline` (~116 dumps):
-- ConvertToHIVMOp, InferHIVMDataLayout, InferHIVMMemScope, InferFuncCoreType
-- MarkRealCoreType, MarkStrideAlign, MarkMultiBuffer, EnableMultiBuffer, EnableStrideAlign
-- AddFFTSAddr, AddFFTSToSyncBlockSetOp, BindWorkSpaceArg, BindSyncBlockLockArg, InitEntryKernel
-- HIVMDecomposeOp, HIVMAggregatedDecomposeOp, HIVMFlattenOps, HIVMInlineOTFLoadStore, HIVMRecognizeDeinterleaveOp
-- AlignAllocSize, AllocExtraBuffer, AutoInferBufferSize, ConstantizeBufferSize, SetBufferSize
-- TileAndBindSubBlock, TileBatchMMIntoLoop, MapForToForall, HIVMMapForallToBlocks
-- InjectSync, InjectBlockSync, SyncBlockHoisting, LowerCreateSyncBlockLock
-- CVPipelining, PlanMemory, OneShotBufferize, MemrefDeadStoreEliminationOp
-- HIVMLowerToLoops (final lowering before LLVM-IR emission)
-- InlineFixpipe, InlineLoadCopy, InlineOTFBroadcast (lowering-time inlining)
-- SCFForLoopCanonicalization, RemoveRedundantLoopInit, LoopInvariantSubsetHoisting, LiftLowestStride
-- InsertInferTaskTypeFunc, InsertInferSyncBlockLockNumAndInitFunc, InsertWorkSpaceForMixCV (kernel-launch metadata)
+| Pass | What it does |
+|---|---|
+| Inliner | Inline all callees into the kernel; remove function-call boundaries on the device side |
+| Canonicalizer | Standard MLIR rewrite framework: normalize patterns (`+0`, `*1`, constant folding, idempotent op merging) |
+| TritonCombineOps | Merge adjacent fusable Triton ops (e.g., `broadcast(broadcast(x))` → `broadcast(x)`) |
+| TritonReorderBroadcast | Push `tt.broadcast` later in the data flow so upstream ops work on smaller tensors |
+| CSE | Common subexpression elimination — dedupe identical pure ops |
+| LoopInvariantCodeMotion | Hoist loop-invariant ops out of loops |
+| SymbolDCE | Remove unused symbols (functions, globals) |
+| TritonLoopUnroll | Unroll loops marked with Triton's `@unroll` annotation or autotuner unroll factor |
 
-After this comes the LLVM half (handled by hivmc as a subprocess of bishengir-compile, not visible in MLIR dumps): LLVM optimization, register allocation, scheduling, and machine-code emission for hiipu64.
+#### `lower-hfusion-pipeline` — linalg/tensor/arith/math → hfusion
+
+**Conversion to hfusion dialect**
+
+| Pass | What it does |
+|---|---|
+| ConvertGenericToNamedOp | Pattern-match `linalg.generic` bodies against named ops (matmul, fill, reduce) to enable named-op-aware lowering |
+| ConvertLinalgToHFusion | Lower `linalg.matmul`/`linalg.add`/etc. → `hfusion.*` (HW-aware ops with NPU scheduling annotations) |
+| ConvertTensorToHFusion | Lower `tensor.extract_slice`/`insert_slice`/`empty` → hfusion equivalents |
+| ConvertArithToHFusion | Lower tensor-semantic arith ops (mul/div/add) → hfusion |
+| ConvertMathToHFusion | Lower `math.exp`/`sqrt`/etc. → hfusion's NPU-mapped intrinsics |
+| ConvertArithToAffine | Lower index-typed arith to `affine` dialect for analyzability |
+
+**Hfusion-level optimization**
+
+| Pass | What it does |
+|---|---|
+| HFusionOpFusion | Vertical fusion: merge producer→consumer hfusion ops into one fused region |
+| HFusionInlineBrc | Inline broadcast — replace `broadcast` with cloned producers when cheaper |
+| InferFuncFusionKind | Annotate functions with vec / cube / mix kind |
+| AutoSchedule | Tiling, fusion, vectorization decisions made automatically from shapes + HW caps |
+| ConstantizeTilingData | Fold known tiling block dims into constants |
+| PackTilingData | Pack tiling params into a struct passed to the kernel |
+| OutlineSingleOp | Promote a single hfusion op into its own function for the auto-scheduler |
+
+**Decomposition**
+
+| Pass | What it does |
+|---|---|
+| Decompose | Break high-level hfusion ops into building blocks (e.g., `softmax → max + sub + exp + sum + div`) |
+| DecomposeMulti | Multi-step variant for ops that decompose conditionally |
+| FlattenOps | Flatten nested fused regions |
+| LinalgFoldUnitExtentDimsPass | Drop tensor dims of size 1 (`<1×128>` → `<128>`) |
+| ComposeMultiReduce | Combine adjacent reductions (e.g., sum-then-mean) |
+
+**Layout / shape normalization**
+
+| Pass | What it does |
+|---|---|
+| CanonicalizeTensorReshape | Simplify reshape chains |
+| PropagateReshape | Push reshape ops earlier/later to expose fusion |
+| NormalizeSliceOps | Rewrite slice ops into canonical form |
+| NormalizeLastDimUnalignedTensorOp | Insert padding/pack when the last dim is unaligned |
+| NormalizeTensorOps | Standardize `tensor.reshape`/`collapse`/`expand` to lowering's expected form |
+| Normalize | Catch-all generic normalization |
+| BubblePadUp | Move `tensor.pad` upward toward producers (often eliminable there) |
+| BubbleUpExtractSlice | Move `extract_slice` upward — exposes constants, enables fusion |
+| TrickleConcatDown | Move `concat` downward — reduces register pressure on producers |
+| ReorderOpsByBFS | Reorder fused ops in BFS order (dep-respecting linear schedule) |
+
+**Symbol & memory cleanup at this stage**
+
+| Pass | What it does |
+|---|---|
+| HoistTensorEmpty | Hoist `tensor.empty` allocations out of inner loops |
+| FoldTensorEmpty | Fold `tensor.empty` into adjacent ops |
+| FoldSymbolicDim | Fold known dynamic dims to constants |
+| UnfoldSymbolicDim | Inverse — re-introduce symbolic dims when needed downstream |
+| EraseSymbol / DropSymbols | Remove unused symbol definitions |
+| EliminateDuplicateFuncs | Dedupe identical functions after inlining/cloning |
+| CacheIOForReturnArg | Mark return-args for cache (input args read once → DMA-hoist; output args written once) |
+| AddFFTSAddr | Add FFTS (Fast Function Task Scheduler) base-address arg to kernel signature |
+| WrapHostFunc | Split kernel from host-launch wrapper |
+
+**Special handling**
+
+| Pass | What it does |
+|---|---|
+| DowngradeFP | Downcast unsupported precision (FP64 → FP32 since 910 has no FP64 vector unit) |
+| LegalizeBF | Bring bf16 ops into HW-supported form |
+| LegalizeBoolPass | Map i1 to i8 (NPU vector lane is byte-addressable) |
+| ExtendedCanonicalizer | Bisheng's extended canonicalizer over MLIR's builtin (adds NPU-aware patterns) |
+
+#### `optimize-hivm-pipeline` — hfusion → hivm → loops → llvm-ready
+
+**Conversion + decisions about layout/scope/core**
+
+| Pass | What it does |
+|---|---|
+| ConvertToHIVMOp | Convert hfusion ops → HIVM (Huawei IR Vector/Matrix) — lowest abstraction before LLVM |
+| InferHIVMDataLayout | Decide ND vs NZ layout per tensor (L1/L2 fragments use NZ) |
+| InferHIVMMemScope | Decide which scratch each op uses (UB / L1 / L2 / GM) |
+| InferFuncCoreType | Decide AIV vs AIC vs Mix for each function |
+| MarkRealCoreType | Annotate each op with its real execution core |
+| MarkStrideAlign | Annotate buffers needing stride alignment for vectorization |
+| MarkMultiBuffer | Mark buffers eligible for double-buffering (DMA + compute overlap) |
+| MarkDisableLoad | Mark ops where loads should be skipped (already resident in scratch) |
+
+**Buffer / memory planning**
+
+| Pass | What it does |
+|---|---|
+| AlignAllocSize | Pad allocations to HW alignment (32B / 256B / 512B for AIV/AIC) |
+| AllocExtraBuffer | Insert temp buffers for stages that need them |
+| AutoInferBufferSize | Compute size of each buffer from analyses |
+| ConstantizeBufferSize | Fold known shapes → constant buffer sizes |
+| SetBufferSize | Apply final buffer size annotations |
+| EnableMultiBuffer | Materialize multi-buffer (ping-pong DMA) as code |
+| EnableStrideAlign | Apply stride-align decisions as code |
+| PlanMemory | Final memory-plan analysis — assign each buffer to a physical scratch region with non-overlapping lifetime |
+| OneShotBufferize | Tensor-semantic → memref-semantic (canonical MLIR bufferization) |
+| MemrefDeadStoreEliminationOp | Remove dead stores post-bufferization |
+| DropEquivalentBufferResults | Drop function results equivalent to output args |
+| LowerMemRefExt | Lower `memref_ext` dialect to standard memref + arith |
+| FoldAllocReshapeOp | Fold `alloc + reshape` into one alloc |
+| ConvertNonContiguousReshapeToCopy | Insert explicit copy for non-contiguous reshape |
+| CloneTensorEmpty | Clone `tensor.empty` for each user (avoid aliasing) |
+
+**Scheduling & sub-block mapping**
+
+| Pass | What it does |
+|---|---|
+| TileAndBindSubBlock | Tile loops and bind tiles to sub-blocks (HW execution units) |
+| TileBatchMMIntoLoop | Tile batch matmul into a serial loop |
+| MapForToForall | Convert `scf.for` → `scf.forall` for parallel execution |
+| HIVMMapForallToBlocks | Map `scf.forall` to NPU blocks (HW thread-group equivalent) |
+| CVPipelining | Compute–vector pipelining: overlap compute and vector ops |
+| NormalizeMatmul | Standardize matmul to codegen-expected form |
+
+**Synchronization**
+
+| Pass | What it does |
+|---|---|
+| InjectSync | Insert sync barriers where needed (between AIC/AIV and DMA stages) |
+| InjectBlockSync | Insert block-level barriers |
+| SyncBlockHoisting | Hoist common sync points to reduce barrier count |
+| AddFFTSToSyncBlockSetOp | Add FFTS task-base address to sync ops |
+| LowerCreateSyncBlockLock | Lower sync-block-lock creation to runtime calls |
+
+**Lowering-time inlining**
+
+| Pass | What it does |
+|---|---|
+| InlineFixpipe | Inline matmul postprocess (bias-add / scale / relu fixpipe ops) |
+| InlineLoadCopy | Inline DMA load + copy ops |
+| InlineOTFBroadcast | Inline on-the-fly broadcast |
+| HIVMInlineOTFLoadStore | Inline on-the-fly load/store |
+
+**Decomposition at hivm level**
+
+| Pass | What it does |
+|---|---|
+| HIVMDecomposeOp | Decompose hivm ops into lower-level ops |
+| HIVMAggregatedDecomposeOp | Decompose aggregated hivm ops |
+| HIVMRecognizeDeinterleaveOp | Pattern-match deinterleave (complex → real/imag, etc.) |
+| HIVMFlattenOps | Flatten nested hivm operations |
+| HIVMOptSinglePointOp | Optimize single-point ops (scalar broadcast to vector) |
+| InsertNZ | Insert NZ-format conversion ops |
+
+**Loop opt at hivm level**
+
+| Pass | What it does |
+|---|---|
+| HIVMLowerToLoops | **Final lowering:** hivm ops → `scf.for` loops (preparing for LLVM emission) |
+| SCFForLoopCanonicalization | Canonicalize `scf.for` (combine bounds, simplify steps) |
+| CanonicalizeIterArg | Normalize loop iter-args |
+| RemoveRedundantLoopInit | Remove redundant init values |
+| LoopInvariantSubsetHoisting | Hoist subset extractions (`extract_slice`) out of loops |
+| LiftLowestStride | Move stride-1 (innermost) dims to lowest — ensures contiguous access |
+| LiftZeroRank | Promote 0-d ops out of loops |
+| ReduceRankSubview | Reduce rank of subview ops where possible |
+
+**Function signature & kernel-launch metadata**
+
+| Pass | What it does |
+|---|---|
+| InitEntryKernel | Set up the kernel entry point (initialize FFTS, etc.) |
+| BindWorkSpaceArg | Add workspace (scratchpad) arg to function signature |
+| BindSyncBlockLockArg | Add sync-block-lock arg |
+| InsertInferTaskTypeFunc | Add runtime callback to infer task type |
+| InsertInferSyncBlockLockNumAndInitFunc | Same for sync-block-lock-num and init |
+| InsertWorkSpaceForMixCV | Workspace handling for mix CV (cube+vector) kernels |
+| InsertLoadStoreForMixCV | Insert load/store for mix CV |
+| SplitMixKernel | Split mix (AIC+AIV) kernel into separate AIC and AIV functions |
+
+After these 104 unique passes, control passes to **hivmc** (the LLVM/clang fork inside CANN), which runs the LLVM half: optimization, register allocation, scheduling, machine-code emission for hiipu64. That pipeline is opaque from MLIR's view — a separate dump-flag investigation against `hivmc` would be needed to surface it.
