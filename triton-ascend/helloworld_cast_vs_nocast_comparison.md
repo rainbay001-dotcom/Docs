@@ -153,6 +153,133 @@ Both versions emit **5 vector compares** at distinct PCs, mapping to the 4 logic
 
 That's where the cast version's savings go: VNCHWCONV+MOVEVA elimination (−1,276 cyc) is consumed by pipe-sync overhead between VCMPVs (+545 cyc) + i32-width pure-compute growth (VCONV +64, VOR +77, VSEL +104, VAND +30 = +275 cyc) → net cancellation.
 
+## 4.6 Source-to-assembler mapping
+
+Mapping the Triton source lines onto the trace VECTOR-pipe events for both versions. All five `VCMPV` / `VCMPVS` ops correspond to source-level comparisons; the surrounding `VAND` / `VOR` / `VSEL` / `VNOT` / `VCONV` implement the bitwise combine and the bool↔int conversions.
+
+> **These mappings are interpreted from operand register flow (which `XD` becomes a later op's `XN`/`XM`) and Dtype patterns; without `-reloc` source-line annotations, treat them as best-guess.** Confidence rating per line.
+
+### 4.6.1 The source operations
+
+```python
+# mask_fn (TYPE=1) returns:
+#   (A & (B | C)) | D
+# where:
+A = (q_offset[:, None] <= k_offset[None, :])    # i1 vs i32 cast
+B = (q_attn_arg[:, None] == k_attn_arg[None, :]) # i1 vs i32 cast
+C = (k_attn_arg[None, :] == 0)                   # i1 vs i32 cast
+D = (q_offset[:, None] == k_offset[None, :])     # i1 vs i32 cast
+
+# mask_kernel wrapper:
+out = tl.where(mask, 1, 0).to(tl.int8)           # bool path
+out = (mask != 0).to(tl.int8)                    # cast path
+```
+
+### 4.6.2 Bool path (helloworld.py) — VECTOR-pipe trace
+
+```
+ts     PC           Mnem      dur Dtype  Maps to                                                Conf
+─────  ───────────  ────────  ─── ─────  ──────────────────────────────────────────────────────  ────
+ 1393  0x10d1114c   VBRCB      21  B32   prologue: broadcast q_off into a vector register         M
+ 1469  0x10d111fc   VCONV      58        prologue: S32→S64 lane-widen for q_off                   M
+ 3227  0x10d112c8   VCONV      21        prologue: S32→S64 lane-widen for k_off                   M
+
+ — late compute cluster begins —
+26958  0x10d113dc   VCONV      28        S8→F16 cast for position compare (lowering quirk)        S
+26994  0x10d1142c   VCMPV      36  F16   ★ A: q_offset <= k_offset                                S
+26996  0x10d11450   VBRCB      39  B32   broadcast for next compare                               M
+27142  0x10d114f0   VCMPV      53  S32   ★ B: q_attn == k_attn                                    S
+27143  0x10d11504   VCMPV      60  S32   ★ extract-bool helper (compare result vs 0 to widen)     W
+27261  0x10d1158c   VSEL       18  F16   select to fold an output                                 W
+27330  0x10d115e4   VCMPVS     28  F16   ★ C: k_attn == 0  (compare-vector-with-scalar)           S
+27394  0x10d11614   VNOT       17  B16   negate (used by some De Morgan'd combine)                W
+27412  0x10d11648   VOR        17  B16   ★ B | C  (combine attn-equality and k_attn-zero tests)   M
+27429  0x10d1166c   VAND       18  B16   ★ A & (B | C)                                            M
+27603  0x10d11684   VCMPV      53  S32   ★ D: q_offset == k_offset                                S
+27656  0x10d1169c   VOR        18  B16   ★ (A & (B | C)) | D  — the final mask combine           M
+27713  0x10d11704   VSEL       33  F32   tl.where(mask, 1, 0) — pick 1 or 0 per lane              S
+27778  0x10d11840 } VNCHWCONV  75   B8 \
+27779  0x10d11844 } VNCHWCONV 130   B8  | output: pack int8 result into NCHW layout for write-out
+27780  0x10d11848 } VNCHWCONV 185   B8  |                                                         M
+27781  0x10d1184c } VNCHWCONV 240   B8 /
+28119  0x10d1197c } VNCHWCONV  30   B8 \
+28120  0x10d11980 } VNCHWCONV  43   B8  | output: 4 more NCHW conversions
+28121  0x10d11984 } VNCHWCONV  56   B8  |                                                         M
+28122  0x10d11988 } VNCHWCONV  69   B8 /
+```
+
+`Conf`: **S** = strong (operand pattern + Dtype + position match clearly), **M** = moderate, **W** = weak (informed guess).
+
+### 4.6.3 Cast path (helloworld_cast.py) — VECTOR-pipe trace
+
+```
+ts     PC           Mnem      dur Dtype  Maps to                                                Conf
+─────  ───────────  ────────  ─── ─────  ──────────────────────────────────────────────────────  ────
+ 1366  0x10d11104   VBRCB      21  B32   prologue: broadcast q_off                                M
+ 1442  0x10d111b4   VCONV      58        prologue: S32→S64 lane-widen for q_off                   M
+ 3200  0x10d11280   VCONV      21        prologue: S32→S64 lane-widen for k_off                   M
+
+ — late compute cluster begins —
+26926  0x10d11370   VCONV      28        S8→F16 cast for first position compare                   S
+26962  0x10d113c0   VCMPV      36  F16   ★ A: q_offset <= k_offset                                S
+27321  0x10d11440   VSEL       38  F32   .to(tl.int32) on A — 1.0 if true, 0.0 if false           S
+27323  0x10d11470   VBRCB      41  B32   broadcast for B                                          M
+27472  0x10d114ec   VCMPV      53  S32   ★ B: q_attn == k_attn                                    S
+27581  0x10d11550   VSEL       38  F32   .to(tl.int32) on B                                       S
+27582  0x10d11570   VCMPV      50  S32   ★ D: q_offset == k_offset (early — note S32 here)        S
+27689  0x10d115dc   VSEL       17  F32   .to(tl.int32) on D                                       S
+27933  0x10d11618   VOR        64  B16   ★ first | of i32 results                                 M
+27998  0x10d11644   VAND       48  B16   ★ &  (between triu_causal-i32 and the OR result)         M
+27999  0x10d11658   VCMPV      84  S32   ★ extract-bool helper (compare i32 result with 0)        W
+28140  0x10d116c4   VSEL       37  F32   .to(tl.int32) for combine                                W
+28178  0x10d116e8   VOR        48  B16   ★ final OR with D                                        M
+28227  0x10d1171c   VCONV      36        S32→F32 conversion for the final compare-with-zero       S
+28263  0x10d11740   VCMPVS     36  F32   ★ C: k_attn == 0 (note F32 here vs F16 in bool)          S
+28301  0x10d11764   VNOT       17  B16   negate for an inverted-form combine                       W
+28374  0x10d117d8   VSEL       25  F16   (mask != 0).to(tl.int8) — select 1 or 0 per lane          S
+28517  0x10d11808   VCONV      28        F16→S8 cast for output                                    S
+```
+
+(no `VNCHWCONV` ops at all in cast path — that's the −828 cyc savings shown in §4.5.2)
+
+### 4.6.4 Side-by-side mapping of the four source compares
+
+| Source line | bool-path PC + ts + Dtype | cast-path PC + ts + Dtype | Notes |
+|---|---|---|---|
+| `q_off <= k_off` | `0x10d1142c VCMPV F16 ts=26994 dur=36` | `0x10d113c0 VCMPV F16 ts=26962 dur=36` | Identical Dtype (F16) and dur. The position compare lowers to half-float regardless of source dtype. |
+| `q_attn == k_attn` | `0x10d114f0 VCMPV S32 ts=27142 dur=53` | `0x10d114ec VCMPV S32 ts=27472 dur=53` | Identical instruction; cast version 330 cyc later in wall-clock |
+| `k_attn == 0` | `0x10d115e4 VCMPVS F16 ts=27330 dur=28` | `0x10d11740 VCMPVS F32 ts=28263 dur=36` | **Dtype diverges**: bool=F16, cast=**F32** — the i32 cast forced a wider compare on the scalar-with-zero path |
+| `q_off == k_off` | `0x10d11684 VCMPV S32 ts=27603 dur=53` | `0x10d11570 VCMPV S32 ts=27582 dur=50` | Identical Dtype/cost; **cast version emits this earlier in the schedule** |
+
+### 4.6.5 What the mapping reveals
+
+1. **The `<=` and `==` for position values lower differently.** Both versions emit `<=` as `VCMPV F16` but `==` as `VCMPV S32`. The lowering decides per-operator, not per-data-type.
+
+2. **`.to(tl.int32)` doesn't override the F16 position compare.** Adding `.to(tl.int32)` in source still lowers `q_off <= k_off` to `VCMPV F16` — the operator-driven choice wins over the source type annotation.
+
+3. **The `k_attn == 0` compare DOES widen with the cast.** F16 (bool path) → F32 (cast path). When the compare-vector-with-scalar path encounters i32-typed inputs, it uses the wider float type instead of the compact F16.
+
+4. **Cast version explicitly materializes int values per compare.** Each of B, D in cast path is followed by a `VSEL F32` (ts 27581, 27689) — that's the `.to(tl.int32)` materializing the int value (1 or 0) for every lane, before feeding into the bitwise AND/OR. Bool path skips this — it keeps results as i1/B16 throughout.
+
+5. **The combine-op order differs slightly.** Bool path runs the combines tightly together (VOR ts=27412, VAND ts=27429, then D-compare, then final VOR ts=27656). Cast path interleaves more `VSEL` between VCMPVs and the combiner (more pipe bookkeeping for the wider data path).
+
+6. **Output formatting differs sharply.** Bool path uses 8 `VNCHWCONV` (4×4 = 8 calls totaling 828 cyc) for output layout conversion. Cast path uses 1 `VCONV` F16→S8R (28 cyc). That's the main vector-pipe saving from the cast: ~800 fewer cycles in output formatting alone.
+
+### 4.6.6 Honest caveats on the mapping
+
+What I can verify directly from the trace:
+- ✓ All Dtypes (literal `Dtype:F16`, `Dtype:S32` in operand string)
+- ✓ All PCs and ts/dur values
+- ✓ The 4 source compares correspond to exactly 4 `VCMPV`/`VCMPVS` per version (5th VCMPV in each is an extract-bool helper)
+- ✓ Operand register flow (which `XD` becomes a later op's `XM`)
+
+What I'm guessing:
+- ✗ Which specific VCMPV is "A" vs "D" (both are position compares; I disambiguated by Dtype: A=`<=` always F16, D=`==` always S32, plus operand-flow analysis)
+- ✗ Which `VOR`/`VAND` corresponds to which combine in `(A & (B|C)) | D`
+- ✗ The role of the 5th VCMPV in each version
+
+The way to get strict confirmation: re-run with `msopgen sim -reloc <kernel.npubin>`. That triggers `llvm-objdump --save-aicore-bins` which is decoder-gated, so we can't actually do this on shipped CANN-8.5.0. The mapping above is the closest you get without an internal Huawei build.
+
 ## 5. What this tells you
 
 ### 5.1 The bool path packs efficiently
