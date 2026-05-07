@@ -389,19 +389,103 @@ A5 PTO:   VLDI V4, [S68], #1, #3, #1          ◄── broadcast folded into lo
 
 ### 6.3 Combined effect on the bool kernel
 
-The two collapses together remove substantial cost from the bool
-path:
+The collapses together remove substantial cost from the bool path,
+but not all MLIR `vbrc` ops disappear — some get **kept-but-streamed**
+through their tile rather than eliminated. The decision depends on
+how many compute consumers reuse the broadcast (see §6.4 for the
+full cost analysis).
 
-| MLIR ops eliminated by A5 codegen | Replacement on hardware |
-|-----------------------------------|-------------------------|
-| `vbrc q_attn 32x1 → 32x32 i32`    | `VLDI` brc_b32 mode     |
-| `vbrc k_attn 1x32 → 32x32 i32`    | constant full-VL load (V5 unchanged across iters) |
-| `vbrc q_offset 32x1 → 32x32 i32`  | `VLDI` brc_b32 (similar) — V3 streams pre-broadcast tile |
-| `vbrc k_offset 1x32 → 32x32 i32`  | constant full-VL load (V2)  |
-| `vbrc C-f16 1x32 → 32x32 f16`     | precomputed once, reloaded by `VLDUI` + `MOVVP` |
-| `vcmp f16,0 → ¬C` (Phase 10)      | `VCMP` writes P-reg directly — no f16 detour |
-| `vnot i1 → C` (Phase 10)          | `PXOR P3, P3, P2(=ALLF)` — no-op slot |
-| `vcmp 1024xi1 → ...` (full-tile)  | 32× per-row `VCMP` inside VLOOP |
+| MLIR op                            | A5 codegen choice    | Hardware replacement |
+|------------------------------------|----------------------|----------------------|
+| `vbrc q_attn 32x1 → 32x32 i32`     | **eliminated**       | `VLDI` brc_b32 mode (4 B/iter scalar stream); tile never materialized |
+| `vbrc k_attn 1x32 → 32x32 i32`     | **eliminated**       | constant full-VL load (V5 unchanged across iters) |
+| `vbrc q_offset 32x1 → 32x32 i32`   | **kept, streamed**   | tile built pre-loop; V3 reads one tile row per iter via full-VL load |
+| `vbrc k_offset 1x32 → 32x32 i32`   | **kept, constant**   | tile reduced to single row in V2 (held constant via `#p=0`) |
+| `vbrc C-f16 1x32 → 32x32 f16`      | **eliminated**       | C precomputed once, reloaded by `VLDUI` + `MOVVP` |
+| `vcmp f16,0 → ¬C` (Phase 10)       | **eliminated**       | `VCMP` writes P-reg directly — no f16 detour |
+| `vnot i1 → C` (Phase 10)           | **eliminated**       | `PXOR P3, P3, P2(=ALLF)` — no-op slot |
+| `vcmp 1024xi1 → …` (full-tile)     | **rewritten**        | 32× per-row `VCMP` inside VLOOP |
+
+### 6.4 Why q_offset uses full-VL while q_attn uses brc_b32
+
+The asymmetry between V3 (q_offset, full-VL stream) and V4 (q_attn,
+brc_b32 stream) is deliberate and tracks a single distinguishing
+fact: **q_offset has two compute consumers per iteration; q_attn has
+one.**
+
+#### Same Triton/MLIR shape, different number of consumers
+
+```python
+# q_attn:  one consumer
+B = (q_attn_arg[:, None] == k_attn_arg[None, :])
+
+# q_offset: TWO consumers using the same broadcast
+A = (q_offset[:, None] <=  k_offset[None,  :])
+F = (q_offset[:, None] == k_offset[None,  :])
+```
+
+In the assembly, the reuse is direct — `V3` and `V2` feed both compares:
+
+```asm
+VCMP.LE.s32 P5, V3, V2, P1   ; A_row uses V3 (q_offset row) and V2 (k_offset row)
+…
+VCMP.EQ.s32 P4, V3, V2, P1   ; F_row REUSES the same V3 and V2     ◄── two consumers
+```
+
+#### Cost trade-off
+
+For a **1-consumer** broadcast (q_attn):
+
+| Strategy        | Per-iter load | Per-iter compute | Pre-loop UB cost |
+|-----------------|--------------:|-----------------:|-----------------:|
+| `brc_b32`       | 4 B           | 1 `VCMP`         | 0                |
+| full-VL streaming through tile | 256 B | 1 `VCMP`     | 4096 B           |
+
+`brc_b32` wins outright — same compute, much smaller UB footprint.
+
+For a **2-consumer** broadcast (q_offset):
+
+| Strategy        | Per-iter load | Per-iter compute | Pre-loop UB cost |
+|-----------------|--------------:|-----------------:|-----------------:|
+| `brc_b32`       | 4 B           | 2 `VCMP`s        | 0                |
+| full-VL streaming through tile | 256 B | 2 `VCMP`s    | 4096 B           |
+
+Per-iter compute is identical. The full-VL path's only "loss" is the
+4096 B UB tile, but **that tile is going to exist anyway** — the MLIR
+allocates it in Phase 1 to feed the i32→i64 widening that powers the
+scalar causal compare (Phase 6/8). Once the tile is going to be
+built, streaming through it is essentially free, and avoids needing
+to keep V4-style scalar live across two compares.
+
+#### The general rule
+
+> **brc_b32 elimination beats tile-materialization when the broadcast
+> has one consumer; from two consumers up, streaming through a
+> pre-built tile breaks even or wins** — especially if the tile is
+> already needed for a different lowering path (here: i32→i64 widen).
+
+This is the same rematerialize-vs-spill trade-off any vector
+compiler makes, extended one layer deeper into
+"broadcast-at-load-time vs broadcast-into-buffer."
+
+#### Mirror case for V2 (k_offset)
+
+V2 is also full-VL with `#p=0` (constant across iters). The reasoning
+is different though: k_offset varies *across lanes* within one vreg
+(it's the row direction, not the column being broadcast), so
+`brc_b32` does not apply structurally — there is no scalar to
+broadcast. Full-VL is the only viable option, and `#p=0` keeps the
+same 32-element row live throughout the loop (k_offset is
+row-invariant by construction).
+
+#### Summary table
+
+| Operand   | Triton form              | Lane variation | Per-iter consumers | A5 strategy             |
+|-----------|--------------------------|----------------|-------------------:|-------------------------|
+| q_attn    | `q_attn_arg[:, None]`    | constant       | 1                  | `brc_b32`, tile elim.   |
+| k_attn    | `k_attn_arg[None, :]`    | varies         | 1                  | full-VL, `#p=0`         |
+| q_offset  | `q_offset[:, None]`      | constant       | **2**              | full-VL stream, tile kept |
+| k_offset  | `k_offset[None, :]`      | varies         | **2**              | full-VL, `#p=0`         |
 
 Net: the bool MLIR's 4 broadcast ops + f16 detour ladder shrink to
 load-mode flags + a single no-op PXOR. UB footprint drops by roughly
