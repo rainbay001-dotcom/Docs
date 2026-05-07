@@ -143,27 +143,33 @@ VLOOPV2_V310 S3, #35, #1, #1        ; iter count = S3 (runtime, set above)
 ;══════════════════════════════════════════════════════════════════════════════
 ; Loads (per-iter unless flagged constant)
 ;══════════════════════════════════════════════════════════════════════════════
-VLDI V2, [S6],  #0,  #0, #0         ; dist=normal, full-VL load (256 B = 64 i32)
+VLDI V2, [S6],  #0,  #0, #0         ; dist=normal, full-VL load (256 B = 64 i32 lanes)
                                     ; addr = S6 + 0·32 = S6
                                     ; p=0  → S6 unchanged (constant load each iter)
-                                    ; ROLE: k_offset[None, :]  (32 elems padded to 64-lane vreg)
-                                    ;       — row-invariant across iterations
+                                    ; ROLE: k_offset[None, :] data — row-invariant across iters
+                                    ;       (Algorithmic row width is 32 elems; vreg holds 64
+                                    ;        lanes. Whether the upper 32 lanes are padding,
+                                    ;        a packed second row, or a replicated copy is not
+                                    ;        determinable from this snippet — see §11.)
 
 VLDI V3, [S69], #16, #0, #1         ; dist=normal, full-VL load
                                     ; addr = S69
                                     ; p=1  → S69 ← S69 + 16·32 = S69 + 512 B (post-incr)
-                                    ; ROLE: q_offset[:, None] pre-vbrc tile, streaming row(s)
-                                    ;       per iter; row = q_offset[i] replicated across 32 lanes
+                                    ; ROLE: q_offset[:, None] pre-vbrc tile, streaming per iter;
+                                    ;       row r contains q_offset[r] replicated across the
+                                    ;       row's 32 elements (upper-lane content: see §11)
 
 VLDI V4, [S68], #1,  #3, #1         ; dist=brc_b32 (5h03): 1 i32 broadcast → all 64 lanes
                                     ; addr = S68
                                     ; p=1  → S68 ← S68 + 1·4 = S68 + 4 B (per-iter scalar stream)
-                                    ; ROLE: q_attn[i] — one new scalar per iter, replicated full-VL
+                                    ; ROLE: q_attn[i] — one new scalar per iter, replicated to
+                                    ;       all 64 lanes (brc_b32 makes upper-lane question moot)
 
 VLDI V5, [S10], #0,  #0, #0         ; dist=normal, full-VL load
                                     ; addr = S10, p=0 (constant load)
-                                    ; ROLE: k_attn[None, :] (32 elems padded to 64-lane vreg)
-                                    ;       — row-invariant
+                                    ; ROLE: k_attn[None, :] data — row-invariant
+                                    ;       (Algorithmic row width 32; upper-lane content
+                                    ;        unverified, see §11.)
 
 VLDAS ULD0, [S12]                   ; UnalignReg ULD0 ← addr S12 (sets up unaligned-load context)
 SMOV.b32 S70, S12                   ; S70 ← S12 (offset register snapshot)
@@ -901,3 +907,74 @@ lives at:
 Disassembly tooling: TBD (the disassembler used to produce the listing
 above was provided externally by the architect; the local tooling chain
 needs documenting).
+
+## 11. Layout open question — what's in the upper 32 lanes?
+
+The annotated assembly assumes V2 / V3 / V5 use only the lower 32
+lanes of their 64-lane vreg, with the upper 32 either padded, packed
+with a second row, or replicated. None of these is verified.
+
+### What's pinned down
+
+| Fact | Value | Source |
+|---|---|---|
+| vreg width | 256 B = 64 i32 lanes | PTO ISA `execution-agents.md` |
+| `VLDI #dist=#0` load width | 256 B = 64 i32 (always full VL) | architect spec |
+| MLIR tile shape | 32 × 32 i32 | `captures_hivmc_input_a5_bool.mlir` |
+| Operand source rows (q/k_offset, q/k_attn) | 32 i32 each | MLIR `memref<32xi32, …>` |
+| Per-iter mask `P1` | `VL64` = all 64 lanes active | `PSET.b32 P1, #8` |
+
+Algorithmic row width = 32. Hardware vreg width = 64. There's a
+gap of 32 lanes that the snippet alone can't account for.
+
+### The three plausible layouts
+
+```
+A. PADDED — 32 valid + 32 unused
+   V?: [d0][d1]…[d31] [pad][pad]…[pad]
+   ↳ S3 = 32 iters (one row per iter). Compute happens on all 64 lanes
+     but only the lower 32 contribute to a stored result.
+
+B. PACKED — two adjacent rows
+   V?: [d0][d1]…[d31] [d0'][d1']…[d31']     ← row r in low half, row r+1 in high half
+   ↳ S3 = 16 iters (two rows per iter). All 64 lanes meaningful.
+     V3's +512 B post-incr (= 2 × 256 B vreg loads) is at least
+     consistent with this (each iter advances "two rows worth").
+
+C. REPLICATED — 32 elems repeated
+   V?: [d0][d1]…[d31] [d0][d1]…[d31]
+   ↳ S3 = 32 iters. Upper 32 lanes redundantly re-compute the same
+     compare result as the lower 32. Wasteful but harmless.
+```
+
+The annotated `ROLE:` lines in §3 used to commit to layout A
+("32 elems padded to 64-lane vreg"). They have been softened to
+"32 elems wide algorithmically; upper-lane content unverified."
+
+### Resolution paths — any one would settle it
+
+1. **Pre-loop disasm.** The instructions that build `[S6]` and
+   `[S69]` and `[S10]` reveal the source layout. If the source is
+   128 B of valid data followed by zero/garbage → layout A. If it's
+   a 32 × 32 tile loaded contiguously → layout B (the +512 B stride
+   matches a 256 B "row pair" layout). If 32 elems are explicitly
+   replicated → layout C.
+
+2. **Runtime value of S3.** The scalar `MOV` (or `LI`) before
+   `VLOOPV2_V310` writes S3. S3 = 32 → layout A or C. S3 = 16 →
+   layout B.
+
+3. **Full 35-instruction body.** The unshown 15 instructions —
+   particularly any second VLDI / VSTI not in our snippet — likely
+   include the activity that handles "the other half" of the vreg,
+   confirming the layout.
+
+4. **VSTI byte stride field.** `VSTI V2, [S67], #16, #2, P1, #1` has
+   a `#2` field whose meaning is still Tier-C (see §9). If `#2`
+   encodes "store 2 vregs worth per iter," that's evidence for
+   layout B; if "store 256 B per iter, masked to lower half," that's
+   evidence for layout A.
+
+Want one of these checks run? Item 2 is cheapest — start the VM,
+re-disassemble the same `.o`, and grep for the scalar move targeting
+S3 immediately before the VLOOPV2.
