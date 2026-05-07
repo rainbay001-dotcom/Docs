@@ -996,11 +996,164 @@ strategies and only the constant `K=16` differs.)
 - §6.7 Optimization 3 (q_offset brc_b32): **−16 ops + −4096 B UB + −8 KB UB read bandwidth**
 - (q_attn / k_attn / k_offset: already optimal)
 
-Net per kernel invocation: roughly **−80 ops, −4 KB of UB tile
-storage, −8 KB of UB read bandwidth.** All three are missed by the
-same hivmc-a5 limitation: the lowering follows MLIR storage typing
-rather than promoting loop-invariant or fully-broadcastable values
-to register-resident forms.
+Net per kernel invocation from these three alone: roughly **−80 ops,
+−4 KB of UB tile storage, −8 KB of UB read bandwidth.** All three
+are missed by the same hivmc-a5 limitation: the lowering follows
+MLIR storage typing rather than promoting loop-invariant or
+fully-broadcastable values to register-resident forms.
+
+§6.8 below lists more.
+
+### 6.8 More missed optimizations — loop-invariant code motion and ISA-feature fusions
+
+Re-examining the body, several additional instructions execute every
+iter but produce identical results — classic loop-invariants that
+hivmc-a5 isn't hoisting. The same mechanism that holds P1 = `VL64`
+and P2 = `ALLF` across all 32 iters (registers preserve their
+contents across VLOOP boundaries — see "why we can hold C in a
+P-reg" earlier) is available for vector registers too.
+
+#### What is being needlessly re-executed each iter
+
+```asm
+VLOOPV2_V310 S3, #35, #1, #1       ; ── loop start ──
+VLDI V2, [S6],  #0,  #0, #0        ; ★ #p=0, S6 fixed; reloads SAME 256 B every iter
+VLDI V3, [S69], #16, #0, #1        ;   (per-iter, real)
+VLDI V4, [S68], #1,  #3, #1        ;   (per-iter, real)
+VLDI V5, [S10], #0,  #0, #0        ; ★ #p=0, S10 fixed; reloads SAME 256 B every iter
+VLDAS ULD0, [S12]                  ; ★ ULD0 ← S12 every iter (fixed)
+SMOV.b32 S70, S12                  ; ★ S70 ← S12 every iter (fixed)
+VADDS.s32 V2, V2, S8, P1           ; ★ V2 += S8 every iter; produces SAME V2 every time
+…
+```
+
+Five instruction-classes (★) are loop-invariant. None of them needs
+to live in the body.
+
+#### Optimization 4 — Hoist V2 setup (VLDI + VADDS) out of the loop
+
+```asm
+;  pre-loop:
+VLDI V2, [S6], #0, #0, #0
+VADDS.s32 V2, V2, S8, P1   ; computed once
+
+;  body:
+;  V2 just sits there, used by VCMP.LE and VCMP.EQ
+```
+
+| Cost           | Current             | Optimized |
+|---------------:|--------------------:|----------:|
+| Pre-loop ops   | 0                   | 2         |
+| Per-iter ops   | 2 (VLDI + VADDS)    | 0         |
+| Total (T=32)   | **64**              | **2**     |
+
+**Saving: 62 ops** + 32 × 256 B = **8 KB of UB read bandwidth**.
+
+#### Optimization 5 — Hoist V5 (k_attn row) out of the loop
+
+V5 is loaded with `#p=0` and never written inside the body. Same
+hoisting applies.
+
+| Cost           | Current  | Optimized |
+|---------------:|---------:|----------:|
+| Pre-loop ops   | 0        | 1 (VLDI)  |
+| Per-iter ops   | 1 (VLDI) | 0         |
+| Total (T=32)   | **32**   | **1**     |
+
+**Saving: 31 ops** + **8 KB UB read bandwidth**.
+
+#### Optimization 6 — Hoist `VLDAS` / `SMOV` / `V0` / `V1` out of the loop
+
+The `VLDAS ULD0, [S12]` and `SMOV.b32 S70, S12` both execute every
+iter from a fixed source — pure loop-invariant. The two SMOVs in
+the body (`S70 ← S12`, `S70 ← S18`) are also loop-invariant, since
+S12 / S18 don't change between iters.
+
+If §6.6 Optimization 2 fires (C in P-reg), the entire VLDAS + SMOV
++ VLDUI + MOVVP chain disappears anyway. Independently:
+
+- VLDAS hoisted: −1 op/iter = **−32 ops**
+- The two SMOVs hoisted (or eliminated): **−64 ops**
+
+V0 (all-0 i32 tile) and V1 (all-1 i32 tile) feed `VSEL.b32 V2, V1, V0, P3`.
+They are pure constants and almost certainly currently loaded
+inside the body (same pattern as V2 / V5). Hoisting them out:
+
+- V0 + V1 loads hoisted: 2 VLDIs/iter × T = **−64 ops**
+
+(The V0/V1 part is Tier-B because we don't see their loads in the
+20-line snippet, but the structural assumption is strong.)
+
+#### Optimization 7 — Fuse `VCMP.LE` and `VCMP.EQ` on `(V3, V2)` (Tier-C, ISA-dependent)
+
+The body computes both A = (V3 ≤ V2) and F = (V3 == V2) on the same
+operand pair, with the same seed mask P1. If PTO has any "compare
+and emit two predicates" form (e.g. emitting LE and EQ together,
+or "VCMP_RANGE"), this saves 1 op/iter = **32 total**. This depends
+on whether the PTO ISA includes such a fused-compare instruction.
+
+A quick check of `~/Documents/Repo/pto-isa/docs/isa/vector/ops/compare-select/`
+would settle whether the fusion exists.
+
+#### Optimization 8 — Direct i1 → i8 narrowing instead of i1 → i32 → i8 (Tier-C)
+
+Current path: `VSEL.b32 V2, V1, V0, P3` produces 1024 i32 (1 or 0),
+then a later `VCAST.s8` (not in the snippet) narrows to i8 for the
+result tile. If a `VSEL.b8` variant exists — emitting i8 directly
+from a predicate plus two i8 sources — the i32 step is skipped.
+
+- Saving: 1 op/iter = **32 ops**, plus a vreg slot freed from
+  holding the i32 intermediate, plus possibly the temp_buffer
+  the MLIR's narrowing vcast required.
+
+Depends on whether `VSEL.b8` (or equivalent) is in the ISA.
+
+#### Optimization 9 — Pack two rows per iter (structural, Tier-C)
+
+The "Layout B" hypothesis from §11. If the kernel reshapes the
+iteration so each iter produces **two output rows** (16 iters × 64
+vreg lanes, instead of 32 iters × 32 useful lanes), then:
+
+- VLOOP overhead amortizes over twice as many useful results
+- All loop-invariant work (the hoistable items above) pays its
+  fixed cost over half as many iters
+- Bandwidth utilization on the V3/V4 streams improves
+
+Approximate halving of per-output-row loop overhead. Requires the
+input layout to actually pack two rows per vreg-load worth of data,
+and the VSTI to write 64 lanes covering two output rows. Whether
+this is structurally possible depends on the launch grid and the
+upstream tile layout — which the architect or hivmc-a5 design intent
+would determine.
+
+#### Aggregate of all eight missed optimizations
+
+| #   | Optimization                                  | Savings (ops) | Savings (UB) | Tier |
+|----:|-----------------------------------------------|--------------:|-------------:|:---:|
+| 1   | §6.6 inline-recompute C                       | −34           | −32 B + 1 KB BW | A |
+| **2** | **§6.6 hold C in P-reg**                    | **−65**       | **−32 B**    | **A** |
+| 3   | §6.7 brc_b32 stream q_offset                  | −16           | −4096 B + 8 KB BW | A |
+| 4   | §6.8 hoist V2 (VLDI + VADDS)                  | −62           | −8 KB BW     | A |
+| 5   | §6.8 hoist V5 (VLDI)                          | −31           | −8 KB BW     | A |
+| 6   | §6.8 hoist VLDAS/SMOV/V0/V1                   | ~−160         | —            | B |
+| 7   | §6.8 fuse `VCMP.LE` + `VCMP.EQ`               | −32           | —            | C |
+| 8   | §6.8 direct i1 → i8 via `VSEL.b8`             | −32           | —            | C |
+| 9   | §6.8 pack two output rows per iter            | ~50% loop overhead | —       | C |
+
+**Tier-A-only total** (Opts 2, 3, 4, 5): −174 ops, ~−4 KB UB tile, ~−16 KB UB bandwidth.
+
+Adding Tier-B (Opt 6): roughly −330 ops total.
+
+Adding all Tier-C optimizations on top, if the ISA supports them:
+another ~−100 ops plus halving of remaining loop overhead.
+
+The pattern across all of these: hivmc-a5 emits a faithful
+instruction-by-instruction lowering of the MLIR but doesn't apply
+classical compiler-level loop-invariant code motion or aggressive
+register-resident promotion. A pass library that knew about A5
+register lifetimes across VLOOPs (the same way it would for any
+other loop in any other architecture) could reclaim the bulk of
+these missed cycles without needing any new ISA features.
 
 ## 7. Per-iter hardware-op tally
 
