@@ -310,15 +310,28 @@ The A5 side was originally based on user observation that A5 emits `PAND` on pre
 
 So the user's `PAND` observation was correct: the official mnemonic is `pto.pand` (with the `pto.` namespace prefix). The corresponding rich mask-register ISA exists. This is the architectural difference from 910B1's bool-packed-in-vector-register approach.
 
-**Still uncertain — cycle-accurate A5 simulator availability:**
+**Empirically verified — cycle-accurate A5 simulator on CANN 8.5.0 (the version on 218):**
+
+| Question | Result | How verified |
+|---|---|---|
+| Does CANN 8.5.0's TBE compiler accept `Ascend910_9572` (A5)? | **Yes** — `te.platform.te_set_version("Ascend910_9572", core_type="AiCore")` returns success | Tested directly on 218 |
+| Does CANN 8.5.0's bundled camodel ship a 9572 simulator directory? | **No** — `simulator/` has Ascend910A/B/B1/B2/B3/B4/B4-1 + 9362/9372/9381/9382/9391/9392, but **no 9572 / 950 / C310 directory** | `ls /usr/local/Ascend/cann-8.5.0/aarch64-linux/simulator/ \| grep 9572` returns empty |
+| Net for CANN 8.5.0 | **Can compile for A5; cannot simulate A5.** Trying `simulator_mode="ca"` with `soc_version="Ascend910_9572"` would fall back to 910B1 the same way `Ascend910_9362` does (per §6.5). | Implied |
+
+**Newer CANN (≥ 9.0):**
 
 | Question | What I found |
 |---|---|
-| Does CANN 9.0's bundled camodel support Ascend A5 / 9572? | Not directly verified. Our 218 box has CANN 8.5.0; haven't tested CANN 9.0. The §6.5 finding (camodel internally locks to 910B1) may or may not still apply in 9.0. |
-| Does PTO-ISA project ship a cycle-accurate A5 simulator? | No. The repo includes a CPU functional simulator and a `CostModel` for performance estimation (Q2 2026 target per the roadmap). For real A5 perf, run on Atlas 350 hardware with msprof. |
-| Was A5 added to public CANN tooling? | Per PTO-ISA NEWS: A5 support added 2026-03-30. A5 backend is still WIP (partial implementation; A2/A3 share full backends per the deepwiki summary). |
+| Does CANN 9.0+ ship an A5 / 9572 / Atlas 350 simulator? | **Not confirmed publicly.** Web search for CANN 9.0 release notes and Atlas 350 simulator support didn't surface direct evidence. The Atlas 350 / Ascend 950PR was announced 2026-03-20; CANN 9.0.0-beta2 docs reference A5 architecture but I haven't verified whether the bundled simulator dir exists. Worth checking when you upgrade CANN on 218. |
+| Where is publicly-tracked A5 perf modeling? | **PTO-ISA repo's CostModel** (Q2 2026 target per its roadmap). Not yet shipping. The repo's CPU simulator covers functional correctness, not cycles. |
+| For real A5 perf today | **Atlas 350 hardware + msprof.** That's the only path right now. |
 
-**Bottom line**: A5 has the predicate-register hardware (MaskReg) and the predicate-instruction set (`pto.pand`/`pto.por`/...) on paper and in the PTO-ISA reference. We can't currently run a cycle-accurate A5 simulation on shipped CANN — for that you'd need real Atlas 350 hardware + msprof. The hypothetical lowering in §4.7.4 uses the actual `pto.p*` mnemonics now that they're verified.
+Sources:
+- [PTO ISA Manual — Predicate Generation And Algebra](https://pto-isa.github.io/) — for the verified `pto.pand` / `pto.por` / `pto.pset_b{8,16,32}` / `pto.psel` mnemonics
+- [github.com/cannmirror/pto-isa](https://github.com/cannmirror/pto-isa) — A5 added 2026-03-30; backend WIP
+- Local arch reference at `~/Documents/docs/ascend_910c_microarchitecture.md` §17c/§20 — MaskReg width = VL/8 on A5
+
+**Bottom line**: A5 has predicate-register hardware (MaskReg) and a verified predicate-instruction set (`pto.pand`/`pto.por`/etc.). The PAND lowering you observed elsewhere is the official `pto.pand` from PTO-ISA. **In CANN 8.5.0, a cycle-accurate A5 simulation isn't available** — the simulator dir for 9572 is missing even though the compiler accepts the target. To verify the hypothetical A5 lowering in §4.7.4 against actual A5-compiled output, you'd need either: (a) check whether CANN 9.0+ bundles a 9572 sim, or (b) run on real Atlas 350 hardware with msprof.
 
 ### 4.7.1 Two architectural styles for bool/mask
 
@@ -518,4 +531,4 @@ Local:
 | **Camodel μarch caveat** | `te_set_version("Ascend910_9362")` doesn't change the simulator behavior — camodel locks to 910B1 internally. All cycle numbers are 910B1-model. Real-silicon 910_9362 numbers need msprof. See §6.5. |
 | **910B1 has no dedicated mask register** | Bool data is packed in regular vector registers; logic ops use `Dtype:B16` semantics; `MOVEMASK`/`MOVEVA`/`VNCHWCONV` bridge layout mismatches. The cast eliminates these by widening to native lane width. See §4.7. *Directly evidenced by the trace.* |
 | **A5 has dedicated MaskReg + predicate ISA** | Verified two ways: local arch ref shows `MaskReg` width `VL/8`; PTO-ISA reference (pto-isa.github.io) documents `pto.pand`/`pto.por`/`pto.pxor`/`pto.pnot` plus `pto.pset_b{8,16,32}` and `pto.pge_b{8,16,32}` for compare-to-predicate. User's `PAND` observation was correct (full mnemonic is `pto.pand`). See §4.7.0. |
-| **No public cycle-accurate A5 simulator yet** | PTO-ISA repo ships CPU-functional sim + CostModel (Q2 2026 target). CANN 8.5.0's bundled camodel locks to 910B1; CANN 9.0 not tested. For real A5 perf: Atlas 350 hardware + msprof. |
+| **No public cycle-accurate A5 simulator yet** | CANN 8.5.0 accepts `Ascend910_9572` for compilation but ships **no 9572 simulator directory** — verified empirically on 218. CANN 9.0+ availability of a 9572 sim not confirmed via web search. PTO-ISA repo: CostModel Q2 2026 target. For real A5 perf today: Atlas 350 hardware + msprof. |
