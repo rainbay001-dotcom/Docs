@@ -398,6 +398,73 @@ Combined: 73 shuffle/conversion instructions, ~1.3K cycles, **all of which exist
 
 The cast version sidesteps these by widening every bool to a full i32 lane. Once each "bool" lives in its own 32-bit lane, the AND/OR/SEL ops are regular vector arithmetic — no packing, no shuffling. **The cast is essentially "fake A5"** — it emulates the predicate-register-style flat layout by paying memory width instead of using HW support.
 
+### 4.7.3.5 Empirical verification: A5 cycle-accurate trace (2026-05-07)
+
+After the original §4.7 was written based on PTO-ISA documentation, I verified everything end-to-end on actual A5-compiled+simulated output.
+
+**Setup:**
+- Spun up GCP `e2-standard-16` x86 VM, installed CANN 9.0.0 (the latest publicly-available release; the simulator coverage is documented in [`cann_900_simulator_coverage.md`](cann_900_simulator_coverage.md)).
+- Recompiled `mask_kernel.ttadapter` (the bool variant) for `Ascend950DT_9572` via `bishengir-compile`.
+- Wrote `release_config.json` for `Ascend950PR_9572` simulator dir (CANN 9.0.0 ships the libs but skips this config file — bug; trivially worked around).
+- Patched `msopst/runtime/__init__.py` for a circular-import bug in CANN 9.0.0.
+- Raised `ulimit -n` to 65536 (A5 sim writes ~1100 dump files vs 910B1's ~16).
+- Ran `AscendOpKernelRunner(simulator_mode="ca", soc_version="Ascend950PR_9572")`.
+- Parsed with `msopgen sim` and inspected the trace JSON.
+
+**Headline numbers — A5 vs 910B1, same kernel:**
+
+| Metric | 910B1 (CANN 8.5.0) | A5/Ascend950PR_9572 (CANN 9.0.0) | Δ |
+|---|---|---|---|
+| `.text` size | 2,496 B (~624 instr) | **616 B (~154 instr)** | **−75%** |
+| Trace events | 9,459 | **452** | **−95%** |
+| Unique PCs executed | 624 | **109** | **−83%** |
+| Cycle span | 27,645 | **1,431** | **−95% (~19× faster)** |
+| Camodel `Total tick` | 28,573 | **2,240** | −92% |
+
+**A5 trace mnemonics — predicates verified empirically:**
+
+```
+RV_VLDI         : 66    Vector load immediate
+RV_VCMP_EQ      : 65    Vector compare equal → predicate
+RV_POR          : 64    Predicate-OR
+RV_VCMP_LE      : 32    Vector compare less-equal → predicate
+RV_PAND         : 32    Predicate-AND
+RV_VSEL         : 32    Vector select on predicate
+RV_VCVT_I2I     : 32    Vector convert int-to-int
+RV_VSTI         : 32    Vector store immediate
+RV_PSET         : 3     Predicate-set (compare-to-predicate)
+RV_VDUPS        : 2     Vector duplicate scalar (broadcast)
+RV_VLOOP        : 1     Vector loop primitive (replaces 1024-iter scalar loop)
+RV_PXOR         : 1     Predicate-XOR
+PUSH_PB         : 1     Push to predicate buffer
+… plus standard scalar (MOV_XD_IMM, MOVK, ADD, ADD_IMM, SHL, …)
+```
+
+**Confirmation of §4.7's predictions:**
+
+| Predicted | Observed | ✓/✗ |
+|---|---|---|
+| Predicate-set ops | `RV_PSET` 3× (matches `pto.pset_b32` shape) | ✓ |
+| Predicate-AND | `RV_PAND` 32× (the user's original PAND observation) | ✓ |
+| Predicate-OR | `RV_POR` 64× | ✓ |
+| Predicate-XOR | `RV_PXOR` 1× | ✓ |
+| Predicate-driven vector select | `RV_VSEL` 32× | ✓ |
+| `MOVEMASK`/`MOVEVA`/`VNCHWCONV` eliminated | Zero instances of any of those | ✓ |
+| Scalar unpack-store loop eliminated | Replaced by 32× `RV_VSTI` (vector stores) and 1× `RV_VLOOP` instead of the 910B1's 1024 `ENDLOOP`+`CMPN`+`ST_XD_XN_IMM` triplet | ✓ |
+| `Dtype:B16` packed-bool semantics gone | Compares now write directly to predicates with `Dtype:B32` | ✓ |
+
+**New A5 pipelines visible in the trace** (not present on 910B1):
+- `RVECEX` — Real Vector Execute (263 ops, the main vector compute pipe)
+- `RVECLD` — Real Vector Load (66 ops)
+- `RVECST` — Real Vector Store (34 ops)
+- `RVECSU` — Real Vector Special Unit (4 ops)
+- `RVECLP` — Real Vector Loop control (1 op)
+- `PUSHQ` — push-queue (predicate-buffer pipe)
+
+The "RVEC" prefix corresponds to A5's **Real Vector / SIMT vector** path — the new architecture documented in §17c/§20 of the local arch reference.
+
+**Bottom line: 910B1's bool-packing strategy paid for itself on 910B1 (same total cycles as the i32 cast version), but on A5 with native predicate hardware, the bool path runs 19× faster than the same kernel on 910B1 — because none of the packing/unpacking work needs to happen at all.** This validates the architectural prediction: A5 is strictly better than 910B1 for bool-heavy kernels.
+
 ### 4.7.4 Hypothetical A5 lowering (using the verified PTO-ISA `pto.p*` mnemonics)
 
 Mapping `mask_fn` (`(A & (B | C)) | D`) to A5's predicate ISA (per pto-isa.github.io):
@@ -563,3 +630,4 @@ Local:
 | **910B1 has no dedicated mask register** | Bool data is packed in regular vector registers; logic ops use `Dtype:B16` semantics; `MOVEMASK`/`MOVEVA`/`VNCHWCONV` bridge layout mismatches. The cast eliminates these by widening to native lane width. See §4.7. *Directly evidenced by the trace.* |
 | **A5 has dedicated MaskReg + predicate ISA** | Verified two ways: local arch ref shows `MaskReg` width `VL/8`; PTO-ISA reference (pto-isa.github.io) documents `pto.pand`/`pto.por`/`pto.pxor`/`pto.pnot` plus `pto.pset_b{8,16,32}` and `pto.pge_b{8,16,32}` for compare-to-predicate. User's `PAND` observation was correct (full mnemonic is `pto.pand`). See §4.7.0. |
 | **CANN 8.5.0 → no A5 sim; CANN 9.0.0 → full A5 sim** | Verified empirically: CANN 8.5.0 (on 218) accepts `Ascend910_9572` for compilation but has no simulator dir. **CANN 9.0.0 ships 30+ `Ascend950PR_*` simulator dirs** including `Ascend950PR_9572` with the full 16-file lib stack. Toolkit is downloadable from OBS without Huawei login (~1.16 GB). |
+| **A5 trace verifies §4.7 predictions empirically** | Compiled `mask_kernel` for `Ascend950DT_9572` and ran under `Ascend950PR_9572` simulator on CANN 9.0.0. Trace shows `RV_PAND` (32×), `RV_POR` (64×), `RV_PXOR` (1×), `RV_PSET` (3×), `RV_VSEL` (32×), `RV_VLOOP` (1×) — all the predicted predicate ops, no `MOVEMASK`/`MOVEVA`/`VNCHWCONV`. **A5 runs the same kernel at 1,431 cycles vs 27,645 on 910B1 — ~19× faster.** See §4.7.3.5. |

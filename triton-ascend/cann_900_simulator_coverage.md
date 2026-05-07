@@ -122,18 +122,47 @@ Probed via `curl -I` on 2026-05-07. `nnal` is needed for vllm-ascend / inference
 
 Using `--provisioning-model=SPOT` cuts this to ~$0.02. Stopping the VM after the check (vs deleting) preserves the install for future use at ~$10/mo storage cost.
 
-## What's still pending
+## End-to-end verification (2026-05-07)
 
-Empirically confirmed (2026-05-07):
-- ✅ CANN 9.0.0 toolkit installs cleanly on x86_64 Ubuntu 22.04
-- ✅ 81 simulator directories present, 30+ are A5/Ascend950PR variants
-- ✅ `Ascend950PR_9572/lib/` has the complete 16-file simulator stack
+All originally-pending items are now empirically verified — see [`helloworld_cast_vs_nocast_comparison.md`](helloworld_cast_vs_nocast_comparison.md) §4.7.3.5 for the trace data.
 
-Not yet verified:
-- ❓ Whether `AscendOpKernelRunner(simulator_mode="ca", soc_version="Ascend950PR_9572")` actually selects the 9572 simulator config (vs falling back to a default like 8.5.0 did with 910B1)
-- ❓ What per-instruction trace looks like for the same kernel under 9572 vs 9362 simulators
-- ❓ Whether CANN 9.0.0's bishengir-compile chain emits `pto.pand`/`pto.psel`/etc. for an A5-targeted compile
-- ❓ Whether `msopgen sim` parses 9572 dumps correctly
+| Item | Status |
+|---|---|
+| CANN 9.0.0 toolkit installs cleanly on x86_64 Ubuntu 22.04 | ✅ |
+| 81 simulator directories present, 30+ are A5/Ascend950PR variants | ✅ |
+| `Ascend950PR_9572/lib/` has complete 16-file simulator stack | ✅ |
+| `AscendOpKernelRunner(simulator_mode="ca", soc_version="Ascend950PR_9572")` actually launches A5 sim (not 910B1 fallback) | ✅ — trace shows new `RVECEX`/`RVECLD`/`RVECST` pipelines unique to A5 |
+| `bishengir-compile --target=Ascend950DT_9572` produces A5-specific binary | ✅ — `.text` is 616 B (75% smaller than 910_9362's 2496 B) |
+| Trace shows `RV_PAND` / `RV_POR` / `RV_PSET` predicate instructions | ✅ — `RV_PAND` 32×, `RV_POR` 64×, `RV_PXOR` 1×, `RV_PSET` 3×, `RV_VSEL` 32× |
+| `MOVEMASK`/`MOVEVA`/`VNCHWCONV` eliminated on A5 | ✅ — zero instances |
+| 1024-iteration scalar unpack-store loop eliminated on A5 | ✅ — replaced by 32× `RV_VSTI` and 1× `RV_VLOOP` |
+| `msopgen sim` parses A5 dumps correctly | ✅ — produced 86 KB Chrome-trace JSON; only complaint is "files in input path are too many" if you don't subset |
+
+## Known CANN 9.0.0 packaging issues (workarounds documented)
+
+1. **Missing `release_config.json` for `Ascend950PR_*` and dav_3510 variants.** The simulator libs are installed but the `<simulator>/<variant>/conf/release_config.json` config that `msopst.runtime.rts_api._init_model_so_list()` looks for is absent. Workaround: copy the `dav_2201` (910/910C) version into `Ascend950PR_9572/conf/`:
+   ```json
+   {
+     "ca": ["libpem_davinci.so", "libnpu_drv_camodel.so", "libstars.so", "libmodel_top.so", "libruntime_camodel.so"],
+     "pv": ["libpem_davinci.so", "libnpu_drv_pvmodel.so", "libstars_pv.so", "libmodel_top_pv.so", "libruntime_cmodel.so"]
+   }
+   ```
+
+2. **Circular import in `msopst.runtime.__init__.py`.** Ships as `from . import AscendRTSApi` (importing nonexistent submodule) instead of `from .rts_api import AscendRTSApi`. Patch:
+   ```bash
+   sed -i 's|from . import AscendRTSApi|from .rts_api import AscendRTSApi|' \
+     ~/Ascend/cann-9.0.0/python/site-packages/msopst/runtime/__init__.py
+   ```
+
+3. **`ulimit -n` too low.** A5 simulator opens ~1100 dump files per run (vs ~16 for 910B1). Default Ubuntu `ulimit -n 1024` causes `Too many open files` mid-run. Fix: `ulimit -n 65536` before launching.
+
+4. **Missing `<simulator_lib_path>/common/data/` directory.** Runner expects this even if empty. Workaround: `mkdir -p ~/Ascend/ascend-toolkit/latest/x86_64-linux/simulator/common/data`.
+
+5. **`msopgen sim` rejects input paths writable by group/others.** Run `chmod -R go-w <dump-dir>` (and parent dirs) first.
+
+6. **`msopgen sim` rejects dump dirs with too many files.** A5 sim writes ~1100 files per kernel; tool errors with "files exceed -1". Workaround: copy only the per-core subset you want to parse (`cp <dump-dir>/core0.veccore0.* <subset-dir>/`) before running `msopgen sim`.
+
+7. **Compile-target naming mismatch with simulator dirs.** `bishengir-compile --target=Ascend950PR_9572` doesn't exist (`PR` is not a valid compile-target prefix). Use `Ascend950DT_9572` for compile, `Ascend950PR_9572` for simulator. (Or `Ascend910_*` family — also valid for some 9572-class targets.)
 
 These are the natural next steps for verifying [`helloworld_cast_vs_nocast_comparison.md`](helloworld_cast_vs_nocast_comparison.md) §4.7's hypothetical A5 lowering predictions against real compiled+simulated output.
 
