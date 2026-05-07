@@ -215,6 +215,96 @@ VSTI V2, [S67], #16, #2, P1, #1     ; store V2 to UB at [S67 + …]
                                     ; (full mode-field semantics deferred — VSTI spec not yet given)
 ```
 
+### 3.1 What the per-iter `VADDS` is doing
+
+```asm
+VADDS.s32 V2, V2, S8, P1            ; V2 ← V2 + S8 (lane-wise add of broadcast scalar)
+```
+
+`VADDS.s32 Vd, Vs, Sn, Pmask` is **vector-add-scalar**: the scalar
+`Sn` is broadcast to all lanes of `Vs`, lane-wise added, and the
+result is written to `Vd` in the lanes selected by the predicate
+mask `Pmask`. Equivalent expression:
+
+```
+V2[i] ← V2[i] + S8       for each lane i where P1[i] = 1
+```
+
+#### What this does *not* map to in `mask_fn`
+
+`mask_fn` itself contains no addition:
+
+```python
+def mask_fn(q_attn_arg, k_attn_arg, q_offset, k_offset, TYPE: tl.constexpr):
+    if TYPE == 1:
+        triu_causal = (q_offset[:, None] <= k_offset[None, :])
+        …
+```
+
+It takes `q_offset` / `k_offset` as **already-computed arguments**
+and only compares them. So no line of mask_fn produces this VADDS.
+
+#### Where the addition actually comes from — the launcher
+
+The compiled `mask_kernel` is `mask_fn` **inlined into a launcher**
+that prepares the offset arrays. The standard Triton-Ascend pattern
+for the launcher is:
+
+```python
+# launcher kernel that wraps mask_fn
+pid_n   = tl.program_id(1)            # block index along the "k" axis
+base    = tl.arange(0, BLOCK_N)       # constant pattern: [0, 1, …, 31]
+k_offset = base + pid_n * BLOCK_N     # ◄══ this addition becomes the VADDS
+
+mask = mask_fn(q_attn_arg, k_attn_arg, q_offset, k_offset, TYPE=1)
+```
+
+When bishengir-compile-a5 fuses the launcher with mask_fn into a
+single `mask_kernel`, the offset-computation arithmetic ends up in
+the same body as the comparisons.
+
+#### The hardware mapping
+
+```
+V2  ← VLDI [S6]              ;  load the constant pattern, e.g. arange(0, 32)
+                             ;  V2 = [0, 1, 2, …, 31]   (zero-based lane indices)
+
+S8  ← (set pre-loop, not in snippet)
+                             ;  S8 = pid_n × BLOCK_N    (block-dependent stride scalar,
+                             ;        passed in as one of the kernel's i32 args 7..12)
+
+VADDS.s32 V2, V2, S8, P1     ;  V2 ← arange(0, 32) + pid_n · BLOCK_N
+                             ;     ◄══ "k_offset = pid_n * BLOCK_N + arange(0, BLOCK_N)"
+```
+
+After VADDS, V2 holds the actual `k_offset[None, :]` values (the
+absolute positions in the global k axis), which is exactly what the
+subsequent VCMPs (`VCMP.LE P5, V3, V2` and `VCMP.EQ P4, V3, V2`)
+need.
+
+#### Why VADDS rather than just loading a precomputed k_offset
+
+Two reasons:
+
+1. **Avoids materialising a 32-element k_offset buffer in GM/UB** —
+   only `BLOCK_N` and `pid_n` are passed in as scalars; the offset
+   array is reconstructed on-chip from `arange + scalar`.
+2. **Reuses one constant pattern across all program blocks** —
+   `arange(0, 32)` is identical for every block; only the scalar S8
+   changes per block.
+
+#### Confidence
+
+| Claim | Tier | Reason |
+|---|:---:|---|
+| `VADDS` is vector-add-scalar with the operand order shown | A | Operand convention matches the `vadds` family in the PTO ISA repo |
+| The addition originates in the launcher's `pid * BLOCK + arange` pattern | B | Strong Triton-Ascend convention; not directly verified for *this* kernel |
+| `S8 = pid_n × BLOCK_N` and `V2 = arange(0, 32)` specifically | B | Plausible defaults; resolving requires either the launcher source or disassembly of the pre-loop scalar setup that initialises S8 and the buffer at `[S6]` |
+
+This VADDS reading is the most natural one given the kernel's
+structure, but a definitive mapping needs the upstream launcher
+or the pre-loop assembly.
+
 ## 4. Translation back to Triton source
 
 ```
