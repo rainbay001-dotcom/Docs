@@ -95,7 +95,7 @@ The headline §3 / §4 numbers blur control ops, mask helpers, and actual comput
 
 The cast version uses **fewer vector instructions** (43 fewer ops, 43 fewer unique PCs in the binary) but the cycle savings are modest (−264 cyc out of ~8.6K).
 
-> **Why does the cast version have 43 fewer vector instructions even though i32 is 32× wider than bool?** Because 910B1/910_9362 have no dedicated predicate registers — bool data is packed in regular vector registers and needs `MOVEMASK`/`MOVEVA`/`VNCHWCONV` shuffles to bridge layout mismatches between compare, logic-op, and store. The cast widens to native lane width and skips all that shuffle. See §4.7 for the architectural background and how A5's `PAND`/predicate-register model differs.
+> **Why does the cast version have 43 fewer vector instructions even though i32 is 32× wider than bool?** Because 910B1/910_9362 have no dedicated mask register — bool data is packed in regular vector registers and needs `MOVEMASK`/`MOVEVA`/`VNCHWCONV` shuffles to bridge layout mismatches between compare, logic-op, and store. The cast widens to native lane width and skips all that shuffle. See §4.7 for the architectural background and how A5's `MaskReg` hardware (per local arch reference) differs.
 
 ### 4.5.2 Per-mnemonic VECTOR-pipe diff
 
@@ -282,15 +282,34 @@ What I'm guessing:
 
 The way to get strict confirmation: re-run with `msopgen sim -reloc <kernel.npubin>`. That triggers `llvm-objdump --save-aicore-bins` which is decoder-gated, so we can't actually do this on shipped CANN-8.5.0. The mapping above is the closest you get without an internal Huawei build.
 
-## 4.7 Architectural context — why bool needs MOVEMASK/MOVEVA/VNCHWCONV on 910B1, but uses PAND on A5
+## 4.7 Architectural context — why bool needs MOVEMASK/MOVEVA/VNCHWCONV on 910B1, while A5 has dedicated mask hardware
 
 The expensive shuffle work (`VNCHWCONV` × 8, `MOVEVA` × 64, `MOV_UB_TO_UB` × 1) the bool path emits — and which the cast path eliminates — exists because of a fundamental architectural difference between AICore generations.
 
-### 4.7.1 Two architectural styles for bool/predicate
+### 4.7.0 Note on the evidence in this section
 
-**A5 (newer Ascend gen)** has **dedicated predicate registers** (`P0`, `P1`, …) and predicate-specific instructions: `PAND`, `POR`, `PNOT`, masked vector ops, `VSEL` driven by a predicate input. A vector compare can directly write a predicate (`VCMP X1, X2 → P0`), and predicate ALU is hardware-native — same model as ARM SVE / x86 AVX-512 mask registers.
+The 910B1 side of this section is **directly evidenced** by the camodel trace (every `MOVEMASK`/`MOVEVA`/`VNCHWCONV` instruction is in the trace, with `Dtype:B16` operand strings).
 
-**910B1 / 910_9362 (current AICore, what camodel runs on)** has **no dedicated predicate registers**. Bool/mask data lives in regular wide vector registers, packed as bits. All bool logic uses **generic vector ALU instructions** with `Dtype:B16` semantics ("treat-this-register-as-packed-bools"). Format conversions are needed when the layout mismatches between consecutive ops.
+The A5 side is **partially verified** from `~/Documents/docs/ascend_910c_microarchitecture.md` §17c/§20 (NPU arch 351x):
+
+| Verified for A5 | Source |
+|---|---|
+| Dedicated `MaskReg`, width = `VL/8` ("Element participation masking") | §20 SIMT Hardware table |
+| Native vector ISA (`pto.v*`) not emulated | §20 differentiators list |
+| Full SIMT mode, 4 warp schedulers per AIV | §20 SIMT Hardware |
+
+| Stated by user, not independently verified here | Notes |
+|---|---|
+| Specific instruction mnemonics like `PAND`, `POR`, `PNOT` | Plausible given the MaskReg hardware (it'd be unusual to have a mask register without per-bit logic ops on it), but I haven't grepped the PTO-ISA reference to confirm those exact mnemonics in A5 |
+| Compile output of `mask_fn` on A5 specifically using `PAND` | User-observed; I haven't run on an A5 simulator (camodel doesn't have one) |
+
+So below: §4.7.1 calls A5's mechanism "MaskReg" (the doc's term) rather than "predicate registers" (my earlier wording, by analogy to SVE/AVX-512). The hypothetical A5 lowering in §4.7.4 uses placeholder mnemonics — read it as the *shape* of the lowering, not the exact mnemonic names.
+
+### 4.7.1 Two architectural styles for bool/mask
+
+**A5 (Da Vinci C310, NPU arch 351x)** has a **dedicated `MaskReg`** — width `VL/8`, one bit per vector lane (matches the standard SVE / AVX-512 mask-register format). Per the local arch reference, A5 uses a native vector ISA (`pto.v*`) and supports SIMT execution. **It is reasonable to expect** mask-arithmetic instructions (per-bit AND/OR/NOT on the MaskReg) and mask-driven masked vector ops, since that's what the MaskReg hardware enables — but the specific mnemonics aren't enumerated in our local doc.
+
+**910B1 / 910_9362 (current AICore, what camodel runs on)** has **no dedicated mask register**. Bool/mask data lives in regular wide vector registers, packed as bits. All bool logic uses **generic vector ALU instructions** with `Dtype:B16` semantics ("treat-this-register-as-packed-bools"). Format conversions are needed when the layout mismatches between consecutive ops. *This is verified directly from our camodel trace — see §4.7.2.*
 
 ### 4.7.2 What we see in our 910B1 camodel trace
 
@@ -320,25 +339,29 @@ Combined: 73 shuffle/conversion instructions, ~1.3K cycles, **all of which exist
 
 The cast version sidesteps these by widening every bool to a full i32 lane. Once each "bool" lives in its own 32-bit lane, the AND/OR/SEL ops are regular vector arithmetic — no packing, no shuffling. **The cast is essentially "fake A5"** — it emulates the predicate-register-style flat layout by paying memory width instead of using HW support.
 
-### 4.7.4 What A5's PAND would replace (hypothetical lowering)
+### 4.7.4 Hypothetical A5 lowering (mnemonic names are placeholders)
 
-If the same `mask_fn` were lowered for A5 with predicate registers, the structure would be:
+> The exact mnemonic names below (`VCMPV→Mask`, `PAND`, etc.) are **placeholders for illustration**. They match what user-observed code seems to use, but I haven't verified them against A5's actual ISA reference. Read this section as the *shape* of the lowering, not exact instruction names.
+
+If `mask_fn` were lowered for A5 using its `MaskReg` hardware, the structure would look like:
 
 ```
-VCMPV  X1, X2 → P0                  ; compare directly writes predicate
-VCMPV  X3, X4 → P1
-PAND   P0, P0, P1                   ; predicate-AND, hardware-native
-VCMPVS X5, 0  → P2
-POR    P0, P0, P2                   ; predicate-OR
-VSEL   XD = P0 ? Xtrue : Xfalse     ; predicate-driven select
-                                    ; output stored directly under predicate mask
+<vec-compare>  X1, X2 → MaskReg0          ; compare directly writes mask register
+<vec-compare>  X3, X4 → MaskReg1
+<mask-and>     MaskReg0, MaskReg0, MaskReg1   ; mask-AND on dedicated MaskReg HW
+<vec-cmp-vs>   X5, 0  → MaskReg2
+<mask-or>      MaskReg0, MaskReg0, MaskReg2   ; mask-OR on dedicated MaskReg HW
+<masked-sel>   XD = MaskReg0 ? Xtrue : Xfalse ; mask-driven select
+                                              ; output store can use mask directly
 ```
 
-Compared to the 910B1 lowering, this eliminates:
-- All 84 `MOVEMASK` instructions (predicates have a fixed HW layout)
-- All 64 `MOVEVA` instructions (no per-row repack needed)
-- All 8 `VNCHWCONV` instructions (predicates can drive output stores directly)
-- The `Dtype:B16` annotations on logic ops (predicate ALU is its own class)
+Compared to the 910B1 lowering observed in the camodel trace, this lowering shape (whatever the exact mnemonics) would eliminate:
+- All 84 `MOVEMASK` instructions (MaskReg has a fixed HW layout — no need to rearrange bit positions)
+- All 64 `MOVEVA` instructions (no per-row bit-shuffle needed)
+- All 8 `VNCHWCONV` instructions (MaskReg can drive output stores directly)
+- The `Dtype:B16` annotations on logic ops (mask ALU is its own register class)
+
+Whether A5 actually achieves all four eliminations depends on its specific lowering rules; that's what would need to be verified against A5-compiled output.
 
 ### 4.7.5 Why the cast path is roughly cycle-neutral on 910B1
 
@@ -477,5 +500,5 @@ Local:
 | **Loop body and 1024 stores unchanged** | The kernel's bottleneck is the scalar unpack-store loop, not the upstream type. Cast doesn't touch it. |
 | **To actually speed up**: change the output type | Pack output as bitmap or wider int → cut store cost ~8×. Casting intermediates can't fix what the output type forces. |
 | **Camodel μarch caveat** | `te_set_version("Ascend910_9362")` doesn't change the simulator behavior — camodel locks to 910B1 internally. All cycle numbers are 910B1-model. Real-silicon 910_9362 numbers need msprof. See §6.5. |
-| **910B1 has no predicate registers** | Bool data is packed in regular vector registers; logic ops use `Dtype:B16` semantics; `MOVEMASK`/`MOVEVA`/`VNCHWCONV` bridge layout mismatches. The cast eliminates these by widening to native lane width — "fake A5". See §4.7. |
-| **A5 implications** | A5 has hardware predicate registers + `PAND`/`POR`. Bool path will be strictly faster than cast there. Don't manually widen on A5. |
+| **910B1 has no dedicated mask register** | Bool data is packed in regular vector registers; logic ops use `Dtype:B16` semantics; `MOVEMASK`/`MOVEVA`/`VNCHWCONV` bridge layout mismatches. The cast eliminates these by widening to native lane width. See §4.7. *Directly evidenced by the trace.* |
+| **A5 has dedicated MaskReg hardware** | Per local arch reference: A5 has `MaskReg` (width VL/8) for "Element participation masking". Specific instruction mnemonics like `PAND`/`POR` were stated by user but not independently verified — see §4.7.0 for evidence/non-evidence breakdown. |
