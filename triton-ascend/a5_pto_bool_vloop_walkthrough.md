@@ -834,6 +834,102 @@ overhead for a 32-bit value — but also the most easily fixable,
 since the optimization (hold a single predicate in a P-reg across a
 loop) is structurally simple.
 
+### 6.7 Missed optimization for q_offset — apply the q_attn treatment
+
+Just as §6.6 spelled out the fixes for C, the q_offset asymmetry
+described in §6.4 has a clear optimization analogue: **lower
+q_offset the same way q_attn already gets lowered.** The pattern
+fired for q_attn (brc_b32 streaming, no tile materialized); applying
+it to q_offset would close the 1.25× gap.
+
+#### What hivmc-a5 currently does for q_offset
+
+```asm
+;  pre-loop:
+;    vbrc 32×1 i32 → 32×32 i32 tile in UB at c0      (≈16 hw insns to fill 4096 B)
+;
+;  per iter (inside VLOOP):
+VLDI V3, [S69], #16, #0, #1         ; 256 B normal load from the tile
+                                    ; S69 ← S69 + 512 B (post-incr to next row)
+…
+VCMP.LE.s32 P5, V3, V2, P1          ; consumer #1: A_row
+VCMP.EQ.s32 P4, V3, V2, P1          ; consumer #2: F_row
+```
+
+Total q_offset machinery: ≈16 pre-loop ops + 1 normal VLDI per iter
++ 4096 B UB tile.
+
+#### Optimization 3 — brc_b32 stream q_offset (mirror q_attn)
+
+```asm
+;  no pre-loop tile build
+;
+;  per iter (inside VLOOP):
+VLDI V3, [S_qoff], #1, #3, #1       ; brc_b32: 1 i32 broadcast → all 64 lanes
+                                    ; S_qoff ← S_qoff + 4 B (advance one scalar)
+…
+VCMP.LE.s32 P5, V3, V2, P1          ; consumer #1: A_row (V3 = q_offset[i] broadcast)
+VCMP.EQ.s32 P4, V3, V2, P1          ; consumer #2: F_row (same V3 reused)
+```
+
+V3 stays in a vreg across both compares — vregs are not reset
+between consecutive insns within an iter, so the second `VCMP.EQ`
+just reads V3 again at zero extra cost.
+
+| Cost              | Current (full-VL)                | Optimization 3 (brc_b32, mirror q_attn) |
+|-------------------|---------------------------------:|----------------------------------------:|
+| Pre-loop ops      | ≈16 (vbrc fills tile)            | 0                                       |
+| Per-iter ops      | 1 VLDI normal + 2 VCMPs = 3      | 1 VLDI brc_b32 + 2 VCMPs = 3           |
+| Per-iter UB read  | 256 B                            | 4 B                                     |
+| UB tile bytes     | 4096                             | 0                                       |
+| Total ops (T=32)  | 16 + 96 = **112**                | **96**                                  |
+
+**Savings vs current: 16 ops + 4096 B UB + 32 × (256 − 4) = 8064 B
+of bandwidth.**
+
+The two consumers don't change anything — the per-iter cost is
+identical between current and optimized (3 ops either way). The
+saving comes entirely from skipping the pre-loop tile fill and the
+tile's UB residency.
+
+#### Why hivmc-a5 didn't pick this
+
+Same root cause as before: hivmc-a5 honoured the MLIR's storage
+typing. The MLIR commits q_offset to a 4096 B tile in UB (Phase 1),
+so hivmc-a5 builds it. The q_attn case happened to fit a fusion
+pattern that elides the tile; q_offset's didn't (probably because
+q_offset's source is also live into the i64-widen path, see §6.4
+hypotheses).
+
+The fix would be a more general "vbrc'd tile is dead at this
+hardware level — replace consumers with brc_b32 streams" pass that
+recognises *all* such cases, not just the one that happens to
+match q_attn's particular shape.
+
+#### Updated summary table
+
+| Value     | MLIR storage             | Optimal hardware              | hivmc-a5 picked              | Cost ratio | Optimization |
+|-----------|--------------------------|-------------------------------|------------------------------|-----------:|--------------|
+| q_attn    | 4096 B vbrc'd tile       | brc_b32 streaming, no tile    | brc_b32 streaming ✓          | optimal    | already optimal |
+| **q_offset** | 4096 B vbrc'd tile    | **brc_b32 streaming, no tile** | full-VL streaming through tile | 1.17×    | **§6.7 Optimization 3** |
+| C         | 32 B i1 memref           | P-reg held across loop        | UB byte buffer + reload      | 66×        | §6.6 Optimization 2 |
+
+(q_offset cost ratio refined: 112/96 ≈ 1.17× rather than the earlier
+1.25×, since the per-iter compute portion `2N` is identical between
+strategies and only the constant `K=16` differs.)
+
+#### Total potential savings if all three fire
+
+- §6.6 Optimization 2 (C in P-reg): **−65 ops + −32 B UB**
+- §6.7 Optimization 3 (q_offset brc_b32): **−16 ops + −4096 B UB + −8 KB UB read bandwidth**
+- (q_attn / k_attn / k_offset: already optimal)
+
+Net per kernel invocation: roughly **−80 ops, −4 KB of UB tile
+storage, −8 KB of UB read bandwidth.** All three are missed by the
+same hivmc-a5 limitation: the lowering follows MLIR storage typing
+rather than promoting loop-invariant or fully-broadcastable values
+to register-resident forms.
+
 ## 7. Per-iter hardware-op tally
 
 Compute portion of the body (excluding loads/stores/sync):
