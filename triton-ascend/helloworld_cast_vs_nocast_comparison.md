@@ -465,6 +465,64 @@ The "RVEC" prefix corresponds to A5's **Real Vector / SIMT vector** path — the
 
 **Bottom line: 910B1's bool-packing strategy paid for itself on 910B1 (same total cycles as the i32 cast version), but on A5 with native predicate hardware, the bool path runs 19× faster than the same kernel on 910B1 — because none of the packing/unpacking work needs to happen at all.** This validates the architectural prediction: A5 is strictly better than 910B1 for bool-heavy kernels.
 
+### 4.7.3.6 A5 cast-vs-bool: same kernel, dramatically smaller difference than 910B1
+
+The whole point of this doc was that on **910B1**, cast was 1.3% slower than bool (with completely different mnemonic mixes). What about on A5? I ran the same comparison.
+
+**Setup:** Compiled both `mask_kernel.ttadapter` and `mask_kernel_cast.ttadapter` for `Ascend950DT_9572`, ran each under `Ascend950PR_9572` simulator on CANN 9.0.0.
+
+**Headline:**
+
+| Metric | 910B1 (bool vs cast) | A5/9572 (bool vs cast) |
+|---|---|---|
+| Static `.text` size | 2,496 → 2,116 B (**−15%**) | 616 → 608 B (**−1.3%**) |
+| Trace events | 9,459 → 9,364 (**−95**) | 452 → 450 (**−2**) |
+| Unique PCs | 624 → 529 (**−95**) | 109 → 107 (**−2**) |
+| Cycle span | 27,645 → 27,995 (**+1.3%**) | 1,431 → 1,431 (**0%**) |
+| Camodel `Total tick` | 28,573 → 28,937 (+1.3%) | 2,240 → 2,246 (**+0.27%, run-to-run noise**) |
+
+**Per-mnemonic A5 diff between bool and cast** (from the trace):
+
+```
+Mnemonic            bool  cast   Δ
+RV_VLDI               66    66   0
+RV_VCMP_EQ            65    65   0
+RV_POR                64    64   0
+RV_VSEL               32    32   0
+RV_VCVT_I2I           32    32   0
+RV_PAND               32    32   0
+RV_VSTI               32    32   0
+RV_VCMP_LE            32    32   0
+… 28 more mnemonics, all identical between bool and cast …
+RV_PSET                3     2  −1   ← only difference
+RV_PXOR                1     0  −1   ← only difference
+```
+
+**Out of ~40 mnemonic types and 452 total events, only 2 events differ between the bool and cast variants.** The kernel compiles to essentially the same A5 machine code regardless of whether you wrote `(q == k)` or `(q == k).to(tl.int32)` in the source.
+
+### 4.7.3.7 What this means
+
+On 910B1, the cast was a meaningful code-shape change because of architecture:
+- Bool path used packed-bool (`Dtype:B16`) with ~1.3K cyc of `MOVEMASK`/`MOVEVA`/`VNCHWCONV` shuffles
+- Cast path eliminated shuffles but paid ~equal extra cost in i32-width ALU
+- Net: same cycles, different instruction mix, structurally distinguishable code
+
+On A5 with predicate-register hardware:
+- Both paths converge to the **same predicate-based lowering** (RV_VCMP_EQ → RV_PAND/POR → RV_VSEL → RV_VSTI)
+- The compiler sees through the `.to(tl.int32)` cast — i32 values from compares get treated as predicates either way (or vice versa: predicates flow through as i1, which lowers to predicate ops naturally)
+- The 2-event difference (one extra PSET, one extra PXOR) is the residual of bool's slightly different intermediate form
+- Net: **bool and cast are interchangeable on A5**
+
+**Practical implication for forward-looking kernels targeting A5:**
+
+| Decision | 910B1 advice | A5 advice |
+|---|---|---|
+| Bool-or-cast intermediates | Either works; cast is 15% smaller binary but 1.3% slower | **Either works; same code, same performance.** Don't bother with `.to(tl.int32)` |
+| Output type matters | YES — int8 byte-store loop is the bottleneck (33K of 71K SCALAR cyc) | Less so — A5's `RV_VSTI` does 32-byte vector stores, not byte-by-byte |
+| Architecture transferability | Bool path's 73 shuffle instructions are 910B1-specific overhead | A5 strips them automatically; any reasonable bool source lowers cleanly |
+
+**The headline that matters:** A5 makes the bool-vs-cast distinction nearly meaningless at the machine-code level, while simultaneously running the same kernel ~19× faster than 910B1. The architectural upgrade (predicate registers + native vector loop + vector stores) is dramatic.
+
 ### 4.7.4 Hypothetical A5 lowering (using the verified PTO-ISA `pto.p*` mnemonics)
 
 Mapping `mask_fn` (`(A & (B | C)) | D`) to A5's predicate ISA (per pto-isa.github.io):
@@ -631,3 +689,4 @@ Local:
 | **A5 has dedicated MaskReg + predicate ISA** | Verified two ways: local arch ref shows `MaskReg` width `VL/8`; PTO-ISA reference (pto-isa.github.io) documents `pto.pand`/`pto.por`/`pto.pxor`/`pto.pnot` plus `pto.pset_b{8,16,32}` and `pto.pge_b{8,16,32}` for compare-to-predicate. User's `PAND` observation was correct (full mnemonic is `pto.pand`). See §4.7.0. |
 | **CANN 8.5.0 → no A5 sim; CANN 9.0.0 → full A5 sim** | Verified empirically: CANN 8.5.0 (on 218) accepts `Ascend910_9572` for compilation but has no simulator dir. **CANN 9.0.0 ships 30+ `Ascend950PR_*` simulator dirs** including `Ascend950PR_9572` with the full 16-file lib stack. Toolkit is downloadable from OBS without Huawei login (~1.16 GB). |
 | **A5 trace verifies §4.7 predictions empirically** | Compiled `mask_kernel` for `Ascend950DT_9572` and ran under `Ascend950PR_9572` simulator on CANN 9.0.0. Trace shows `RV_PAND` (32×), `RV_POR` (64×), `RV_PXOR` (1×), `RV_PSET` (3×), `RV_VSEL` (32×), `RV_VLOOP` (1×) — all the predicted predicate ops, no `MOVEMASK`/`MOVEVA`/`VNCHWCONV`. **A5 runs the same kernel at 1,431 cycles vs 27,645 on 910B1 — ~19× faster.** See §4.7.3.5. |
+| **On A5, bool and cast lower to ~identical machine code** | Re-ran cast variant on A5 too. Trace events: bool 452, cast 450 — only 2 differ (one extra `RV_PSET`, one extra `RV_PXOR`). Cycle span: identical (1,431 cyc). Camodel tick: 2240 vs 2246. **A5's predicate hardware makes the `.to(tl.int32)` distinction disappear at the lowering level** — compiler emits the same predicate-based code either way. See §4.7.3.6/3.7. |
