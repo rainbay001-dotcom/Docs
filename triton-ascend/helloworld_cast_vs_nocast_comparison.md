@@ -288,22 +288,37 @@ The expensive shuffle work (`VNCHWCONV` × 8, `MOVEVA` × 64, `MOV_UB_TO_UB` × 
 
 ### 4.7.0 Note on the evidence in this section
 
-The 910B1 side of this section is **directly evidenced** by the camodel trace (every `MOVEMASK`/`MOVEVA`/`VNCHWCONV` instruction is in the trace, with `Dtype:B16` operand strings).
+The 910B1 side is **directly evidenced** by the camodel trace (every `MOVEMASK`/`MOVEVA`/`VNCHWCONV` instruction is in the trace, with `Dtype:B16` operand strings).
 
-The A5 side is **partially verified** from `~/Documents/docs/ascend_910c_microarchitecture.md` §17c/§20 (NPU arch 351x):
+The A5 side was originally based on user observation that A5 emits `PAND` on predicate registers, then verified against two independent sources:
 
-| Verified for A5 | Source |
+**Verified for A5** — local arch reference (`~/Documents/docs/ascend_910c_microarchitecture.md` §17c/§20, NPU arch 351x):
+
+| Fact | Source |
 |---|---|
 | Dedicated `MaskReg`, width = `VL/8` ("Element participation masking") | §20 SIMT Hardware table |
 | Native vector ISA (`pto.v*`) not emulated | §20 differentiators list |
 | Full SIMT mode, 4 warp schedulers per AIV | §20 SIMT Hardware |
 
-| Stated by user, not independently verified here | Notes |
-|---|---|
-| Specific instruction mnemonics like `PAND`, `POR`, `PNOT` | Plausible given the MaskReg hardware (it'd be unusual to have a mask register without per-bit logic ops on it), but I haven't grepped the PTO-ISA reference to confirm those exact mnemonics in A5 |
-| Compile output of `mask_fn` on A5 specifically using `PAND` | User-observed; I haven't run on an A5 simulator (camodel doesn't have one) |
+**Verified for A5** — PTO-ISA reference (https://pto-isa.github.io/, "Predicate Generation And Algebra" section):
 
-So below: §4.7.1 calls A5's mechanism "MaskReg" (the doc's term) rather than "predicate registers" (my earlier wording, by analogy to SVE/AVX-512). The hypothetical A5 lowering in §4.7.4 uses placeholder mnemonics — read it as the *shape* of the lowering, not the exact mnemonic names.
+| Predicate instruction class | Mnemonics |
+|---|---|
+| Logic | `pto.pand`, `pto.por`, `pto.pxor`, `pto.pnot` |
+| Compare → predicate (per element width) | `pto.pge_b{8,16,32}`, `pto.plt_b{8,16,32}`, `pto.pset_b{8,16,32}` |
+| Data manipulation | `pto.ppack`, `pto.punpack`, `pto.psel`, `pto.pdintlv_b8`, `pto.pintlv_b16` |
+
+So the user's `PAND` observation was correct: the official mnemonic is `pto.pand` (with the `pto.` namespace prefix). The corresponding rich mask-register ISA exists. This is the architectural difference from 910B1's bool-packed-in-vector-register approach.
+
+**Still uncertain — cycle-accurate A5 simulator availability:**
+
+| Question | What I found |
+|---|---|
+| Does CANN 9.0's bundled camodel support Ascend A5 / 9572? | Not directly verified. Our 218 box has CANN 8.5.0; haven't tested CANN 9.0. The §6.5 finding (camodel internally locks to 910B1) may or may not still apply in 9.0. |
+| Does PTO-ISA project ship a cycle-accurate A5 simulator? | No. The repo includes a CPU functional simulator and a `CostModel` for performance estimation (Q2 2026 target per the roadmap). For real A5 perf, run on Atlas 350 hardware with msprof. |
+| Was A5 added to public CANN tooling? | Per PTO-ISA NEWS: A5 support added 2026-03-30. A5 backend is still WIP (partial implementation; A2/A3 share full backends per the deepwiki summary). |
+
+**Bottom line**: A5 has the predicate-register hardware (MaskReg) and the predicate-instruction set (`pto.pand`/`pto.por`/...) on paper and in the PTO-ISA reference. We can't currently run a cycle-accurate A5 simulation on shipped CANN — for that you'd need real Atlas 350 hardware + msprof. The hypothetical lowering in §4.7.4 uses the actual `pto.p*` mnemonics now that they're verified.
 
 ### 4.7.1 Two architectural styles for bool/mask
 
@@ -339,29 +354,30 @@ Combined: 73 shuffle/conversion instructions, ~1.3K cycles, **all of which exist
 
 The cast version sidesteps these by widening every bool to a full i32 lane. Once each "bool" lives in its own 32-bit lane, the AND/OR/SEL ops are regular vector arithmetic — no packing, no shuffling. **The cast is essentially "fake A5"** — it emulates the predicate-register-style flat layout by paying memory width instead of using HW support.
 
-### 4.7.4 Hypothetical A5 lowering (mnemonic names are placeholders)
+### 4.7.4 Hypothetical A5 lowering (using the verified PTO-ISA `pto.p*` mnemonics)
 
-> The exact mnemonic names below (`VCMPV→Mask`, `PAND`, etc.) are **placeholders for illustration**. They match what user-observed code seems to use, but I haven't verified them against A5's actual ISA reference. Read this section as the *shape* of the lowering, not exact instruction names.
-
-If `mask_fn` were lowered for A5 using its `MaskReg` hardware, the structure would look like:
+Mapping `mask_fn` (`(A & (B | C)) | D`) to A5's predicate ISA (per pto-isa.github.io):
 
 ```
-<vec-compare>  X1, X2 → MaskReg0          ; compare directly writes mask register
-<vec-compare>  X3, X4 → MaskReg1
-<mask-and>     MaskReg0, MaskReg0, MaskReg1   ; mask-AND on dedicated MaskReg HW
-<vec-cmp-vs>   X5, 0  → MaskReg2
-<mask-or>      MaskReg0, MaskReg0, MaskReg2   ; mask-OR on dedicated MaskReg HW
-<masked-sel>   XD = MaskReg0 ? Xtrue : Xfalse ; mask-driven select
-                                              ; output store can use mask directly
+pto.pset_b32   X1, X2 → P0           ; A: q_off <= k_off    → predicate register P0
+pto.pset_b32   X3, X4 → P1           ; B: q_attn == k_attn  → P1
+pto.pset_b32   X5, 0  → P2           ; C: k_attn == 0       → P2
+pto.por        P1, P1, P2            ; (B | C)              ← single predicate-OR
+pto.pand       P0, P0, P1            ; A & (B | C)          ← single predicate-AND
+pto.pset_b32   X1, X4 → P3           ; D: q_off == k_off    → P3
+pto.por        P0, P0, P3            ; final OR             ← single predicate-OR
+pto.psel       Xout = P0 ? X_one : X_zero  ; mask-driven select
 ```
 
-Compared to the 910B1 lowering observed in the camodel trace, this lowering shape (whatever the exact mnemonics) would eliminate:
+(The `pto.pset_b{8,16,32}` family is "compare-equal-to-set-predicate" with a width hint — `pto.pset_b32` for i32 inputs. The `pto.pge_b32`/`pto.plt_b32` family handles the `<=` / `<` / `>` / `>=` cases.)
+
+Compared to the 910B1 lowering observed in the camodel trace, this would eliminate:
 - All 84 `MOVEMASK` instructions (MaskReg has a fixed HW layout — no need to rearrange bit positions)
 - All 64 `MOVEVA` instructions (no per-row bit-shuffle needed)
-- All 8 `VNCHWCONV` instructions (MaskReg can drive output stores directly)
-- The `Dtype:B16` annotations on logic ops (mask ALU is its own register class)
+- All 8 `VNCHWCONV` instructions (predicate can drive output stores directly via `pto.psel` or masked store)
+- The `Dtype:B16` annotations on logic ops (predicate ALU is its own register class)
 
-Whether A5 actually achieves all four eliminations depends on its specific lowering rules; that's what would need to be verified against A5-compiled output.
+Whether the A5 backend actually achieves all four eliminations depends on its specific lowering pipeline (which is still WIP per the PTO-ISA repo as of 2026-05). To verify in practice you'd need to compile `mask_fn` for A5 and inspect the output — but a cycle-accurate camodel-equivalent for A5 isn't publicly bundled in CANN as of CANN 8.5.0 (and is uncertain in 9.0). For real perf, the path is **Atlas 350 hardware + msprof**.
 
 ### 4.7.5 Why the cast path is roughly cycle-neutral on 910B1
 
@@ -501,4 +517,5 @@ Local:
 | **To actually speed up**: change the output type | Pack output as bitmap or wider int → cut store cost ~8×. Casting intermediates can't fix what the output type forces. |
 | **Camodel μarch caveat** | `te_set_version("Ascend910_9362")` doesn't change the simulator behavior — camodel locks to 910B1 internally. All cycle numbers are 910B1-model. Real-silicon 910_9362 numbers need msprof. See §6.5. |
 | **910B1 has no dedicated mask register** | Bool data is packed in regular vector registers; logic ops use `Dtype:B16` semantics; `MOVEMASK`/`MOVEVA`/`VNCHWCONV` bridge layout mismatches. The cast eliminates these by widening to native lane width. See §4.7. *Directly evidenced by the trace.* |
-| **A5 has dedicated MaskReg hardware** | Per local arch reference: A5 has `MaskReg` (width VL/8) for "Element participation masking". Specific instruction mnemonics like `PAND`/`POR` were stated by user but not independently verified — see §4.7.0 for evidence/non-evidence breakdown. |
+| **A5 has dedicated MaskReg + predicate ISA** | Verified two ways: local arch ref shows `MaskReg` width `VL/8`; PTO-ISA reference (pto-isa.github.io) documents `pto.pand`/`pto.por`/`pto.pxor`/`pto.pnot` plus `pto.pset_b{8,16,32}` and `pto.pge_b{8,16,32}` for compare-to-predicate. User's `PAND` observation was correct (full mnemonic is `pto.pand`). See §4.7.0. |
+| **No public cycle-accurate A5 simulator yet** | PTO-ISA repo ships CPU-functional sim + CostModel (Q2 2026 target). CANN 8.5.0's bundled camodel locks to 910B1; CANN 9.0 not tested. For real A5 perf: Atlas 350 hardware + msprof. |
