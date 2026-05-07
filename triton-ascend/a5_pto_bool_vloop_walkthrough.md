@@ -688,6 +688,146 @@ directly and the tile drops out. q_offset's extra outgoing edge
 (into the i64 widen) keeps the source alive and apparently keeps
 the tile-elimination rewrite from firing.
 
+### 6.6 Why C lives in UB instead of a P-reg — and two missed optimizations
+
+The third instance of the same pattern. C = `(k_attn_arg[None, :] == 0)`
+is the only one of the four predicates {A, B, C, F} that is
+**row-invariant** — it depends only on column index `j`, never on
+row index `i`. So computing it once before the loop and reusing it
+across all 32 iters is the right structure. The question is *how*
+to keep it alive across iters.
+
+#### What hivmc-a5 actually does
+
+In the captured assembly:
+
+```asm
+;  pre-loop  (not shown in the snippet, but implied):
+;    VCMP.EQ.s32  P_C, V_kattn, V_zero, P_seed
+;    (vstore P_C bytes to UB[c18944])
+
+;  per iter (inside VLOOP):
+VLDUI V6, ULD0, [S70], #0           ; load 32 bytes from UB[c18944]
+MOVVP.b32 P3, V6, #0                ; convert lane-bits in V6 to predicate P3
+```
+
+So pre-loop: 1 VCMP + 1 byte-store.
+Per iter: 1 VLDUI + 1 MOVVP = 2 ops × 32 iters = **64 ops** dedicated
+just to recovering C as a predicate.
+
+Total: **2 + 64 = 66 ops** to keep C alive.
+
+#### Why this happens
+
+The MLIR commits C to a UB-resident memref:
+
+```mlir
+%12 = hivm.hir.pointer_cast(%c18944_i64) : memref<32xi1, #hivm.address_space<ub>>
+hivm.hir.vcmp ins(%collapse_shape_2, %c0_i32) outs(%12)
+```
+
+`%12` is **typed as a memref backed by UB at byte offset c18944**. The
+MLIR has explicitly chosen "C lives at c18944 in UB." hivmc-a5
+honours that storage commitment: the vcmp's i1 output gets stored as
+bytes; subsequent reads load from that address. There is no pass in
+hivmc-a5 (that we can observe) that would say "this memref<i1, ub>
+value is loop-invariant and small enough to live in a P-reg
+instead." So the lowering goes through UB by default.
+
+This is the same pattern as q_offset's tile (§6.4): hivmc-a5
+faithfully implements the MLIR's storage typing, even when a
+register-resident form would be cheaper.
+
+#### Two missed optimizations (alternatives to the current 66-op cost)
+
+##### Optimization 1 — Recompute C inline each iter
+
+Eliminate the pre-loop precompute and the byte buffer entirely.
+Instead, do the comparison fresh in each iter alongside the other
+VCMPs.
+
+```asm
+;  no pre-loop work
+;  per iter:
+VCMP.EQ.s32 P_C, V_kattn, V_zero, P_seed   ; C = (k_attn == 0), 32 lanes
+;  P_C used directly in the boolean algebra
+```
+
+This requires `V_zero` to be live in a vreg (cheap — it's a constant,
+preloaded once outside the loop), and `V_kattn = V5` is already
+loaded each iter for the B compare.
+
+| Cost              | Current (γ)                | Optimization 1 (α) |
+|-------------------|---------------------------:|-------------------:|
+| Pre-loop ops      | 2 (VCMP + vstore)          | 0                  |
+| Per-iter ops      | 2 (VLDUI + MOVVP)          | 1 (VCMP)           |
+| Per-iter mem bw   | 32 B (the byte buffer)     | 0                  |
+| Total ops (T=32)  | 2 + 64 = **66**            | 32 × 1 = **32**    |
+
+**Savings vs current: 34 ops, 32 B × 32 iters = 1 KB UB bandwidth.**
+Trade-off: 31 redundant `VCMP`s producing the same result (since C
+doesn't change). Pure compute waste.
+
+##### Optimization 2 — Hold C in a P-reg across iters (the optimum)
+
+Compute C once before the loop, **leave it in a P-register**, and
+have the loop body reference that P-reg directly. No UB buffer, no
+reload, no MOVVP.
+
+```asm
+;  pre-loop:
+VCMP.EQ.s32 P_C, V_kattn, V_zero, P_seed   ; once
+
+;  per iter:
+;  (just use P_C directly in POR / PAND etc.)
+```
+
+| Cost              | Current (γ)                | Optimization 2 (β) |
+|-------------------|---------------------------:|-------------------:|
+| Pre-loop ops      | 2 (VCMP + vstore)          | 1 (VCMP)           |
+| Per-iter ops      | 2 (VLDUI + MOVVP)          | 0                  |
+| UB bytes consumed | 32 (predicate buffer)      | 0                  |
+| P-regs reserved   | 0 (during loop body)       | 1 (held across loop) |
+| Total ops (T=32)  | 2 + 64 = **66**            | **1**              |
+
+**Savings vs current: 65 ops** — by far the biggest win, dwarfing
+optimization 1.
+
+The cost is one extra P-register held live throughout the loop. The
+assembly already uses P1, P2, P3, P4, P5; if A5 has at least 8
+predicate registers (typical), keeping a sixth live for C is
+trivially affordable.
+
+##### Why this isn't done — the same pattern as q_offset
+
+To do optimization 2, hivmc-a5 would need a pass that:
+1. Recognises `memref<32xi1, ub>` values that are loop-invariant
+2. Promotes them to a P-register that lives across the loop body
+3. Deletes the byte-store and rewrites every memref load to a use of the P-reg
+
+That's a "memref<i1, ub> → P-reg promotion" pass, structurally
+analogous to the "vbrc'd tile → brc_b32 streaming" pass that *did*
+fire for q_attn but didn't for q_offset. In both cases the limiting
+factor seems to be the same: hivmc-a5 lowers MLIR storage
+faithfully, and only rewrites it when a specific fusion pattern
+matches. Predicate-bytes-in-memref → P-reg apparently isn't one of
+the patterns it recognises.
+
+#### Summary table for all three "missed" optimizations
+
+| Value     | MLIR storage             | Optimal hardware        | hivmc-a5 picked              | Cost ratio |
+|-----------|--------------------------|-------------------------|------------------------------|-----------:|
+| q_attn    | 4096 B vbrc'd tile       | brc_b32 streaming, no tile | brc_b32 streaming ✓        | optimal    |
+| q_offset  | 4096 B vbrc'd tile       | brc_b32 streaming, no tile | full-VL streaming through tile | ≈ 80/64 = 1.25× |
+| C         | 32 B i1 memref           | P-reg held across loop  | UB byte buffer + reload      | **66 / 1 = 66×** |
+
+All three "leakages" share the same root: hivmc-a5 follows the
+MLIR's storage typing rather than aggressively promoting to
+register-resident forms. The C case is the most extreme — a 66×
+overhead for a 32-bit value — but also the most easily fixable,
+since the optimization (hold a single predicate in a P-reg across a
+loop) is structurally simple.
+
 ## 7. Per-iter hardware-op tally
 
 Compute portion of the body (excluding loads/stores/sync):
