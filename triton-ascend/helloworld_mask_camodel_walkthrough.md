@@ -208,9 +208,10 @@ Read-out: SCALAR pipe is doing most of the work (mostly address computation, sca
 
 Read-out:
 
-- **There's a 1024-iteration inner loop** — `CMPN` and `ENDLOOP` each fire exactly 1024 times. That's `M × N = 32 × 32` — Triton lowered the 2-D mask compute to a flat 1024-element scalar loop on this kernel, **not** a vectorized comparison.
-- **Scalar stores dominate cycle time**: 1,026 `ST_XD_XN_IMM` × avg 32 cyc = 33K cyc. Bigger than the vector compute itself (8.6K cyc on VECTOR pipe). For an int8 1024-element output that's ~32 cyc per byte stored — a lot, suggesting the stores aren't coalesced and each fires individually.
-- **Two heavy mnemonics**: `MOV_SRC_TO_DST_ALIGN` averages **299 cycles** — only 5 instances but they cost 1.5K cycles total. `BAR` averages 101 cycles (24 of them). These are the per-stage pipeline drains.
+- **The 2-D mask compute IS vectorized.** Five `VCMPV` / `VCMPVS` instructions at distinct PCs on the VECTOR pipe each fire once — these are the actual element-wise comparisons (`q_off <= k_off`, `q_attn == k_attn`, `k_attn == 0`, `q_off == k_off`, plus a fifth combining op). Together with the 84 `MOVEMASK` and 69 `MOVEV`/`MOVEVA` instructions they compute a packed 32×32 bitmap on the vector ALU.
+- **The 1024-iteration loop is the STORE phase, not the compare.** The loop body at PC 0x10d11344–0x10d11364 reads packed bytes from the mask bitmap and writes one int8 to the output tensor per iteration. `CMPN`'s 1024 instances are byte-generation `LE` compares between two scalar registers loaded from the packed mask data — they're producing the 0/1 byte to store, not doing the original mask comparison. (See §5.7 for the corrected reading and the loop-body assembler.)
+- **Stores dominate cycle time**: 1,026 `ST_XD_XN_IMM` × avg 32 cyc = 33K cyc, bigger than the entire vector pipe (8.6K cyc on 348 instrs). **This kernel is store-bound, not compute-bound** — the int8 unpacked-byte writes serialize the late part of the kernel timeline.
+- **Two heavy mnemonics**: `MOV_SRC_TO_DST_ALIGN` averages **299 cycles** — only 5 instances but they cost 1.5K cycles total. `BAR` averages 101 cycles (24 of them). These are per-stage pipeline drains.
 - **First-touch param-load cost is real**: 13 MTE2 DMA ops at 281 cyc/each = 3.7K cyc — first time the kernel reaches into PARA_BASE / GM, all latency is exposed.
 
 ### 5.4 Sample assembler — first 30 instructions (prologue)
@@ -290,6 +291,56 @@ The loop body shows what the mask kernel actually does at the instruction level:
 - **`0x10d1123c–0x10d1124c`** is a `SET_FLAG` / `WAIT_FLAG` ping-pong between VEC and SCALAR pipes — this is what makes the VECTOR pipe wait for SCALAR's address computation and vice versa.
 - **`0x10d11270`** is the loop end-check: compare loop counter against `0x2000` and branch back if not equal. This `CMP` fires 1024 times (matching the `ENDLOOP` count) — confirming the inner loop trip count.
 - **`MOVEV`** at the end moves the computed mask vector to its destination.
+
+### 5.7 Corrected reading: where the mask compute actually happens
+
+**An earlier version of §5.3 above claimed "Triton lowered the 2-D mask compute as a flat scalar loop, not a vectorized comparison" based on the 1024 `CMPN` instructions matching M×N. That was wrong — see the evidence here.**
+
+The 1024 `CMPN` at PC 0x10d1135c are inside a 1024-iteration loop, with operands that are **identical across all 1024 iterations** (`dtype:S64, XN:X6=0, XM:X7=0, cond_op:LE`). That tells you the CMPN isn't comparing source-data values — it's a scalar `LE` between two register-held bytes loaded from a packed mask bitmap.
+
+**The actual element-wise compares fire on the VECTOR pipe as `VCMPV` / `VCMPVS`:**
+
+```
+PC=0x10d1142c  VCMPV   VECTOR  dur=36   Dtype:F16, XD:X5, XN:X5, XM:X6, XT:X7=0x800080800010101
+PC=0x10d114f0  VCMPV   VECTOR  dur=53   Dtype:S32, XD:X6, XN:X6, XM:X11, XT:X7=0x1000080800010101
+PC=0x10d11504  VCMPVS  VECTOR  dur=60   Dtype:S32, XD:X8=0, XN:X9=0x2200, XM:X8=0
+PC=0x10d115e4  VCMPV   VECTOR  dur=28   Dtype:F16, XD:X9, XN:X9, XM:X0=0
+PC=0x10d11684  VCMPV   VECTOR  dur=53   Dtype:S32, XD:X4, XN:X4, XM:X3, XT:X7=0x1000080800010101
+```
+
+Five vector compares. `mask_fn(TYPE=1)` has four logical comparisons:
+
+```python
+triu_causal             = q_offset <= k_offset      # VCMPV  PC=0x10d1142c
+q_attn == k_attn                                     # VCMPV  PC=0x10d114f0
+k_attn == 0                                          # VCMPVS PC=0x10d11504  (compare-vector-with-scalar)
+q_offset == k_offset                                 # VCMPV  PC=0x10d115e4
+```
+
+The fifth `VCMPV` (at 0x10d11684) is likely the OR/combining op or a re-compare that closes the expression. Each of these compares operates on a vector register holding many elements at once.
+
+**The 1024-iteration loop body at PC 0x10d11344–0x10d11364** is the unpack-and-store phase:
+
+```
+0x10d11344  LOOP         FLOWCTRL  Total Iter Num: 1024              ← loop header (fires once)
+0x10d11348  ADD          SCALAR  2  X6 = X1(base1) + X0(offset)      ; address of packed mask byte 1
+0x10d1134c  ADD          SCALAR  2  X7 = X4(base2) + X0(offset)      ; address of packed mask byte 2
+0x10d11350  LD_XD_XN_IMM SCALAR 13  X6 = [X6]  (B64)                 ; load packed mask data 1
+0x10d11354  LD_XD_XN_IMM SCALAR 13  X7 = [X7]  (B64)                 ; load packed mask data 2
+0x10d11358  ADD_IMM      SCALAR  2  X0 = X0 + 8                      ; offset += 8 byte stride
+0x10d1135c  CMPN         SCALAR  2  X6 = (X6 <= X7) ? 1 : 0  (S64, LE) ← byte generation
+0x10d11360  ST_XD_XN_IMM SCALAR 20  [X5+...] = X6  (B8)              ← store ONE int8 byte
+0x10d11364  ENDLOOP      FLOWCTRL  Iter: 1024                        ← loop close
+```
+
+Each iteration: 2 ADDs (address) + 2 LDs (~13 cyc each, hot cache after first iter) + 1 ADD_IMM (counter) + 1 CMPN (byte gen) + 1 ST (~20 cyc) + 1 LOOP/ENDLOOP overhead.
+
+**The cost breakdown:**
+- 1024 stores × 20 cyc avg = **20,480 cycles** dedicated just to writing the 1024-byte int8 output
+- The vector compute pipe finished by ts ~27,330 (last `VCMPV` at PC 0x10d11684 dur=53)
+- The scalar unpack-store loop runs concurrently and dominates the late part of the timeline
+
+**Performance implication:** this kernel is **store-bound**, not compute-bound. If the int8 output were instead packed (e.g. one bit per element, written 8 elements at a time as an int8 byte), the store cost would drop ~8×. As-is, Triton emitted byte-by-byte stores and they're the limiter.
 
 ### 5.6 What's NOT visible
 
