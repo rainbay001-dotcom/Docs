@@ -25,7 +25,7 @@ Companions:
 | What it measures | Real cycles + real pipeline counters | Modeled cycles per the simulated chip variant |
 | Latency to first result | ~2 minutes | ≥5 minutes per kernel (sim is slow) |
 | Granularity | Per task, per pipeline (vec/scalar/MTE1-3/fixpipe) | Per-instruction execution trace (with post-parse) |
-| Mnemonics | No (decoder gated, see lowering doc §11) | Yes, via `op_gen.simulator.simulator` post-parse |
+| Mnemonics | No on the binary (BiSheng llvm-objdump decoder is gated) | **Yes** via `msopgen sim` post-parse of camodel dumps (§3.7-3.8) |
 | Hardware needed | Yes — actual NPU | No — works on any host with CANN installed |
 | Best for | Everyday perf work, real workloads | What-if scenarios, modeling different chips |
 
@@ -291,7 +291,130 @@ Camodel is genuinely cycle-accurate, which means **slow**. For successful end-to
 2. **Allow ≥5 minutes wall-clock per simple kernel.**
 3. Look for dump output in the working directory.
 
-### 3.6 The PyTorch / torch_npu trap — and why it doesn't actually save you
+### 3.6 The working path — `AscendOpKernelRunner` from `op_test_frame`
+
+**This is the answer for any precompiled `.npubin` kernel** (Triton-Ascend, AscendC, hand-rolled CCE — anything with a `.npubin`):
+
+```python
+import os, json, numpy as np
+import te.platform as tp
+tp.te_set_version("Ascend910B1", core_type="AiCore")
+from op_test_frame.common.ascend_tbe_op import AscendOpKernel, AscendOpKernelRunner
+
+KERNEL_DIR = "/path/to/triton_cache/<hash>"
+BIN_PATH   = f"{KERNEL_DIR}/add_kernel.npubin"
+
+# Triton's metadata JSON has snake_case fields; AscendOpKernel needs camelCase.
+# Synthesize a TIK-style JSON pointing to the same npubin.
+DUMP_DIR = "/tmp/triton_dumps"
+os.makedirs(DUMP_DIR, exist_ok=True)
+tik_json_path = f"{DUMP_DIR}/add_kernel_tik.json"
+with open(tik_json_path, "w") as f:
+    json.dump({
+        "kernelName": "add_kernel",
+        "blockDim":   8,                              # n / BLOCK
+        "magic":      "RT_DEV_BINARY_MAGIC_ELF_AIVEC", # ELF + AIV-only mix_mode
+        "workspace":  {"size": []},
+    }, f)
+
+n = 1024
+x = np.arange(n, dtype=np.float32)
+y = np.full((n,), 10.0, dtype=np.float32)
+op = AscendOpKernel(BIN_PATH, tik_json_path)
+op.set_input_info([
+    {"shape": (n,), "dtype": "float32", "value": x},
+    {"shape": (n,), "dtype": "float32", "value": y},
+])
+op.set_output_info([{"shape": (n,), "dtype": "float32"}])
+
+with AscendOpKernelRunner(
+    simulator_mode="ca",
+    soc_version="Ascend910B1",
+    simulator_lib_path="/usr/local/Ascend/cann-8.5.0/tools/simulator",
+    simulator_dump_path=DUMP_DIR,
+) as runner:
+    runner.run(op, inputs=[x, y], block_dim=8)
+```
+
+Run with the simulator's lib dir on `LD_LIBRARY_PATH` (no `LD_PRELOAD` needed — the runner sets that up internally):
+
+```bash
+export LD_LIBRARY_PATH=/usr/local/Ascend/cann-8.5.0/aarch64-linux/simulator/Ascend910B1/lib:$LD_LIBRARY_PATH
+python3 triton_camodel.py
+```
+
+Wall-clock: ~2 minutes for `vector_add` on Ascend910B1. CPU stays at ~280%; the 24-AIC simulation is multithreaded.
+
+**Output:** 32 non-zero per-core dumps (4 cores × 2 veccores × 4 dump types: `instr_log`, `instr_popped_log`, `dcache_log`, `ifu.icache_log`). Cubecores stay 0 because vector_add is AIV-only.
+
+The kernel runs across all 8 grid blocks distributed as 4 cores × 2 veccores. Each AIV gets one BLOCK=128 chunk.
+
+### 3.7 Parsing the dumps — `msopgen sim`
+
+The CANN-shipped wrapper for `op_gen.simulator.simulator`:
+
+```bash
+source /usr/local/Ascend/ascend-toolkit/latest/bin/setenv.bash
+mkdir -p trace_out
+for c in core0 core1 core2 core3; do
+  for sc in veccore0 veccore1; do
+    msopgen sim -c $c -subc $sc -d $DUMP_DIR -out trace_out
+  done
+done
+```
+
+(Don't pass `-reloc <kernel.npubin>` — that calls `llvm-objdump --save-aicore-bins` on the npubin, and the BiSheng llvm-objdump's hiipu64 decoder is gated. Skipping `-reloc` still gives you the trace, just without source-line annotations on each instruction.)
+
+Output: `trace_out/dump2trace_core{0..3}.json` — each one is a Chrome-trace JSON with **full per-instruction execution records** including mnemonic, register operand state, and pipeline (SCALAR / VECTOR / MTE2 / MTE3 / FLOWCTRL).
+
+### 3.8 Per-instruction view — what camodel actually shows
+
+Per veccore for the tiny `vector_add` kernel:
+
+| Core | Events | Span (cycles) | SCALAR | VECTOR | MTE2 | MTE3 |
+|---|---|---|---|---|---|---|
+| 0 | 68 | 1053 | 1757 | 36 | 1 | 0 |
+| 1 | 68 | 1049 | 1752 | 36 | 1 | 0 |
+| 2 | 68 | 1052 | 1763 | 36 | 1 | 0 |
+| 3 | 68 | 1048 | 1757 | 36 | 1 | 0 |
+
+(`Span` = max(ts+dur) − min(ts); per-pipe columns are total busy cycles. Pipes overlap, which is why pipe sums exceed span — VLIW-style parallelism.)
+
+Cross-check vs §2.1's msprof real-device numbers:
+- msprof: 12,658 AIV cycles for whole task → 12,658/8 grid blocks = **~1582 cycles/block**
+- camodel: **~1050 cycles/block span per veccore**
+
+Camodel is ~30% lower per block — the gap is the FFTS dispatch and AIV-AIC sync overhead that real hardware measures but the simulator skips. **Pipe-utilization ratios match closely**: VECTOR 36/1050 = 3.4% (camodel) vs vec 2.5% (msprof on real device).
+
+Sample disassembled instructions from `trace_out/dump2trace_core0.json`:
+
+```
+0x10d11000  MOV_XD_IMM   X29=0x7f80, IMM:0x7f80                   SCALAR  ts=688  dur=2
+0x10d11004  MOVK         X29=0x107f80, IMM:0x10, UIMM:0x1         SCALAR  ts=689  dur=2
+0x10d11008  MOV_XD_SPR   X15=0,  SPR:SYS_VA_BASE                  SCALAR  ts=689  dur=2
+0x10d1100c  ADD          X29=0x107f80, X29, X15  (S64)            SCALAR  ts=691  dur=2
+0x10d11010  MOV_XD_SPR   X15=0x19, SPR:COREID                     SCALAR  ts=695  dur=2
+…
+0x10d11074  DIV          X1=…, X6=…, X1     (S64)                 SCALAR  ts=1069 dur=21  ← prog_id divide
+0x10d11084  REM          X1=…, X1, X4       (S64)                 SCALAR  ts=1090 dur=21  ← prog_id mod
+0x10d110b0  CMP_IMM      X4=0x80, IMM:0x7f, GT                    SCALAR  ts=1116 dur=2   ← mask check
+0x10d110b4  JUMPC        Target=0x10d111d8, cond_flag=1           FLOWCTR ts=1117 dur=1
+…
+0x10d11214  SET_FLAG     PIPE:VEC, TRIGGER:MTE2, ID:0             VECTOR  ts=1484 dur=1   ← VEC→MTE2 sync
+0x10d1121c  WAIT_FLAG    PIPE:VEC, TRIGGER:MTE2, ID:0             MTE2    ts=1485 dur=1
+0x10d11234  SET_FLAG     (last)                                   VECTOR  ts=1741 dur=1
+```
+
+Yields (for the first time, publicly available without an internal Huawei build):
+
+- **Mnemonic-level disassembly of hiipu64 machine code** — yesterday's doc claimed this was gated. It isn't, via this path.
+- **Per-instruction cycle timestamps** with operand register state at each issue.
+- **Pipeline classification** (SCALAR / VECTOR / MTE2 / MTE3 / FLOWCTRL) per instruction.
+- **VLIW-style overlap visibility** — multiple instructions on different pipes at the same `ts`.
+
+The Chrome-trace JSON loads in `chrome://tracing` (or `ui.perfetto.dev`) for a visual timeline.
+
+### 3.9 The PyTorch / torch_npu trap — what NOT to do
 
 The natural path is `LD_PRELOAD=…/libruntime_camodel.so python vector_add.py`. **It crashes** at `torch_npu._C._npu_init()` with:
 
@@ -304,60 +427,15 @@ RuntimeError: SetPrecisionMode: NPU function error: at_npu::native::AclSetCompil
 
 Reason: camodel mocks the **runtime** layer (`libruntime_camodel.so`) but PyTorch-NPU also calls into the **GE / FE / OpCompiler** layers (`libge_runner.so`, `libfe.so`, etc.) which have no camodel mock. They try to talk to a real driver, fail at `AclSetCompileopt(ACL_PRECISION_MODE)`, and PTA crashes during `_npu_init`.
 
-So Python + `torch_npu` is a dead end under camodel. You need to bypass torch and call ACL/rt directly via ctypes or a C++ launcher.
+So Python + `torch_npu` is a dead end under camodel. Use `AscendOpKernelRunner` (§3.6) — it sidesteps all of PyTorch's GE/FE init and goes straight to `rtKernelLaunch`.
 
-### 3.7 Pure-ctypes launcher gets further — but kernel still doesn't execute
+### 3.10 What about a hand-rolled ctypes launcher (LD_PRELOAD style)?
 
-A custom Python ctypes launcher that loads `libascendcl.so` + `libruntime.so` and calls the ACL/rt layer directly **does** get past `_npu_init` and **does** trigger camodel attach (24 AICs banner, FuncCache config). Boilerplate:
+A direct ctypes launcher that LD_PRELOADs `libruntime_camodel.so` and calls `aclInit → aclrtSetDevice → aclrtCreateContext → aclrtSetCurrentContext → rtDevBinaryRegister → rtFunctionRegister → rtKernelLaunch` *appears* to set up everything correctly (every call returns 0, camodel banner appears) — but then **`rtKernelLaunch` returns 107002 = `ACL_ERROR_RT_CONTEXT_NULL`** despite the context being explicitly bound, and the per-core dump files all stay 0 bytes.
 
-```python
-import ctypes
-acl = ctypes.CDLL("libascendcl.so", mode=ctypes.RTLD_GLOBAL)
-runtime = ctypes.CDLL("libruntime.so", mode=ctypes.RTLD_GLOBAL)
-acl.aclInit(None)                                 # ret=0
-acl.aclrtSetDevice(0)                             # ret=0 (camodel banner now appears)
-ctx = ctypes.c_void_p()
-acl.aclrtCreateContext(ctypes.byref(ctx), 0)      # ret=0
-acl.aclrtSetCurrentContext(ctx)                   # ret=0
+Root cause: a TLS-slot mismatch. `aclrtSetCurrentContext()` writes ACL's TLS slot; the camodel-mocked `rt*` calls read a *different* slot that the ACL layer never populates. Going pure-rt (`rtCtxCreate` directly) returns `507033` (`ACL_ERROR_INVALID_DEVICE`) because the camodel's bookkeeping requires the ACL-layer init.
 
-# Register the npubin
-class rtDevBinary_t(ctypes.Structure):
-    _fields_ = [("magic", ctypes.c_uint32), ("version", ctypes.c_uint32),
-                ("data", ctypes.c_void_p), ("length", ctypes.c_uint64)]
-buf = ctypes.create_string_buffer(open("add_kernel.npubin","rb").read())
-devbin = rtDevBinary_t(0x41415246, 0, ctypes.cast(buf, ctypes.c_void_p), len(buf.raw))
-hdl = ctypes.c_void_p()
-runtime.rtDevBinaryRegister(ctypes.byref(devbin), ctypes.byref(hdl))   # ret=0
-stub = ctypes.c_size_t(0)
-runtime.rtFunctionRegister(hdl, ctypes.byref(stub),
-                           b"add_kernel", ctypes.c_char_p(b"add_kernel"), 0)  # ret=0
-```
-
-Up to this point everything succeeds. But:
-
-```python
-# These all fail with 107002 = ACL_ERROR_RT_CONTEXT_NULL
-runtime.rtGetC2cCtrlAddr(...)      # 107002
-runtime.rtKernelLaunch(...)        # 107002
-runtime.rtStreamSynchronize(...)   # 107002
-```
-
-Result: kernel never dispatches onto a simulated core. All 288 per-core dump files (`core{0..23}.{cubecore0,veccore{0,1}}.{instr_log,instr_popped_log,dcache_log,ifu.icache_log}.dump`) are written **but stay 0 bytes** — `op_gen.simulator.simulator -d <dump-dir> -reloc add_kernel.npubin` therefore has nothing to parse.
-
-### 3.8 Why kernel launch fails — TLS / context binding mismatch
-
-The camodel runtime mock (`libruntime_camodel.so`, LD_PRELOAD'd) and the user-side `libascendcl.so` use **different TLS slots for the current context**. `aclrtSetCurrentContext()` writes the ACL slot; the camodel-interposed `rt*` calls read a different slot that ACL never populates. The runtime sees "no current context" and returns `ACL_ERROR_RT_CONTEXT_NULL` (107002).
-
-Bypassing ACL with the rt-level API doesn't help either — `rtCtxCreate` (camodel-mocked) returns `507033` (`ACL_ERROR_INVALID_DEVICE`) when called without prior aclInit/aclrtSetDevice, because camodel's bookkeeping requires the ACL-layer init for some reason.
-
-The `[DRVSTUB_LOG] sendSwapBuf:sq:0..3` lines that *do* appear in the log show that **some** submit-queue activity reaches the camodel driver-stub — but kernel dispatch happens after the failing context-resolve path, so the cores never actually execute the binary.
-
-**Workarounds (none tried):**
-1. Patch `libruntime_camodel.so` to share TLS slot with `libascendcl.so` — needs reverse-engineering the offset.
-2. Find an older CANN release where the rt-level mock is more complete (camodel was historically used for AscendC kernel debugging).
-3. Use a vendor-provided AscendC sample under camodel — Huawei's internal `ace_sample` / `aclnn` kits may include a working camodel-launch example. Public CANN-8.5.0 doesn't ship one.
-
-**Practical recommendation:** for cycle data, use real-device `msprof` (§2). It's fast, accurate, and works today without any of this. Camodel under shipped CANN-8.5.0 is gated behind the TLS mismatch above and would need either an internal CANN build or substantial reverse-engineering to bring up.
+`AscendOpKernelRunner` (§3.6) sidesteps this because it loads the simulator libs in the right order via `op_test_frame/runtime/rts_api.py`'s `_dll_simulator_so()` — that helper knows which TLS slot the camodel actually reads. Don't reinvent it via raw ctypes; use the runner.
 
 The dump format is a per-AIC binary stream that `op_gen.simulator.simulator` can post-parse:
 

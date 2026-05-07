@@ -38,7 +38,7 @@ Tested on:
 
 What's NOT in the dump pipeline (gated/internal):
 - LLVM IR (the BiSheng compiler uses LLVM 15 internally, but doesn't surface `.ll` as a Triton dump artifact).
-- AICore mnemonic disassembly — see §6 for what's publicly available.
+- AICore mnemonic disassembly via `llvm-objdump` — gated. **But available indirectly** by running the kernel under camodel and post-parsing the per-core trace dumps with `msopgen sim`; see [`ascend_cycle_profiling.md`](ascend_cycle_profiling.md) §3.6-3.8.
 
 ## 2. Reproduction
 
