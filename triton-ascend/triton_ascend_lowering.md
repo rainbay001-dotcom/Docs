@@ -373,7 +373,7 @@ For our purposes, the externally-visible picture stops at: `.text` is 740 bytes 
 - Internal parse_objdump.py (uses `--save-aicore-bins`): `/usr/local/Ascend/cann-8.5.0/python/site-packages/op_gen/simulator/parse_objdump.py`
 - `ccec --help` — full CCE driver options including `--cce-aiv`, `--cce-hwloops`, `--cce-mask-opt`, `--cce-aicpu-arch`
 - Hello-world sources used here: `/home/Ray/triton_hello/` on 192.168.25.218
-- Companion: [`umdk_get_tp_list_prewarm.md`](umdk_get_tp_list_prewarm.md) (different topic — UDMA cache — but same Ascend hardware family)
+- Companion: [`umdk_get_tp_list_prewarm.md`](../UMDK/umdk_get_tp_list_prewarm.md) (different topic — UDMA cache — but same Ascend hardware family)
 
 ## 11. msdebug + camodel: how far you can actually push disassembly
 

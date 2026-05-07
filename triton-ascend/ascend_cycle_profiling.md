@@ -4,7 +4,7 @@ _Last updated: 2026-05-06._
 
 How to get cycle counts and per-pipeline utilization for a kernel running on Ascend AICore. Two paths: real-device profiling via `msprof` (works today, fast), and cycle-accurate simulation via the camodel runtime (works once you know the activation trick, slow).
 
-Source of the worked example: the `vector_add` Triton kernel from [`umdk_triton_ascend_lowering.md`](umdk_triton_ascend_lowering.md). The same techniques work for any Ascend kernel — Triton-Ascend, AscendC, hand-written CCE — as long as you can launch it from a Python or C process.
+Source of the worked example: the `vector_add` Triton kernel from [`triton_ascend_lowering.md`](triton_ascend_lowering.md). The same techniques work for any Ascend kernel — Triton-Ascend, AscendC, hand-written CCE — as long as you can launch it from a Python or C process.
 
 Tested on:
 - 192.168.25.218 container (port 1234)
@@ -13,7 +13,7 @@ Tested on:
 - Target: Ascend910 (chip phy-id 4 was free at run time)
 
 Companions:
-- [`umdk_triton_ascend_lowering.md`](umdk_triton_ascend_lowering.md) — the lowering pipeline this doc complements
+- [`triton_ascend_lowering.md`](triton_ascend_lowering.md) — the lowering pipeline this doc complements
 - [`reference_npu_server.md`](../../../.claude/projects/-Users-ray/memory/reference_npu_server.md) — connection + driver-libs `LD_LIBRARY_PATH` setup (memory)
 
 ---
@@ -374,4 +374,4 @@ python3 -m op_gen.simulator.simulator \
 - `/usr/local/Ascend/cann-8.5.0/python/site-packages/op_gen/simulator/simulator.py` — entry point.
 - Driver lib path setup: see [`reference_npu_server.md`](memory) and [`reference_npu_servers_all.md`](memory).
 - The Triton-Ascend kernel used as worked example: `/home/Ray/triton_hello/vector_add.py` on 218.
-- Lowering pipeline context (TTIR → TTAdapter → npubin): [`umdk_triton_ascend_lowering.md`](umdk_triton_ascend_lowering.md).
+- Lowering pipeline context (TTIR → TTAdapter → npubin): [`triton_ascend_lowering.md`](triton_ascend_lowering.md).
