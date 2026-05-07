@@ -487,9 +487,140 @@ row-invariant by construction).
 | q_offset  | `q_offset[:, None]`      | constant       | **2**              | full-VL stream, tile kept |
 | k_offset  | `k_offset[None, :]`      | varies         | **2**              | full-VL, `#p=0`         |
 
-Net: the bool MLIR's 4 broadcast ops + f16 detour ladder shrink to
-load-mode flags + a single no-op PXOR. UB footprint drops by roughly
-4 × 4096 B ≈ 16 KB just for the eliminated broadcast tiles.
+Net: 3 of 4 i32 broadcast tiles are eliminated (q_attn, k_attn,
+k_offset — the latter two trivially, since their tiles are just one
+row replicated 32× and any single row can be read directly from the
+source). The q_offset tile is kept-and-streamed. UB footprint drop
+is ≈ 3 × 4096 B = 12 KB just from the eliminated i32 broadcast
+tiles, plus the f16 broadcast tile and i64 broadcast tile that the
+MLIR's Phase 6/8 build but hivmc-a5 collapses (further savings).
+
+### 6.5 Visual comparison — q_attn (brc_b32) vs q_offset (full-VL)
+
+#### UB layout before the loop runs
+
+```
+q_attn path  (brc_b32 streaming — tile ELIMINATED):
+
+  S68 ────────┐
+              ▼
+  ┌──────────────────────────────────┐
+  │ q_attn source: 32 × i32 = 128 B  │   ◄── only this exists in UB
+  │ [q[0]][q[1]][q[2]] … [q[31]]     │
+  └──────────────────────────────────┘
+                                                                    
+  (no 4096-byte 32×32 broadcast tile is built)
+
+
+
+q_offset path  (full-VL streaming — tile KEPT):
+
+  ┌──────────────────────────────────┐
+  │ q_offset source: 32 × i32 = 128 B│   (small, not directly read by V3)
+  └──────────────────────────────────┘
+                  │
+                  │  pre-loop `vbrc` populates ↓
+                  ▼
+  S69 ────────┐
+              ▼
+  ┌──────────────────────────────────┐
+  │ q_offset 32×32 i32 tile = 4096 B │   ◄── V3 streams through this
+  │ row 0 : [q[0]][q[0]] … [q[0]]   │
+  │ row 1 : [q[1]][q[1]] … [q[1]]   │
+  │ row 2 : [q[2]][q[2]] … [q[2]]   │
+  │   …                              │
+  │ row 31: [q[31]][q[31]]…[q[31]]  │
+  └──────────────────────────────────┘
+```
+
+#### Per-iter data flow
+
+```
+q_attn  (V4 via brc_b32, +4 B/iter):
+
+  iter i:
+    ┌──┐ read 4 B at [S68]
+    │q[i]│ ──────► broadcast ──────►  V4 = [q[i],q[i],q[i],…,q[i]]
+    └──┘                              (64 lanes, all equal)
+         S68 ← S68 + 4   (advance to next scalar)
+
+
+
+q_offset  (V3 via full-VL, +512 B/iter):
+
+  iter i:
+    ┌──────────────────────────────┐
+    │ row i of tile:               │ read 256 B at [S69]
+    │ [q[i],q[i],…,q[i], pad,pad…] │ ──────►  V3 = [q[i],…,q[i], pad,…]
+    └──────────────────────────────┘          (64 lanes, first 32 equal)
+         S69 ← S69 + 512   (advance past row + alignment gap)
+```
+
+#### Compute graph — why "consumers" matter
+
+```
+q_attn   (one consumer):                  q_offset  (two consumers):
+
+       V4 (q[i] brc)                              V3 (q[i] from tile row)
+            │                                       ╲          ╲
+            ▼                                        ╲          ╲
+        VCMP.EQ ─► P4 (B_row)                     VCMP.LE     VCMP.EQ
+            ▲                                       /            /
+            │                                      /            /
+       V5 (k_attn row)                          V2 (k_offset row + S8)
+                                                   /            /
+                                                  ▼            ▼
+                                               P5 (A_row)   P4 (F_row)
+```
+
+Single arrow vs fan-out — V3 feeds **two** compares per iter, V4
+feeds one.
+
+#### Decision diagram — break-even
+
+```
+                   number of consumers per broadcast value
+                       1            2            3+
+                       │            │             │
+                       ▼            ▼             ▼
+  brc_b32          ┌──────┐    ┌──────┐      ┌──────┐
+  per-iter:        │ WIN  │    │ tie  │      │ LOSE │
+  4 B load + N     │      │    │      │      │      │
+  computes         └──────┘    └──────┘      └──────┘
+                                  
+  full-VL          ┌──────┐    ┌──────┐      ┌──────┐
+  through tile:    │ LOSE │    │ tie  │      │ WIN  │
+  256 B/iter +     │      │    │      │      │      │
+  4096 B pre-loop  └──────┘    └──────┘      └──────┘
+
+  Tiebreaker at 2 consumers: does the broadcast tile already exist
+  for some other lowering reason (e.g. i32→i64 widen)? If yes → full-VL.
+  q_offset hits this tiebreaker on the i64 widen path.
+```
+
+#### Why the tile is "free" for q_offset
+
+The q_offset tile isn't free in absolute terms — it costs 4096 B of
+UB and one pre-loop `vbrc` op. But hivmc-a5 sees it as free
+**relative to brc_b32**, because the MLIR commits to building a
+parallel q_offset tile *anyway* for the i64-widen + scalar-causal
+path:
+
+```
+MLIR Phase 1:           vbrc q_offset 32×1 i32  → 32×32 i32 tile  (4096 B at UB c0)
+MLIR Phase 2:           vcast    32-elem        → 32-elem i64
+MLIR Phase 6:           vbrc i64-row-vector     → 32×32 i64 tile  (8192 B at UB c19488)
+MLIR Phase 8:           scalar scf.for          → 1024×i8 result tile
+
+      [hivmc-a5 rewrites Phase 8 to a vector compare,
+       so the i64 tile becomes dead — but the i32 32×32 tile remains
+       useful as the source for the streaming full-VL load.]
+```
+
+The i32 broadcast tile, originally a stepping stone for the i64
+path, becomes the storage that V3 streams through. q_attn has no
+analogous secondary use, so its tile gets eliminated outright by
+brc_b32.
 
 ## 7. Per-iter hardware-op tally
 
