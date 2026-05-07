@@ -869,6 +869,10 @@ After these 104 unique passes, control passes to **hivmc** for the final lowerin
 
 ## 15. The hivmc stage — opaque from outside
 
+**`hivmc` = HIVM Compiler.** The `c` suffix follows the `clang`/`rustc` naming convention. `--help` banner literally says `OVERVIEW: HIVM Compiler`.
+
+"HIVM" is **not officially documented** in any public spec we have seen. Plausible expansion based on bishengir-opt's help references ("BiShengHIR HIVM Tensor compilation"): **Huawei Intermediate Vector/Matrix** — the lowest MLIR abstraction layer between BiSheng's HFusion dialect and LLVM IR. The dialect's ops cover both vector (AIV) and cube/matrix (AIC) compute.
+
 `hivmc` (`/usr/local/Ascend/cann-8.5.0/tools/bishengir/bin/hivmc`, version `0.1.0 (e4e2ba9841d1 2026-01-16)`, 102 MB) is the third compiler stage invoked as a subprocess of `bishengir-compile`. **Despite its name suggesting an LLVM-only role, hivmc takes MLIR as input** — specifically `module.hivm.opt.mlir`, the post-`optimize-hivm-pipeline` HIVM-dialect snapshot. It then finishes the MLIR lowering (HIVM → LLVM dialect → LLVM IR) and emits hiipu64 machine code.
 
 The actual command bishengir-compile runs:

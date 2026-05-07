@@ -281,17 +281,56 @@ The ~70 unique passes inside `--optimize-hivm-pipeline`:
 
 ## Stage 6 — Inside hivmc (HIVM → LLVM → machine code)
 
-**Tool:** `hivmc` — closed binary, no external introspection.
-**Format internally:** HIVM MLIR → LLVM dialect MLIR → LLVM IR → ELF machine code.
-**File output:** `mask_kernel.npubin` (Triton convention) or `mask_kernel.o` (raw bishengir-compile output).
+### 6.1 What hivmc is
 
-We can't see what hivmc does inside. What we know:
-- Input: `module.hivm.opt.mlir` (we captured this)
-- Output: ELF64 with `e_machine = 0x1029` ("hiipu")
-- Internal pipeline references include `convert-hivm-to-llvm`, `convert-hir-to-lir`, machine-code generation (LLVM backend)
-- Target-specific lowering happens HERE — instruction selection, register allocation, scheduling
+**Verified properties:**
+
+| Property | Value | How verified |
+|---|---|---|
+| Path | `/usr/local/Ascend/cann-8.5.0/tools/bishengir/bin/hivmc` (symlinked from `aarch64-linux/bin/`) | `ls`, `readlink` |
+| Size | 102 MB | `ls -la` |
+| Version | `hivmc 0.1.0 (e4e2ba9841d1 2026-01-16)` | `hivmc --version` |
+| Help banner | `OVERVIEW: HIVM Compiler` | `hivmc --help` |
+| Built on | LLVM 15 | `--mlir-*` and LLVM `cl::opt` flags both surface |
+| Input | MLIR with HIVM dialect (`module.hivm.opt.mlir`, ~6.5 KB for our `mask_fn`) | wrapper trick captured the file |
+| Output | ELF64, `e_machine = 0x1029` (hiipu64) | `readelf -h` on `.npubin` |
+| Invoked by | `bishengir-compile` as a subprocess | exec-line surfaces in error messages |
+
+**`hivmc` = HIVM Compiler.** The `c` suffix follows the `clang`/`rustc` naming convention. "HIVM" is **not officially documented** in any public spec we have. Plausible expansion based on bishengir-opt's help references ("BiShengHIR HIVM Tensor compilation"): **Huawei Intermediate Vector/Matrix** dialect — the lowest MLIR abstraction layer between HFusion and LLVM IR. The dialect's ops cover both vector (AIV) and cube/matrix (AIC) compute.
+
+### 6.2 Where it sits relative to `bishengir-compile`
+
+| | `bishengir-compile` | `hivmc` |
+|---|---|---|
+| Input | TTAdapter-level MLIR (linalg/tensor/memref) | HIVM-dialect MLIR (post-optimization) |
+| Output | `.npubin` (final ELF) — but actually delegates to hivmc internally | `.npubin` (final ELF) |
+| Pipeline | TTAdapter → HFusion → HIVM (~270 MLIR passes; introspectable via `bishengir-opt --mlir-print-ir-after-all`) | HIVM → LLVM dialect → LLVM IR → machine code (closed; CLI dump flags all silent or rejected — see [`triton_ascend_lowering.md`](triton_ascend_lowering.md) §15) |
+| Target awareness | passes `--target=` flag through to hivmc | reads target spec from `dlti.target_system_spec` in input MLIR |
+| Why both exist | bishengir-compile owns target-agnostic high-level lowering; hivmc owns target-specific machine-code generation with HW-aware instruction-selection / register-alloc / scheduling tables |
+
+Concretely: `bishengir-compile` is "MLIR-pass orchestration"; `hivmc` is "what would be the LLVM backend for hiipu64, plus a few HIVM-dialect-cleanup passes on its way in."
+
+### 6.3 What we know about the internal pipeline
+
+We can't introspect hivmc's internals (CLI dump flags are gated — see [`triton_ascend_lowering.md`](triton_ascend_lowering.md) §15.1 for the table of dead flags). What we can infer from naming and operand patterns:
+
+- Input arrives in HIVM dialect with explicit memory scopes (`#hivm.address_space<gm/ub/l1/...>`)
+- Lowering: `convert-hivm-to-llvm` (referenced in bishengir-opt's pass list, may run inside hivmc)
+- LLVM IR generation, then standard LLVM backend pipeline (instruction selection, register allocation, scheduling, machine-code emission)
+- ELF output with `e_machine = 0x1029` ("hiipu64" — Huawei IPU64)
+- Target-specific lowering happens HERE — instruction selection, register allocation, scheduling per `--target=` value
 
 The `--target=Ascend910_9362` vs `--target=Ascend950DT_9572` flag passed to `bishengir-compile` propagates through `bishengir-opt`'s pipelines into hivmc, where it controls the LLVM backend's instruction selection table — which is why we get different machine code for the same `.ttadapter` input.
+
+### 6.4 Why hivmc is the only opaque step
+
+The rest of the pipeline is reasonably introspectable:
+- Stages 1–3 are cached as files on disk (`.ttir`, `.ttadapter`)
+- Stages 4–5 dump via `bishengir-opt --mlir-print-ir-after-all` (270 IR snapshots)
+- Stage 5b (HIVM-opt snapshot) recoverable via the hivmc-wrapper trick
+- Stage 7 (final ELF) recoverable as bytes; mnemonic disassembly via camodel + `msopgen sim`
+
+Only stage 6 — what hivmc does between receiving the HIVM-MLIR and emitting machine code — stays closed. CANN's `--print-after-all`/`--mlir-print-ir-after-all`/`--debug-pass=*`/etc. on hivmc are either rejected at parse or accepted and silently ignored. The PTO-ISA repo's CostModel (Q2 2026 target) may eventually expose some of this but isn't shipping yet.
 
 ---
 
