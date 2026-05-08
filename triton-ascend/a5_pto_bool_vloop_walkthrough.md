@@ -1139,6 +1139,68 @@ VADDS.s32 V2, V2, S8, P1   ; computed once
 
 **Saving: 62 ops** + 32 × 256 B = **8 KB of UB read bandwidth**.
 
+##### Common confusion — "if each iter is one row, shouldn't V2 advance?"
+
+A natural question at this point: *each VLOOP iter computes a
+different output row, so why isn't V2 bumped to "the next row's
+data" each iter?* The answer is that `k_offset` is a **1D 32-element
+array** — there is no "next row of k_offset data" to advance to,
+because k_offset has no rows of its own.
+
+Two very different "rows" are in play, and conflating them is what
+produces the confusion:
+
+```
+output rows (32 of them)              source data layout
+───────────────                       ──────────────────
+The 32 rows of the 32×32 mask         q_offset, k_offset, q_attn, k_attn
+result we are computing.              are each a 32-element 1D array.
+The VLOOP iterates over THESE.        ← no rows of their own.
+```
+
+The Triton broadcast `[None, :]` makes a 1D row vector behave as if
+replicated to every output row:
+
+```python
+k_offset[None, :]    # shape (1, 32) → broadcasts to (32, 32)
+                     # every output row sees the SAME 32 values
+```
+
+So computing output row `i` uses k_offset values `[0..31]`; computing
+output row `i+1` also uses k_offset values `[0..31]` — *literally
+the same 32 numbers*. There's nothing to "bump" — the same data is
+needed every iter.
+
+```
+                       j (column, lanes within one vreg)
+                       0     1     …     31
+                     ┌────────────────────────┐
+output row  0 needs: │ k[0]  k[1]  …  k[31]   │
+output row  1 needs: │ k[0]  k[1]  …  k[31]   │     ◄── identical
+output row  2 needs: │ k[0]  k[1]  …  k[31]   │       every row
+       …             │       …                │
+output row 31 needs: │ k[0]  k[1]  …  k[31]   │
+                     └────────────────────────┘
+```
+
+V2 with `#p=0` correctly captures this. The `VADDS V2 += S8` inside
+the body is also constant (S8 doesn't change between iters), so V2's
+contents are bit-identical every iter. Hoisting both ops outside the
+loop is safe because they would re-produce the same V2 value every
+time anyway.
+
+This is the same row-vs-column-broadcast asymmetry from §6.6:
+
+| Triton form | Per-row need | Hardware behavior |
+|---|---|---|
+| `[:, None]` (q_offset, q_attn) — column-broadcast | a *different* scalar each iter (`q_offset[i]`, `q_attn[i]`) | V3, V4 **advance** per iter |
+| `[None, :]` (k_offset, k_attn) — row-broadcast | the *same* 32-element row every iter | V2, V5 **stay constant** (`#p=0`) |
+
+The intuition "load next row each iter" applies to the
+`[:, None]` operands. For `[None, :]` operands there is no "next
+row of data" — broadcasting along the row axis means the entire
+1D source array is the data for every output row.
+
 #### Optimization 5 — Hoist V5 (k_attn row) out of the loop
 
 V5 is loaded with `#p=0` and never written inside the body. Same
