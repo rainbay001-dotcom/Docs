@@ -424,6 +424,153 @@ So §11's question (padded vs packed-within-vreg vs replicated)
 remains open for what's in the upper 32 lanes during one VCMP, and
 the resolution paths in §11 still apply.
 
+### 3.2.1 Why two passes — launcher unroll-by-2 over key blocks
+
+The most consistent explanation for the two-pass body is that
+`bishengir-compile-a5` **unrolled the launcher's loop over key
+blocks by a factor of 2** during inlining. Each VLOOP iteration
+processes one query row against **two** key blocks, sharing the
+expensive query-side state across the two unrolled bodies.
+
+#### The launcher pattern, before and after unrolling
+
+A typical Triton-Ascend attention-mask launcher iterates over key
+blocks for one query block:
+
+```
+BEFORE UNROLLING (conceptual launcher form)
+──────────────────────────────────────────────────────────────────
+
+for k_block in [0, 1, 2, …, N−1]:                ◄── outer loop over key blocks
+    load k_attn[k_block], k_offset[k_block], precompute C[k_block]
+    for i in [0..31]:                            ◄── inner loop over query rows
+        load q_attn[i]                            ← ONE load per (k_block, i)
+        compute mask[k_block][i, :]
+        store output[k_block][i]
+
+
+Cost: N × 32 = 32N q_attn loads total
+```
+
+After unrolling the *outer* loop by 2 and fusing the inner-loop
+bodies, the compiler produces the structure we see in the assembly:
+
+```
+AFTER UNROLLING (matches the captured assembly)
+──────────────────────────────────────────────────────────────────
+
+for k_pair in [0, 2, 4, …, N−2]:                 ◄── outer loop over PAIRS of key blocks
+    load k_block_A data: k_attn[A], k_offset[A], C[A]
+    load k_block_B data: k_attn[B], k_offset[B], C[B]
+    for i in [0..31]:                            ◄── this is the VLOOPV2 we see
+        load q_attn[i]                            ← ★ ONE load shared by both passes
+        ┌─ pass A ─────────────────────────┐
+        │ compute mask[k_block_A][i, :]    │
+        │ store output[k_block_A][i]       │
+        └──────────────────────────────────┘
+        ┌─ pass B ─────────────────────────┐
+        │ compute mask[k_block_B][i, :]    │  ◄── reuses q_attn[i] in V4 from pass A
+        │ store output[k_block_B][i]       │
+        └──────────────────────────────────┘
+
+
+Cost: (N/2) × 32 × 1 = 16N q_attn loads total      (HALF the unrolled-version cost)
+```
+
+The `for i in [0..31]` is the actual VLOOP we see; the outer pair
+loop lives in code we haven't disassembled.
+
+#### Data-flow per VLOOP iter — what's shared vs duplicated
+
+```
+                            ╔══════════════════════════════════════════╗
+                            ║       per-iter shared resources           ║
+                            ║   (loaded/computed ONCE per iter)         ║
+                            ║                                           ║
+                            ║   V4  =  q_attn[i]   (brc_b32, +4 B)      ║
+                            ║   S8  =  pid · BLOCK   (pre-loop scalar)  ║
+                            ║   V0, V1 (preloaded constants)            ║
+                            ║   P1, P2 (preloaded predicates)           ║
+                            ╚══════════════════════════════════════════╝
+                                  │                       │
+                                  │ V4 used by both       │
+                                  ▼                       ▼
+       ┌──────── PASS A ───────────────┐    ┌──────── PASS B ───────────────┐
+       │  KEY BLOCK A                  │    │  KEY BLOCK B                  │
+       │                               │    │                               │
+       │  V2  ← VLDI [S6]    k_offset_A│    │  V2  ← VLDI [S14]   k_offset_B│
+       │  V3  ← VLDI [S69]   q_off str │    │  V3  ← VLDI [S66]   q_off str │
+       │  V5  ← VLDI [S10]   k_attn_A  │    │  V5  ← VLDI [S16]   k_attn_B  │
+       │  ULD0 ← VLDAS [S12] C_A bytes │    │  ULD0 ← VLDAS [S18] C_B bytes │
+       │                               │    │                               │
+       │  VADDS V2 += S8               │    │  VADDS V2 += S8               │
+       │  VCMP.LE  P5 ← (V3, V2)       │    │  VCMP.LE  P5 ← (V3, V2)       │
+       │  VCMP.EQ  P4 ← (V4, V5) ◄─────┤────┤────► VCMP.EQ  P4 ← (V4, V5)   │
+       │            ▲ V4 from above    │    │     ▲ V4 REUSED, no reload    │
+       │  VLDUI V6, MOVVP P3 ← C_A     │    │  VLDUI V6, MOVVP P3 ← C_B     │
+       │  POR/PAND/POR boolean algebra │    │  POR/PAND/POR boolean algebra │
+       │  VSEL.b32 V2 ← P3 ? V1 : V0   │    │  VSEL.b32 V2 ← P3 ? V1 : V0   │
+       │  VSTI V2, [S67]   output_A[i] │    │  VSTI V2, [S65]   output_B[i] │
+       └───────────────────────────────┘    └───────────────────────────────┘
+```
+
+Side-by-side, the structural symmetry is exact. Every key-side
+resource (k_attn, k_offset, precomputed C, output buffer) gets its
+own copy per pass; every query-side resource (V4, S8, predicate
+seeds, constant tiles) is loaded once at the top of the iter and
+referenced by both passes.
+
+#### Why V4 specifically — the structural test
+
+V4 is the **only** operand that satisfies both:
+1. *Varies per iter* — so it cannot be hoisted out of the loop entirely.
+2. *Is identical in both passes within one iter* — so it CAN be shared between them.
+
+| Operand            | Varies per iter? | Identical across passes? | Sharable? |
+|--------------------|:---:|:---:|:---:|
+| **q_attn (V4)**    | yes | **yes** (same q_attn[i] feeds both key blocks) | ✓ shared in asm |
+| q_offset (V3)      | yes | no — pass A from `[S69]`, pass B from `[S66]` | ✗ |
+| k_attn   (V5)      | no  | no — different key block each pass            | ✗ |
+| k_offset (V2)      | no  | no — different key block each pass            | ✗ |
+| precomputed C (P3) | no  | no — different per key block                  | ✗ |
+
+V4 is the unique row with "yes" in both columns. The fact that the
+assembly does NOT reload V4 between passes is the strongest
+single-instruction evidence that the unroll axis is "key block,"
+not anything else.
+
+#### What this rules out
+
+| Hypothesis | Why ruled out |
+|---|---|
+| Two halves of one wider tile (32×64 instead of 32×32) | Same C should serve both halves; assembly has different VLDAS sources `[S12]` vs `[S18]`. |
+| Two adjacent rows packed in one vreg's 64 lanes (Layout B from §11) | Same C should serve both rows; same V4 should *not* (q_attn[i] ≠ q_attn[i+1]). Both checks fail. |
+| Pure ILP-driven unroll on identical data | Pure ILP unroll wouldn't reach into different output buffers (`[S65]` vs `[S67]`). |
+
+#### What's still Tier-B
+
+The launcher source isn't in our hand, so we can't verify directly
+that the outer loop iterates over key blocks (vs. some other axis
+like attention head, or token-batch position). But the structural
+fingerprint — shared query-side, distinct key-side, distinct output
+buffers, distinct precomputed-C — matches the unroll-over-key-blocks
+explanation and rules out the alternatives I can think of.
+
+#### Why this is a *deliberate* optimization, not a missed one
+
+This is the inverse of the "missed optimizations" in §6.6/§6.7/§6.8.
+Here `hivmc-a5` (or its driver) actively did the right thing:
+
+- **Saved 16N q_attn loads** by sharing V4 across passes.
+- **Hid load latency** by interleaving pass A's VCMPs with pass B's
+  VLDIs (instruction-level parallelism on the load and compute pipes).
+- **Amortized VLOOP-boundary overhead** over twice as many key blocks.
+
+It's the same idea as classical "unroll-and-jam" applied at the
+launcher-loop level. The presence of this optimization tells us
+hivmc-a5 *can* do non-trivial loop transformations — it just isn't
+applying them to all the cases we identified as missed.
+
 ### 3.3 The post-loop `VDUPS.b32` (line 39)
 
 ```asm
