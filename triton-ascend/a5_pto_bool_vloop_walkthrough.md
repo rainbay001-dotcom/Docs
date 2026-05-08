@@ -600,6 +600,131 @@ launcher-loop level. The presence of this optimization tells us
 hivmc-a5 *can* do non-trivial loop transformations — it just isn't
 applying them to all the cases we identified as missed.
 
+### 3.2.2 Worked example — 4 query blocks × 4 key blocks with unroll-by-2
+
+To make the unrolling concrete, scale the toy example up to a small
+attention launch: 4 query blocks × 4 key blocks, each block holding
+4 elements. Total work: **16 mask tiles**, each 4 × 4 = 16 mask
+elements, so **256 mask elements** to compute.
+
+```
+                        K[0]      K[1]      K[2]      K[3]
+                      ┌──────┬──────┬──────┬──────┐
+                Q[0]  │M[0,0]│M[0,1]│M[0,2]│M[0,3]│
+                      ├──────┼──────┼──────┼──────┤
+                Q[1]  │M[1,0]│M[1,1]│M[1,2]│M[1,3]│       16 mask tiles
+                      ├──────┼──────┼──────┼──────┤
+                Q[2]  │M[2,0]│M[2,1]│M[2,2]│M[2,3]│
+                      ├──────┼──────┼──────┼──────┤
+                Q[3]  │M[3,0]│M[3,1]│M[3,2]│M[3,3]│
+                      └──────┴──────┴──────┴──────┘
+```
+
+#### How the work splits — unroll-by-2 over k blocks
+
+Two adjacent k blocks are paired: `(K[0], K[1])` and `(K[2], K[3])`.
+Each q block needs **2 VLOOPs** to cover all 4 k blocks:
+
+| VLOOP # | q block | k block pair    | tiles produced       |
+|--------:|:-------:|:---------------:|:---------------------|
+| **0**   | **Q[0]**| (K[0], K[1])    | M[0,0], M[0,1]       |
+| **1**   | **Q[0]**| (K[2], K[3])    | M[0,2], M[0,3]       |
+| 2       | Q[1]    | (K[0], K[1])    | M[1,0], M[1,1]       |
+| 3       | Q[1]    | (K[2], K[3])    | M[1,2], M[1,3]       |
+| 4       | Q[2]    | (K[0], K[1])    | M[2,0], M[2,1]       |
+| 5       | Q[2]    | (K[2], K[3])    | M[2,2], M[2,3]       |
+| 6       | Q[3]    | (K[0], K[1])    | M[3,0], M[3,1]       |
+| 7       | Q[3]    | (K[2], K[3])    | M[3,2], M[3,3]       |
+
+**Total: 8 VLOOPs.** Each VLOOP produces 2 mask tiles.
+
+#### Each q block participates in exactly 2 VLOOPs
+
+| q block | participates in VLOOPs | k block pairs covered     | tiles produced     |
+|--------:|:----------------------:|:--------------------------|:-------------------|
+| Q[0]    | 0, 1                   | (K[0],K[1]) , (K[2],K[3]) | M[0,0..3]          |
+| Q[1]    | 2, 3                   | same pairs                 | M[1,0..3]         |
+| Q[2]    | 4, 5                   | same pairs                 | M[2,0..3]         |
+| Q[3]    | 6, 7                   | same pairs                 | M[3,0..3]         |
+
+Each q block is loaded into UB once for each VLOOP it participates in
+— **2 q-block loads per q block, 8 total q-block loads** across the
+kernel.
+
+#### Inside one VLOOP — concrete walkthrough of VLOOP #0
+
+VLOOP #0 handles `Q[0] × (K[0], K[1])`. Iterates 4 times (one per
+query row in `Q[0]`):
+
+```
+PRE-VLOOP setup:
+  Load K[0] = [K[0][0], K[0][1], K[0][2], K[0][3]]  → V5_A buffer
+  Load K[1] = [K[1][0], K[1][1], K[1][2], K[1][3]]  → V5_B buffer
+  (k blocks are row-invariant — loaded once before VLOOP)
+
+VLOOP iter 0   (compute query row 0 against both k blocks):
+  V4 ← brc_b32 Q[0][0]                              ← q_attn loaded ONCE
+  Pass A:  V_k ← K[0]
+           result ← V4 ≤ V_k = [Q[0][0]≤K[0][0..3]]  → store to M[0,0][row 0]
+  Pass B:  V_k ← K[1]
+           result ← V4 ≤ V_k = [Q[0][0]≤K[1][0..3]]  → store to M[0,1][row 0]
+                                                      (V4 REUSED, no reload)
+
+VLOOP iter 1:
+  V4 ← brc_b32 Q[0][1]
+  Pass A:  result = [Q[0][1]≤K[0][0..3]]  → M[0,0][row 1]
+  Pass B:  result = [Q[0][1]≤K[1][0..3]]  → M[0,1][row 1]
+
+VLOOP iter 2:    Q[0][2] vs K[0] → M[0,0][row 2];   Q[0][2] vs K[1] → M[0,1][row 2]
+VLOOP iter 3:    Q[0][3] vs K[0] → M[0,0][row 3];   Q[0][3] vs K[1] → M[0,1][row 3]
+
+After 4 iters → tiles M[0,0] and M[0,1] are fully written
+                (8 mask rows × 4 elems = 32 mask elements between them).
+```
+
+Per VLOOP: 4 iters × 2 passes = 8 mask rows produced = **2 mask tiles**.
+
+#### Counting
+
+```
+Total VLOOPs:        8
+Total VLOOP iters:   8 × 4 = 32
+Total q_attn loads:  32                ← one per iter, V4 reused across passes
+Total mask tiles:    16
+Total mask elements: 256
+```
+
+#### Compare to no-unroll (sanity check)
+
+Without the unroll-by-2, each (q_block, k_block) tile is its own VLOOP:
+
+| Metric                    | Without unroll | With unroll-by-2 over k |
+|---------------------------|---------------:|------------------------:|
+| Total VLOOPs              | 16             | **8**                   |
+| Total VLOOP iters         | 16 × 4 = 64    | 8 × 4 = **32**          |
+| Total q_attn loads        | 64             | **32**                  |
+| Total mask tiles produced | 16             | 16 (same)               |
+| q_attn load reduction     | —              | **50%**                 |
+| VLOOP-boundary overhead   | 16× fixed cost | **8× fixed cost**       |
+
+Half the q_attn loads, half the VLOOP-boundary overhead, same end
+result. That's the cleanest demonstration of why hivmc-a5 (or its
+driver) chose to unroll-by-2 over key blocks.
+
+#### Why pair `(K[0], K[1])` rather than `(K[0], K[2])` etc.?
+
+Adjacent pairing is the natural choice because:
+
+1. **Memory locality**: k_attn / k_offset for `K[0]` and `K[1]` sit
+   at adjacent addresses; the launcher's stride arithmetic naturally
+   produces them together.
+2. **Predictability**: `(K[2p], K[2p+1])` for `p = 0..1` is the
+   simplest stride-2 unroll pattern.
+
+Any pairing of `(K[A], K[B])` works correctness-wise — but the
+launcher's offset stride almost always defaults to consecutive
+blocks.
+
 ### 3.3 The post-loop `VDUPS.b32` (line 39)
 
 ```asm
@@ -1695,6 +1820,147 @@ register-resident promotion. A pass library that knew about A5
 register lifetimes across VLOOPs (the same way it would for any
 other loop in any other architecture) could reclaim the bulk of
 these missed cycles without needing any new ISA features.
+
+### 6.9 Cross-tile packing — one packed VCMP instead of two (Tier-C, structural)
+
+A more aggressive form of the unrolling described in §3.2.1: the two
+passes' VCMPs work on **the same broadcasted V4** but compare
+against two different V5 registers (`V5_A` from pass A loaded with
+K[0] data, `V5_B` from pass B with K[1] data). If the data layout
+allowed a single 64-element V5 holding both blocks, **one VCMP
+could replace two**.
+
+#### Current (two passes, two VCMPs)
+
+```
+V4: [q, q, q, …, q]  in all 64 lanes              ← brc_b32 fills full register
+
+Pass A:
+  V5_A ← VLDI [S10]  →  [K[0][0..31]] in lower 32, padding/replication in upper 32
+  VCMP.EQ P4, V4, V5_A, P1                        ← uses lower 32 lanes only
+
+Pass B:
+  V5_B ← VLDI [S16]  →  [K[1][0..31]] in lower 32, padding/replication in upper 32
+  VCMP.EQ P4, V4, V5_B, P1                        ← uses lower 32 lanes only
+```
+
+The upper 32 lanes of V5_A and V5_B are §11's open question — most
+likely padded or replicated, so the upper 32 lanes' VCMP results
+are computed but discarded.
+
+#### Hypothetical packed alternative
+
+If the launcher pre-packs K[0] and K[1] into a single contiguous
+64-element buffer in UB:
+
+```
+V5_packed ← VLDI [S_packed]  →  [K[0][0..31], K[1][0..31]] in all 64 lanes
+
+VCMP.EQ P_packed, V4, V5_packed, P1               ← one op covers both tiles
+   lanes 0..31  →  Q[i] ≤ K[0][:]                  ← row of M[0,0]
+   lanes 32..63 →  Q[i] ≤ K[1][:]                  ← row of M[0,1]
+
+→ ONE VCMP produces both row results simultaneously
+```
+
+This makes the upper 32 lanes do **useful work** instead of being
+dead — exactly Layout B from §11, applied across two key blocks
+rather than within one tile.
+
+#### Per-iter savings (compute side)
+
+| Op class                      | Current (2 passes) | Packed (1 packed VCMP) | Savings |
+|-------------------------------|-------------------:|-----------------------:|--------:|
+| `VCMP.LE` on (V3, V2)         | 2× (one per pass)  | 1× (packed)            | −1 |
+| `VCMP.EQ` on (V4, V5)         | 2× (one per pass)  | 1× (packed)            | −1 |
+| `VCMP.EQ` on (V3, V2) for F   | 2× (one per pass)  | 1× (packed)            | −1 |
+| Boolean algebra POR/PAND/POR  | 2× (one per pass)  | 2× (still per-tile, with ppack/pextract) | 0 (or +cost) |
+| `VSEL.b32` widening           | 2× (one per pass)  | 2× (per output buffer) | 0 |
+| `VSTI` to gm                  | 2× (one per pass)  | 2× (different addrs)   | 0 |
+
+**Per-iter savings on compute: −3 ops (the three VCMPs become packed singles).**
+At T=32 iters: **−96 ops total**.
+
+But the alternative is not free — see obstacles below.
+
+#### Three real obstacles
+
+1. **Pre-loop K-packing cost.** The launcher would need to read K[0]
+   and K[1] from their separate sources and produce a unified
+   64-element buffer in UB. If K[0] and K[1] are normally at
+   non-adjacent addresses (which they are — pass A reads from `[S10]`,
+   pass B from `[S16]`, neither adjacent), this pre-loop step is an
+   extra ~32 ops to interleave. The 96-op compute saving has to
+   exceed the pre-loop interleave cost net.
+
+2. **Per-tile boolean algebra still needs to split.** After the packed
+   VCMP, the downstream chain `POR P3, P4, P3 ; PAND P3, P5, P3 ;
+   POR P3, P3, P4 ; VSEL` combines the predicate with **per-tile**
+   intermediates: B is shared across both tiles, but C and F differ
+   between tiles (each k block has its own C precompute and its own
+   F result). So the packed predicate would have to be **split back**
+   into its two halves before the algebra fires — costing extra
+   `pmask`/`pextract` ops that may eat the savings.
+
+3. **Output stores remain at separate addresses.** Even if VCMP and
+   the algebra were fully packed, `VSTI` still needs to split into
+   two writes — one to `M[0,0]`'s buffer at `[S67]`, one to
+   `M[0,1]`'s at `[S65]`. The packed result has to be unpacked
+   anyway for the stores.
+
+#### Net cost estimate
+
+| Phase                | Current cost | Packed cost                   |
+|----------------------|-------------:|------------------------------:|
+| Pre-loop K layout    | 0            | +32 ops (interleave K[0]+K[1])|
+| Per-iter VCMPs       | 6 (3+3)      | 3 (saved 3 ops/iter)          |
+| Per-iter algebra     | 4 (2+2)      | 4–6 (with split overhead)     |
+| Per-iter VSTI        | 2            | 2                             |
+| **Net per kernel**   | **6T + 2T = 256 ops** | **≈3T + 2T + 32 = 192 ops** (best case) |
+
+Best-case savings: ~25% of compute ops in the per-iter sections,
+assuming the pre-loop interleave pays for itself. Worst case: net
+zero or slight loss if the per-iter algebra split overhead grows
+significantly.
+
+#### Why this is Tier-C
+
+- The savings are real but modest (under 100 ops out of 1120).
+- The implementation requires a non-trivial pre-loop data
+  transformation (interleaving two source buffers into one packed
+  buffer) that hivmc-a5 may not currently support as a code-gen
+  pattern.
+- Whether the per-tile algebra split overhead actually fits in 0–2
+  extra ops depends on which `pmask` / `pextract` / `ppack`
+  instructions are available in the PTO ISA — not yet verified.
+
+A full evaluation would need both (a) a clean ISA reference for
+predicate-split/predicate-pack ops and (b) a benchmark of an
+implementation that prepacks K, neither of which we have in hand.
+
+#### Connection to §11
+
+If this optimization fires, the §11 question ("what's in the upper
+32 lanes?") is **resolved as Layout B** — by construction, the upper
+32 lanes hold the second key block's data. The lanes do useful
+compute work, and the result is split back into two output buffers
+at VSTI time. This is the only one of the three §11 layouts that
+actually *wants* the upper 32 lanes used.
+
+#### Updated final tally
+
+| #   | Optimization                                          | Savings (ops)         | Tier |
+|----:|-------------------------------------------------------|----------------------:|:---:|
+| 1   | §6.6 inline-recompute C                               | −34                   | A   |
+| **2**| **§6.6 hold C in P-reg**                             | **−65**               | **A** |
+| 3   | §6.7 brc_b32 stream q_offset                          | −16                   | A   |
+| 4   | §6.8 hoist V2 (VLDI + VADDS)                          | −62                   | A   |
+| 5   | §6.8 hoist V5 (VLDI)                                  | −31                   | A   |
+| 6   | §6.8 hoist VLDAS/SMOV/V0/V1                           | ~−160                 | B   |
+| 7   | §6.8 fuse `VCMP.LE` + `VCMP.EQ`                       | −32                   | C   |
+| 8   | §6.8 direct i1 → i8 via `VSEL.b8`                     | −32                   | C   |
+| 9   | §6.8 pack two output rows per iter (within one tile)  | ~50% loop overhead    | C   |
+| **10**| **§6.9 cross-tile pack K[0]+K[1] into one VCMP**     | **~−96 (best case)**  | **C** |
 
 ## 7. Per-iter hardware-op tally
 
