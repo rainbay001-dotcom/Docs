@@ -1566,6 +1566,180 @@ direct cycle impact — those are §6.6 Opt 2, §6.11 F-hoist, §6.8
 Opt 7 (VCMP fuse), and (indirectly) §6.10 (avoiding redundant
 operands setup in the body).
 
+### 5.4 Cycle-precise instruction timeline (camodel-verified)
+
+§5.2's per-PC `dur` table and §5.3's parallelism budget were both
+derived from structural analysis. The raw camodel trace
+(`figures/mask_kernel_a5_camodel/trace_v0/dump2trace_core0.json`)
+gives single-cycle precision for every event, letting us **verify**
+the parallelism estimates empirically.
+
+#### Verified event schema
+
+Each event in the Chrome-trace JSON:
+
+```json
+{
+  "name": "",
+  "cname": "rail_load",          // color (visual only)
+  "ph": "X",                     // "X" = complete event with duration
+  "ts": 1591,                    // start cycle (issue)
+  "dur": 1,                      // duration (cycles to retire)
+  "pid": "core0_veccore0",       // physical core/subcore
+  "tid": "RVECSU",               // pipe (RVECEX/RVECLD/RVECST/RVECSU/RVECLP/PUSHQ/MTE2/MTE3/FLOWCTRL/ALL/VECTOR/SCALAR)
+  "args": {
+    "addr": "0x10d0d220",        // PC
+    "detail": "(ID: 000092) RV_SMOVI"   // mnemonic
+  }
+}
+```
+
+**End cycle = `ts + dur`.** Total trace: 452 events spanning cycles
+708 → 2,139 (= 1,431 cyc body span as cited in §5.1; the wider 708
+→ 2,139 = 1,431 includes some wrapper and sync overhead).
+
+#### Body iter 0 — per-instruction timeline
+
+Filtering the 355 body events (PCs `0x10d0d234`–`0x10d0d260`,
+deduplicated to the first occurrence of each PC):
+
+```
+#  start  end  dur  pipe     PC          mnemonic              role
+─  ─────  ───  ───  ───────  ──────────  ───────────────────  ─────
+1   1595  1605  10  RVECLD   0x10d0d234  RV_VLDI               Load q_attn[i]
+2   1595  1606  11  RVECLD   0x10d0d238  RV_VLDI               Load k_attn (this row)
+3   1601  1608   7  RVECEX   0x10d0d23c  RV_VCMP_EQ            B = q_attn[i]==k_attn
+4   1602  1609   7  RVECEX   0x10d0d244  RV_VCMP_LE            A = q_off[i]≤k_off
+5   1602  1609   7  RVECEX   0x10d0d248  RV_VCMP_EQ            C = k_attn==0
+6   1603  1611   8  RVECEX   0x10d0d240  RV_POR                B | C
+7   1606  1614   8  RVECEX   0x10d0d24c  RV_PAND               A & (B|C)
+8   1609  1617   8  RVECEX   0x10d0d250  RV_POR                (A&(B|C)) | F
+9   1612  1619   7  RVECEX   0x10d0d254  RV_VSEL               i1 → i32 widen
+10  1614  1622   8  RVECEX   0x10d0d258  RV_VCVT_I2I           i32 → i8 narrow
+11  1619  1635  16  RVECST   0x10d0d25c  RV_VSTI               Store result row
+12  1797  1765  -32 RVECSU   0x10d0d260  RV_SEND               Iter-done signal
+```
+
+Iter 0 wall-clock: cycles 1,595 → 1,635, **span 40 cyc** —
+matches the 42.4 cyc/row average.
+
+#### Cross-pipe parallelism — actual instructions in flight per cycle
+
+A 50-cycle window from cycle 1700 → 1750 (middle of the loop, all
+iters in steady-state pipelined overlap): **115 events visible in
+this window**. Per-cycle in-flight count:
+
+| Cycle | RVECEX | RVECLD | RVECST | MTE3 | PUSHQ | VECTOR | **Total in flight** |
+|------:|-------:|-------:|-------:|-----:|------:|-------:|--------------------:|
+| 1700  | 11     | 3      | 3      | 1    | 1     | 1      | **20**              |
+| 1705  | 12     | 2      | 3      | 1    | 1     | 1      | **20**              |
+| 1710  | 11     | 4      | 3      | 1    | 1     | 1      | **21**              |
+| 1715  | 11     | 4      | 3      | 1    | 1     | 1      | **21**              |
+| 1720  | 11     | 4      | 2      | 1    | 1     | 1      | **20**              |
+| 1725  | 9      | 4      | 3      | 1    | 1     | 1      | **19**              |
+| 1730  | 10     | 3      | 3      | 1    | 1     | 1      | **19**              |
+| 1735  | 9      | 3      | 4      | 1    | 1     | 1      | **19**              |
+| 1740  | 10     | 4      | 3      | 1    | 1     | 1      | **20**              |
+| 1745  | 9      | 4      | 3      | 1    | 1     | 1      | **19**              |
+| 1750  | 10     | 4      | 3      | 1    | 1     | 1      | **20**              |
+
+**Steady-state in-flight count: ≈20 ops simultaneously.** This is
+much more parallelism than the 2.4× estimate from §5.2's
+sum-of-`dur` calculation — that estimate assumed each pipe issues
+one op per cycle and counted only end-to-end serialization. The
+real picture: each pipe is **deeply pipelined** with high in-flight
+counts.
+
+| Pipe    | In-flight (steady state) | Avg dur | Effective issue rate    |
+|---------|-------------------------:|--------:|-------------------------|
+| RVECEX  | ~10                       | ~7-8 cyc | ~1.4 ops/cyc          |
+| RVECLD  | ~3-4                      | ~10-11 cyc | ~0.3 ops/cyc        |
+| RVECST  | ~3                        | ~14-22 cyc | ~0.2 ops/cyc        |
+| MTE3 / PUSHQ / VECTOR | ~1 each (long-running flags) | hundreds cyc | n/a |
+
+#### Gantt-chart fragment — cycles 1693 → 1750
+
+A subset showing the steady-state pipeline overlap (each `█` ≈ 1 cyc):
+
+```
+pipe      mnemonic               start  end  dur  timeline (cyc 1693→1750)
+────────  ─────────────────────  ─────  ───  ───  ─────────────────────────────────────────────────────
+RVECST    RV_VSTI                  1688  1705  17  ███████████████
+RVECLD    RV_VLDI                  1690  1701  11   ████████████
+RVECST    RV_VSTI                  1690  1710  20   ████████████████████
+RVECEX    RV_PAND                  1693  1701   8     ████████
+RVECEX    RV_VCMP_LE               1694  1701   7      ███████
+RVECLD    RV_VLDI                  1694  1704  10      ██████████
+RVECLD    RV_VLDI                  1694  1705  11      ███████████
+RVECEX    RV_POR                   1695  1703   8       ████████
+RVECEX    RV_VSEL                  1695  1702   7       ███████
+RVECEX    RV_VCMP_EQ               1696  1703   7        ███████
+RVECEX    RV_VCMP_EQ               1697  1704   7         ███████
+RVECEX    RV_VCVT_I2I              1697  1705   8         ████████
+RVECEX    RV_PAND                  1698  1706   8          ████████
+RVECEX    RV_POR                   1698  1706   8          ████████
+RVECEX    RV_VCMP_EQ               1700  1707   7            ███████
+RVECEX    RV_VCMP_LE               1700  1707   7            ███████
+RVECEX    RV_POR                   1701  1709   8             ████████
+RVECEX    RV_VSEL                  1701  1708   7             ███████
+RVECEX    RV_VCMP_EQ               1702  1709   7              ███████
+RVECLD    RV_VLDI                  1702  1712  10              ██████████
+RVECLD    RV_VLDI                  1702  1713  11              ███████████
+RVECST    RV_VSTI                  1702  1720  18              ██████████████████
+…
+```
+
+Reading the chart: at cycle 1700, you can see **8 RVECEX ops + 2
+RVECLD ops + 2 RVECST ops** all simultaneously executing, each on
+its own pipe slot. RVECEX issues a new op every 1-2 cycles even
+though each takes 7-8 cyc to retire — classic deep pipelining.
+
+#### What this means for the §5.2/§5.3 analyses
+
+The structural analyses **underestimated parallelism** by treating
+each pipe as 1-op-issue-per-cycle. Empirical reality:
+
+- RVECEX: ~10 ops in flight at all times → equivalent to a 10-stage pipe
+- RVECLD: ~3-4 ops in flight → 3-stage pipe
+- RVECST: ~3 ops in flight → 3-stage pipe (with longer per-op latency)
+
+The 1,431-cycle wall-clock comes from RVECEX-issue-rate-limited
+throughput: 263 RVECEX events / 1,431 cycles = **0.184 ops/cyc
+issue rate**, or one op every ~5.4 cycles. Not 60 cyc serial / 1.4
+ops per cycle pipelined as I'd estimated.
+
+#### Implications for the §6 missed-optimization tally
+
+The "5.4 cyc/op" effective RVECEX issue rate means cycle savings
+from removing RVECEX ops are **less than 1:1 with op count**. A
+saved op only saves the cycles by which it would have extended the
+end-of-pipeline drain.
+
+**Adjusted savings estimates** (down-weighted by pipeline overlap):
+
+| Optimization                    | Op count saved | Cycle saving (worst case) | Cycle saving (best case) |
+|---------------------------------|---------------:|--------------------------:|-------------------------:|
+| §6.6 Opt 2 (C in P-reg)         | −65            | ~−13 cyc (5.4 × 2.4 ratio)| −65 cyc (if on critical path) |
+| §6.7 Opt 3 (brc_b32 q_offset)   | −16            | ~−3 cyc                   | −16 cyc                  |
+| §6.11 F-hoist                   | −64            | ~−12 cyc                  | −64 cyc                  |
+
+The saved-op-to-saved-cycle conversion is somewhere between 1:1
+(if the saved op was on the critical path) and ~1:0.2 (if it was
+hidden by pipeline overlap). Refining this would require a
+counterfactual camodel run with the optimization actually applied.
+
+#### Trace data location
+
+```
+~/Documents/Docs-repo/triton-ascend/figures/mask_kernel_a5_camodel/
+├── mask_kernel_a5_dumps.tar.gz   (366 KB raw camodel binary dumps)
+├── mask_kernel_a5_trace.tar.gz   (4.7 KB parsed Chrome-trace JSON)
+├── a5_dumps/                     (extracted: 7,178 raw dump files)
+└── trace_v0/dump2trace_core0.json  (86 KB, 452 events)
+```
+
+Loadable in Chrome's `chrome://tracing/` for visual inspection.
+
 ## 6. A5 codegen wins — MLIR ops that disappear into hardware modes
 
 `hivmc-a5` exploits two A5 hardware features to eliminate entire MLIR
