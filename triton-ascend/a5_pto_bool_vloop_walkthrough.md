@@ -725,6 +725,121 @@ Any pairing of `(K[A], K[B])` works correctness-wise — but the
 launcher's offset stride almost always defaults to consecutive
 blocks.
 
+### 3.2.3 Why V4 (= broadcast Q[i]) can be reused across two different k blocks
+
+A natural worry when seeing the unroll: if we're using `brc_b32` to
+broadcast `Q[i]` and that broadcast "matches positions" with V5,
+how can we substitute K[0] for K[1] in V5 and still have the
+comparison make sense? Doesn't `brc_b32` tie Q[i] to specific lane
+positions?
+
+The answer turns on what `brc_b32` actually does to V_q. It's the
+opposite of "matching a specific position":
+
+#### `brc_b32` *erases* position information from V_q
+
+```
+brc_b32 V4 ← Q[0][0]:
+
+  Before brc:    Q[0][0] is one scalar value in scalar memory
+  After brc:     V4 = [Q[0][0], Q[0][0], Q[0][0], Q[0][0]]
+                       lane 0   lane 1   lane 2   lane 3
+                       └──────  all four lanes hold the SAME value  ──────┘
+```
+
+Every lane gets the same number. The lane index does **not**
+correspond to any specific Q position; it's just "lane 0 of V4"
+through "lane 3 of V4," and they're all identical bits.
+
+#### The "matching position" is between *lane indices* of V4 and V5 — not between absolute Q and K positions
+
+`VCMP V4, V5` is purely lane-aligned:
+
+```
+V4 = [Q[0][0], Q[0][0], Q[0][0], Q[0][0]]      ← brc'd, no position structure
+V5 = [a,       b,       c,       d      ]      ← whatever's in V5
+
+VCMP result:
+  lane 0:  Q[0][0]  ≤  a
+  lane 1:  Q[0][0]  ≤  b
+  lane 2:  Q[0][0]  ≤  c
+  lane 3:  Q[0][0]  ≤  d
+```
+
+The hardware doesn't know or care what semantic meaning lane *i* of
+V5 has. It just compares lane *i* of V4 against lane *i* of V5.
+
+#### Reusing V4 with a different V5 — same Q[0][0], different K block
+
+```
+Round 1 (pass A: Q[0] vs K[0]):
+  V4 = [Q[0][0], Q[0][0], Q[0][0], Q[0][0]]      ← brc'd
+  V5 = [K[0][0], K[0][1], K[0][2], K[0][3]]
+  VCMP →  Q[0][0] ≤ K[0][j]  for j = 0..3        → row 0 of mask M[0,0]
+
+Round 2 (pass B: Q[0] vs K[1]):
+  V4 unchanged, IDENTICAL bits                   ← brc not redone, V4 reused
+  V5 = [K[1][0], K[1][1], K[1][2], K[1][3]]      ← different V5 contents
+  VCMP →  Q[0][0] ≤ K[1][j]  for j = 0..3        → row 0 of mask M[0,1]
+```
+
+V4 has the same bit pattern in both rounds. The fact that V5 changed
+doesn't invalidate V4 because **V4's lane structure carries no
+position-specific meaning** — every lane is just a copy of
+`Q[0][0]`. The right-hand side of the comparison changed; the
+left-hand side stayed exactly the same.
+
+#### Contrast with operations where position *does* matter
+
+If the operation were a dot-product-style same-index pairing
+(`Q · K = sum(Q[i] · K[i])`), V_q would carry real positional
+meaning:
+
+```
+V_q = [Q[0], Q[1], Q[2], Q[3]]           ← V_q has positional meaning
+V_k = [K[0], K[1], K[2], K[3]]           ← lane i ties Q[i] to K[i]
+
+VMUL result:
+  lane 0:  Q[0] · K[0]                   ← position-matched
+  lane 1:  Q[1] · K[1]
+  …
+```
+
+In that case you couldn't swap K[0]→K[1] without changing the lane
+pairing — the (i, i) match depends on V_k being indexed at positions
+matching V_q.
+
+But our mask is the **broadcast (outer-product) comparison**, not a
+dot product:
+
+```
+mask[i, j] = q_offset[i]  ≤  k_offset[j]    for all (i, j)
+                ↑                ↑
+                broadcasts       broadcasts
+                across j         across i
+```
+
+The (i, j) pairing is the **outer product** of indices, not a
+same-index dot product. So one row of the mask uses **one fixed**
+Q[i] (broadcast across all lanes) paired against **all** K[j]
+(varying across lanes). That same broadcast Q[i] can be re-paired
+with any other K block's row without changing the left-hand side of
+any lane's comparison.
+
+`brc_b32` is the perfect operation for this kind of broadcast
+comparison precisely *because* it discards position information from
+Q — Q[i] is "the same number in every lane," ready to be paired
+against whatever V_k currently holds.
+
+#### One-line summary
+
+> The "matching position" on the V_q side is **vacuous** after
+> `brc_b32`: every lane holds the same Q[i], so V_q has no position
+> structure to match against. Switching V_k from K[0] to K[1]
+> changes the right-hand side of every lane's comparison, but the
+> left-hand side (Q[i]) stays the same in every lane regardless.
+> That's why one V_q load (V4) suffices for both passes.
+
 ### 3.3 The post-loop `VDUPS.b32` (line 39)
 
 ```asm
