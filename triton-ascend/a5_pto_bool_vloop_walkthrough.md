@@ -1291,34 +1291,49 @@ camodel re-trace with the optimization applied would settle this.)
 
 ### 5.3 Hardware parallelism budget per micro-architecture component
 
-Sources, in order of authority:
+Sources, fact-by-fact, in order of authority:
 
-- **Tier A — Vendor-published**: hiascend.com CANN 9.0.0 stable
-  documentation (verified live 2026-05-08, pages updated
-  2026/04/30):
-  - `programug/Ascendcopdevg/atlas_ascendc_10_00065.html` —
-    "NPU架构版本351x" (A5/9572 architecture spec).
-    Source for: SSBuffer direct AIC↔AIV path, SIMT hardware
-    (DCache 128 KB, 4 warp schedulers/AIV, SIMT RegFile 128 KB),
-    L0A format FRACTAL_NZ, data path additions, loop modes,
-    Fixpipe enhancements, CUBE tile size.
-  - `programug/Ascendcopdevg/atlas_ascendc_best_practices_10_00021.html` —
-    "避免bank冲突（Atlas 350 加速卡）" (UB bank-conflict avoidance).
-    Source for: UB structure (256 KB / 16 banks / 8 groups),
-    per-cycle bank-port semantics, conflict rules.
-- **Tier A — Vendor-published**: PTO ISA repo
-  (`pto-isa/docs/isa/machine-model/execution-agents.md`,
-  `vector/ops/`). Source for: 5 pipe names + per-pipe roles,
-  vreg = 256 B / 64 i32 lanes, MaskReg width, vector ALU
-  semantics.
-- **Tier A — Vendor-published**: PTO ISA costmodel.
-  Source for: vector pipeline cycle model
-  (startup + completion + per_repeat × repeats + (repeats−1) × interval).
-- **Local synthesis** (transcription only):
-  `~/Documents/docs/ascend_910c_microarchitecture.md` integrates
-  the above into a single readable reference. The microarch doc
-  itself is not original research — every per-cycle / per-port
-  figure traces back to one of the vendor sources above.
+#### Tier A — hiascend.com CANN 9.0.0 stable docs (verified live 2026-05-08)
+
+| Fact in §5.3 / §5.2                                  | Source page                                            | Verbatim hook (Chinese)                |
+|------------------------------------------------------|--------------------------------------------------------|----------------------------------------|
+| SSBuffer direct AIC↔AIV datapath (replaces GM)       | `atlas_ascendc_10_00065.html`                          | "SSBuffer，用于AIC和AIV的核间通信"     |
+| Cluster ratio AIC:AIV = 1:2                          | `atlas_ascendc_10_00065.html`                          | "AIC核与AIV核配比为1：2"               |
+| SIMT DCache up to 128 KB, 128 B granularity, reuses UB | `atlas_ascendc_10_00065.html`                        | "SIMT支持最大128KB Data Cache … 以128B为粒度" |
+| 4 Warp Schedulers per AIV                            | `atlas_ascendc_10_00065.html`                          | "每个AIV有4个Warp Scheduler"           |
+| SIMT Register File 128 KB total + thread-dep alloc   | `atlas_ascendc_10_00065.html`                          | "总容量为128KB的超大容量寄存器"        |
+| L0A format FRACTAL_NZ (vs FRACTAL_ZZ on 220x)        | `atlas_ascendc_10_00065.html`                          | "L0A format … FRACTAL_NZ"              |
+| Data-path additions / removals (L0C↔UB, UB↔L1, …)    | `atlas_ascendc_10_00065.html`                          | "增加L0C Buffer -> Unified Buffer …"  |
+| Loop mode Normal + Compact                            | `atlas_ascendc_10_00065.html`                          | "Loop模式 … Normal模式 … Compact模式"  |
+| Fixpipe enhancements (NZ2DN, channel merge/split)    | `atlas_ascendc_10_00065.html`                          | "支持Fixpipe硬件化加速"                |
+| CUBE tile size (16×16 FP16, 16×32 INT8)              | `atlas_ascendc_10_00065.html` + `microarchitecture.md` | (in figures on the page)               |
+| **UB structure: 256 KB / 16 banks / 8 bank groups**  | **`atlas_ascendc_best_practices_10_00021.html`**       | "总大小为256K，划分为16个bank … 8个bank group" |
+| **Per-cycle UB rule: 1R or 1W per bank group**       | **`atlas_ascendc_best_practices_10_00021.html`**       | "每拍 … 从每个bank group中读取或写入一行数据" |
+| **UB bank-conflict rules (3 types)**                 | **`atlas_ascendc_best_practices_10_00021.html`**       | "读写冲突 … 写写冲突 … 读读冲突"       |
+
+URL pattern: `https://www.hiascend.com/document/detail/zh/canncommercial/900/programug/Ascendcopdevg/<page>`. Page-update date stamp on both: 2026/04/30.
+
+#### Tier A — PTO ISA repo (local at `~/Documents/Repo/pto-isa/`)
+
+| Fact                                                       | Source                                                   |
+|------------------------------------------------------------|----------------------------------------------------------|
+| 5 pipe names (RVECEX, RVECLD, RVECST, RVECSU, RVECLP)      | `docs/isa/machine-model/execution-agents.md`             |
+| vreg = 256 B = 64 i32 lanes / 128 f16 / 256 i8             | `docs/isa/machine-model/execution-agents.md`             |
+| MaskReg width VL/8                                         | `docs/isa/machine-model/execution-agents.md`             |
+| Vector ALU semantics (`vcmp`, `vsel`, `vbr`, `por`, etc.)  | `docs/isa/vector/ops/…`                                  |
+| Vector pipeline cycle model (startup/completion/interval)  | `docs/isa/cost-model/…` (transcribed in arch doc §16)    |
+
+#### Local synthesis (transcription only, not original)
+
+`~/Documents/docs/ascend_910c_microarchitecture.md` is the synthesis
+doc that integrates the above sources into one reference. Every
+per-cycle / per-port / per-lane figure in §5.3 traces back to one
+of the vendor sources listed above; the local doc adds no original
+hardware claims.
+
+If a number in §5.3 doesn't appear in this fact-by-fact table, it
+is either a derived calculation (e.g. per-row cost = total-cycles /
+iter-count) or a Tier-B inference flagged as such inline.
 
 #### A5 AIV core — five independent pipes, each 1 op/cyc
 
