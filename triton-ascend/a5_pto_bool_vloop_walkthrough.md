@@ -2995,6 +2995,271 @@ Tier-A — each is empirically achieved by *some* `bishengir-compile-a5`
 version on this ISA (proving feasibility), even if no single version
 combines all of them.
 
+### 6.12 UB bank-layout discipline (Opts 13–14)
+
+The verified bank-conflict rules from
+`atlas_ascendc_best_practices_10_00021.html` (§5.3) constrain how
+multiple per-iter R/W operations can issue without serializing:
+
+> Same-bank R+W → conflict; 2 W on same group → conflict; 3+ R on same group → conflict.
+> 2 R on different banks of same group → OK; 1 R + 1 W on different banks → OK.
+
+The mask-kernel body issues per iter: 4 vector reads (V2, V3, V4,
+V5 + VLDUI for C, depending on which build) + 1 vector write
+(VSTI for result). For these to issue conflict-free, the buffers
+they target must be **distributed across the 16 banks / 8 groups
+deliberately**.
+
+#### Opt 13 — Bank-aware buffer placement
+
+Allocate UB buffers so that per-iter operations target distinct
+banks within each group:
+
+```
+Suggested layout (each row = one bank group):
+
+  Group 0 :  bank 0  → q_attn source     |  bank 8  → V0 (zero const)
+  Group 1 :  bank 1  → k_attn source     |  bank 9  → V1 (one const)
+  Group 2 :  bank 2  → q_offset tile     |  bank 10 → result buffer A
+  Group 3 :  bank 3  → k_offset row      |  bank 11 → result buffer B
+  Group 4 :  bank 4  → C bytes (precomputed) |  bank 12 → scratch
+  Group 5 :  bank 5  → q_attn (alt-pass) |  bank 13 → reserved
+  Group 6 :  bank 6  → k_attn (alt-pass) |  bank 14 → reserved
+  Group 7 :  bank 7  → C bytes (alt-pass)|  bank 15 → reserved
+```
+
+With this layout, the 4R + 1W per iter targets 5 different bank
+groups → no group has more than 1 access → zero conflicts.
+
+**Tier**: A on the rule, B on the savings (need to verify whether
+current placement already conflict-free; if it is, savings are 0).
+
+#### Opt 14 — Co-locate C-reload and result-VSTI for group-level fusion
+
+A more aggressive variant: place C-bytes and result on **different
+banks of the same group**. Per the verified rules, 1 R + 1 W on
+different banks of the same group is OK. So C reload and result
+VSTI can issue in the same cycle without conflict, freeing the
+other 7 groups for other buffers.
+
+**Cost saving**: 0–10 cyc/iter depending on whether the current
+layout already achieves this implicitly.
+
+### 6.13 Cross-tile vector packing leveraging full vreg (Opt 15)
+
+The 64-lane i32 vreg combined with §11's "what's in the upper 32
+lanes?" question and §6.9's cross-tile-pack idea points to a
+cleaner version: **lay out K[A] and K[B] contiguously in UB** so a
+single full-VL VLDI fills V5 with both:
+
+```
+V5 layout (one VLDI gives all 64 lanes):
+  lanes 0..31  →  K[A][0..31]
+  lanes 32..63 →  K[B][0..31]
+```
+
+Then one VCMP `V4, V5_packed` per iter produces:
+- Lanes 0..31 = predicate for tile A's row
+- Lanes 32..63 = predicate for tile B's row
+
+#### Opt 15 — Single-VCMP across two key blocks via packed V5
+
+| Cost                            | Two passes (current `assembler.as`) | Packed (single VCMP) |
+|--------------------------------:|------------------------------------:|---------------------:|
+| Per-iter VCMPs (full)           | 2× per pass × 2 passes = 4 (B + F)  | 2 (B + F packed)     |
+| Per-iter VLDI for V5            | 1 per pass × 2                       | 1                    |
+| Pre-loop K interleave           | 0                                    | ~16 ops (one-time)   |
+| **Total at T = 32**             | 4 × 32 + 0 = 128 ops                 | 2 × 32 + 16 = 80 ops |
+
+**Saving**: −48 ops per kernel invocation. Tier B (depends on
+launcher willingness to interleave K-data; the §6.9 caveats about
+splitting predicates back into per-tile algebra apply).
+
+### 6.14 SIMT mode for per-core 4× scaling (Opt 16)
+
+The verified SIMT spec from `atlas_ascendc_10_00065`:
+- 4 Warp Schedulers per AIV
+- 128 KB SIMT Register File (shared, thread-dependent allocation)
+- 128 KB DCache (reuses UB as cacheline)
+- 128 B granularity for all SIMT GM access
+
+Mask kernel currently runs in SIMD-VF mode (one task per AIV core,
+launched via `tl.program_id(...)`). **Converting to SIMT mode**
+would let one AIV run **4 warps concurrently**, each warp
+processing a different mask tile.
+
+#### Opt 16 — SIMT mask kernel with 4 warps
+
+Per AIV: 4 mask tiles concurrent → 4× per-core throughput.
+
+Constraints:
+- SIMT RegFile is shared. With 4 warps × 256 threads/warp = 1024
+  threads, each gets ~32 i32 regs. Mask kernel needs 6-8 vregs in
+  steady state ⇒ **fits with comfortable margin**.
+- 128 KB DCache reuses UB as cacheline. The mask kernel's UB
+  footprint (operand source rows + tiles) is well under 128 KB ⇒
+  fits.
+- Mask compute is branch-light; warp divergence cost is low.
+
+**Saving**: per-AIV throughput **4×** (not per-row cost reduction
+— this is parallelism scaling, not optimization). Tier C — requires
+launcher rewrite from SIMD-VF to SIMT programming model.
+
+#### Cross-die scaling (already noted in §5.3)
+
+Combined with launcher-level multi-AIV dispatch (`tl.program_id(...)`
+across all 36 AIV cores per die), and Opt 16 (4× per-AIV), the
+full die can process **36 × 4 = 144 concurrent mask tiles** vs.
+the current single-AIV invocation. Per-die ~144× scaling, modulo
+GM bandwidth contention.
+
+### 6.15 SSBuffer direct mask→AIC transfer (Opt 17, launcher-level)
+
+A5 introduced **SSBuffer** for direct AIC↔AIV communication,
+replacing the GM-staging round-trip from A2/A3. Source:
+`atlas_ascendc_10_00065` ("SSBuffer，用于AIC和AIV的核间通信"
+plus "增加L0C Buffer -> Unified Buffer、Unified Buffer <-> L1
+Buffer的数据通路").
+
+Mask is consumed downstream by FlashAttention's CUBE GEMM (which
+runs on AIC). Currently:
+
+```
+mask_kernel (AIV) → VSTI → UB → DMA → GM → DMA → UB → AIC consumer
+                            ─────────────────────
+                            GM round-trip (slow)
+```
+
+With SSBuffer, the mask data goes **directly from AIV's UB to
+AIC's L1/L0C** — no GM round-trip:
+
+```
+mask_kernel (AIV) → VSTI → UB → SSBuffer → AIC consumer's L1/L0C
+                                  ───────
+                                  direct, no GM
+```
+
+#### Opt 17 — SSBuffer mask handoff
+
+| Cost                              | GM round-trip (current)         | SSBuffer (direct) |
+|-----------------------------------|---------------------------------|-------------------|
+| GM bandwidth per mask tile        | 1024 B (write) + 1024 B (read) = 2 KB | 0           |
+| Per-launch latency penalty        | ~100s of cycles for GM load/store | ~10s of cycles  |
+| Total saving for N tiles per launch | N × 2 KB GM bandwidth            | —                 |
+
+Tier B (launcher-level, requires the consumer kernel to also be
+configured to accept SSBuffer input, not GM input). Doesn't change
+mask_kernel itself but reshapes the AIV/AIC interface.
+
+### 6.16 Cast-variant-specific optimizations (Opts 18–20)
+
+The cast variant of `mask_fn` annotates each comparison with
+`.to(tl.int32)`, producing the f16/f32 round-trips documented in
+`helloworld_cast_vs_nocast_comparison.md` §4.6.5 / §4.7. The cast
+HIVM-MLIR captures (commit `98e6205`) show the i1↔f16↔i32 chain
+at MLIR level. With the verified A5 predicate-register architecture
+(P-regs hold i1 natively; no f16 detour needed), the entire
+cast-style i32 boolean algebra approach is **strictly inferior**
+on A5.
+
+#### Opt 18 — Eliminate the i1 → f16 → i32 widenings
+
+Cast variant has 3 `i1 → f16 → i32` widening trips (one per
+`(.to(int32))` site for B, C, F). Each costs 2 vcasts per row.
+With C in a P-reg (§6.6 Opt 2), B and F as P-regs (§6.11 F-hoist),
+**none of these widenings are needed** — boolean algebra stays in
+P-regs throughout.
+
+| Saving                        | Per iter | Per kernel (T=32)   |
+|------------------------------:|---------:|--------------------:|
+| 6 vcast ops (3 × 2 widenings) | 6        | **−192 vec ops**    |
+| Plus eliminated f16 temp tiles| —        | **−~3 KB UB**       |
+
+Tier A — this is the bool variant's structure applied to cast.
+
+#### Opt 19 — Skip the i32 → f32 → i1 → f16 → i8 final chain
+
+Cast variant's final result-narrowing chain has 5 ops (i32→f32,
+vcmp f32 0.0, vnot, i1→f16, f16→i8). Bool variant uses 2 ops
+(`vsel(i1, c1_i32, c0_i32)` then `vcast i32→i8`) for the same
+end result.
+
+| Saving                          | Per iter | Per kernel (T=32) |
+|--------------------------------:|---------:|------------------:|
+| 3 ops (5 → 2 narrowing chain)   | 3        | **−96 ops**       |
+
+Tier A.
+
+#### Opt 20 — Convert cast lowering to predicate-register algebra
+
+Combined with Opt 18 + 19, the cast variant becomes structurally
+identical to the bool variant — the `.to(tl.int32)` annotations in
+source are vestigial on A5. Per-row cost converges to bool's
+14.4 ops/row.
+
+The MLIR-level cast variant has 172 lines vs. bool's 146 (+18%);
+on A5 hardware those extra MLIR ops should compile away to nothing.
+Whether `bishengir-compile-a5` currently does this analysis isn't
+verified — we don't have a camodel trace of the cast variant.
+Tier A on the optimization itself; Tier B on whether the compiler
+performs it today.
+
+### 6.17 Updated final tally with μarch-derived optimizations
+
+| #   | Optimization                                          | Savings (ops)    | Tier | Source                       |
+|----:|-------------------------------------------------------|-----------------:|:---:|------------------------------|
+| 1   | §6.6 inline-recompute C                               | −34              | A   | structural                   |
+| **2**| **§6.6 hold C in P-reg**                             | **−65**          | **A** | structural                |
+| 3   | §6.7 brc_b32 stream q_offset                          | −16              | A   | structural                   |
+| 4   | §6.8 hoist V2 (VLDI + VADDS)                          | −62              | A   | structural                   |
+| 5   | §6.8 hoist V5 (VLDI)                                  | −31              | A   | structural                   |
+| 6   | §6.8 hoist VLDAS/SMOV/V0/V1                           | ~−160            | B   | structural                   |
+| 7   | §6.8 fuse VCMP.LE + VCMP.EQ                           | −32              | C   | ISA-dependent                |
+| 8   | §6.8 direct i1 → i8 via VSEL.b8                       | −32              | C   | ISA-dependent                |
+| 9   | §6.8 pack two output rows per iter                    | ~50% loop o-h    | C   | structural                   |
+| 10  | §6.9 cross-tile pack K[0]+K[1] into one VCMP          | ~−96             | C   | structural                   |
+| 11  | §6.10 share V3 across passes                          | −48              | A   | structural                   |
+| 12  | §6.11 hoist F = q_offset == k_offset                  | −32 to −64       | A   | structural                   |
+| **13** | **§6.12 bank-aware UB layout (per-group conflict avoidance)** | **0–10 cyc/iter** | **A** | **μarch (`atlas_…_00021`)** |
+| 14  | §6.12 co-locate C-reload + result-VSTI in same group  | 0–5 cyc/iter      | A   | μarch (`atlas_…_00021`)      |
+| 15  | §6.13 single-VCMP via packed V5 (K[A]+K[B])           | −48              | B   | μarch (vreg width × bank rules) |
+| **16**| **§6.14 SIMT mode (4 warps/AIV)**                     | **4× per-AIV**    | **C** | **μarch (`atlas_…_00065`)** |
+| **17**| **§6.15 SSBuffer mask handoff (replace GM)**          | **−2 KB GM/tile** | **B** | **μarch (`atlas_…_00065`)** |
+| 18  | §6.16 cast: eliminate i1→f16→i32 widenings            | −192             | A   | predicate-reg arch           |
+| 19  | §6.16 cast: skip i32→f32→i1→f16→i8 chain              | −96              | A   | predicate-reg arch           |
+| 20  | §6.16 cast: full migration to P-reg algebra           | converges to bool | A | structural                   |
+
+### Per-artifact projection table
+
+| Artifact                        | Current state              | After Tier-A hoist+share (Opts 1–12 subset) | After μarch opts (13–17) | After SIMT (16) |
+|--------------------------------|----------------------------|--------------------------------------------:|--------------------------:|----------------:|
+| `assembler.as` (unknown ver.)  | 17.5 ops/row, no timing    | ~9 ops/row                                   | ~7 ops/row                | per-AIV **4× scaling** |
+| CANN-9.0.0 bool `.o`           | 1,431 cyc, 14.4 ops/row    | ~1,100 cyc, ~10 ops/row                      | ~900 cyc, ~8 ops/row       | per-AIV **4× scaling** |
+| Cast variant                   | ~2× of bool (structural)   | ≈ bool                                        | ≈ bool                     | per-AIV **4× scaling** |
+
+#### Recommendations by artifact
+
+- **`assembler.as`**: Apply Opts 1–12 (Tier-A hoist + share + F-hoist) — this alone closes the 22% per-row gap with the camodel-traced version. Then Opts 13–15 for further structural improvements.
+
+- **CANN-9.0.0 bool `.o`**: Most Tier-A hoist optimizations already applied. The biggest remaining wins are §6.6 Opt 2 (C in P-reg, −65 ops) and the new μarch-derived Opt 13/14 (bank discipline, up to ~−15 cyc/iter). SIMT (Opt 16) is the largest remaining opportunity but requires programming-model rewrite.
+
+- **Cast variant**: Wholesale migration to bool-style P-reg algebra (Opts 18–20) eliminates the cast-vs-bool gap. Worth a camodel trace of the cast `.o` to confirm whether `bishengir-compile-a5` already attempts this — if it does, the cast variant might be closer to bool than the MLIR length suggests.
+
+### Summary of achievable cycle/throughput improvements
+
+| Combined optimization set                            | Per-row improvement | Per-AIV throughput improvement |
+|------------------------------------------------------|---------------------:|-------------------------------:|
+| Just Opts 1–12 (existing structural list)            | 14.4 → ~10 ops/row   | 1×                             |
+| Add Opts 13–15 (μarch-aware structural)              | → ~8 ops/row         | 1×                             |
+| Add Opt 16 (SIMT)                                    | (unchanged per-row)  | **4×**                         |
+| Add Opt 17 (SSBuffer)                                | (unchanged per-row)  | + GM bandwidth saving          |
+| Add Opts 18–20 (cast → bool conversion)              | (cast variant only) | (cast → bool throughput)       |
+
+Net achievable: **~6× cycle reduction per kernel** (per-row 14.4 →
+~8, plus 4× SIMT scaling) on a single AIV core, with additional
+launcher-level scaling across the 36 AIV cores per die for full-die
+**~144× concurrent mask tiles** vs. current single-AIV invocation.
+
 ## 7. Per-iter hardware-op tally
 
 Compute portion of the body (excluding loads/stores/sync):
