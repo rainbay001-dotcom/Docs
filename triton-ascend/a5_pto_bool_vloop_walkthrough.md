@@ -113,6 +113,23 @@ Bitwise predicate algebra.
 
 Lane-wise predicated select: `Vd[i] = Pmask[i] ? V_true[i] : V_false[i]`.
 
+### `VDUPS.type Vd, Sn, Pmask, #pos`
+
+Vector duplicate scalar — broadcast a scalar register's value to every
+lane of `Vd` under `Pmask`. From `pto-isa/.../vector/ops/predicate-and-materialization/vdup.md`:
+"Duplicate scalar or vector element to all lanes." The `#pos` is a
+position selector (typically `#1` for "broadcast the scalar input as-is";
+other positions select a lane of a vreg input).
+
+```
+Vd[i] ← Sn       for each lane i where Pmask[i] = 1
+```
+
+Equivalent semantically to `VLDI` with `#dist = brc_b32`, but the source is a
+**scalar register** rather than a UB address. Useful when the broadcast
+value is computed in scalar code (e.g., a program-id-derived constant)
+rather than read from memory.
+
 ## 3. The annotated assembly
 
 Bool variant, VLOOP body of `mask_kernel`. The 20-line snippet shown is
@@ -304,6 +321,202 @@ Two reasons:
 This VADDS reading is the most natural one given the kernel's
 structure, but a definitive mapping needs the upstream launcher
 or the pre-loop assembly.
+
+### 3.2 The full body is two passes — pass B (lines 23–38)
+
+The original 22-line snippet I documented in §3 was only **half** of
+the VLOOP body. The full body (per `#instr=35` in `VLOOPV2_V310 S3, #35, #1, #1`)
+is 35 instructions, and lines 23–38 of `~/Documents/docs/assembler.as`
+reveal a **second compute pass** that mirrors pass A's structure but
+operates on different source/destination addresses.
+
+```asm
+;══════════════════════════════════════════════════════════════════════════════
+; Pass B  (lines 23–38, structurally identical to pass A but different addrs)
+;══════════════════════════════════════════════════════════════════════════════
+VLDI V2, [S14], #0,  #0, #0         ; V2 ← UB[S14], normal full-VL, no incr
+                                    ;       ◄══ k_offset for pass B's region (different from pass A's [S6])
+
+VLDI V3, [S66], #16, #0, #1         ; V3 ← UB[S66], normal full-VL, +512 B post-incr
+                                    ;       ◄══ q_offset stream for pass B (different stream from pass A's [S69])
+
+VLDI V5, [S16], #0,  #0, #0         ; V5 ← UB[S16], normal full-VL, no incr
+                                    ;       ◄══ k_attn for pass B's region
+
+VLDAS ULD0, [S18]                   ; UnalignReg ULD0 ← S18  (pass B's precomputed-C buffer base)
+
+VADDS.s32 V2, V2, S8, P1            ; V2 += S8        (same program-id stride as pass A; reuses S8)
+                                    ;       Note: source typoed as "VADDS,s32" in the assembler file —
+                                    ;       harmless transcription artifact
+
+VCMP.LE.s32 P5, V3, V2, P1          ; P5 = (V3 ≤ V2)   — A_row for pass B's region
+VCMP.EQ.s32 P4, V4, V5, P1          ; P4 = (V4 == V5)  — B_row for pass B's region
+                                    ;       (V4 = q_attn[i] is REUSED unchanged from pass A!)
+
+VLDUI V6, ULD0, [S70], #0           ; V6 ← unaligned load (pass B's C bytes)
+                                    ;       (S70 is whatever pass A's tail set it to via SMOV S70, S18)
+
+MOVVP.b32 P3, V6, #0                ; P3 = C  for pass B
+PXOR P3, P3, P2, P1                 ; (no-op — same vnot-collapse as pass A)
+POR  P3, P4, P3, P1                 ; D = B | C
+PAND P3, P5, P3, P1                 ; E = A & D
+VCMP.EQ.s32 P4, V3, V2, P1          ; P4 = F (q_off == k_off) for pass B
+POR  P3, P3, P4, P1                 ; result = E | F
+VSEL.b32 V2, V1, V0, P3             ; i1 → i32 widening (V1, V0 reused unchanged from pass A)
+VSTI V2, [S65], #16, #2, P1, #1     ; store V2 to UB[S65 + …]
+                                    ;       ◄══ DIFFERENT output address from pass A's [S67]
+```
+
+#### What's the same and what changes between passes
+
+| Quantity                             | Pass A address | Pass B address | Reused? |
+|--------------------------------------|----------------|----------------|---------|
+| k_offset source                      | `[S6]`         | `[S14]`        | no      |
+| q_offset stream                      | `[S69]`        | `[S66]`        | no      |
+| k_attn source                        | `[S10]`        | `[S16]`        | no      |
+| Precomputed C buffer (VLDAS)         | `[S12]`        | `[S18]`        | no      |
+| Output destination (VSTI)            | `[S67]`        | `[S65]`        | no      |
+| q_attn broadcast scalar (V4)         | brc_b32 from `[S68]` | **same V4** | **YES** |
+| Program-id stride (S8)               | constant       | constant       | YES     |
+| Constant tiles V0 (zeros), V1 (ones) | preloaded      | preloaded      | YES     |
+| Predicate seeds P1 (VL64), P2 (ALLF) | preloaded      | preloaded      | YES     |
+
+#### What this implies — likely interpretation
+
+The two passes share `q_attn[i]` (V4) and the program-id stride (S8),
+but everything else — k_offset, k_attn, precomputed C, output buffer
+— is different. The most consistent interpretation is that the
+kernel is computing **mask outputs for two independent key blocks
+per VLOOP iter**, against the same query block:
+
+```
+                      query block (one set of q_attn, q_offset)
+                                        │
+                          ┌─────────────┴─────────────┐
+                          ▼                           ▼
+                    key block #A                  key block #B
+        (k_attn @ [S10], k_offset @ [S6])  (k_attn @ [S16], k_offset @ [S14])
+        (C precomp @ [S12])                 (C precomp @ [S18])
+        (output mask @ [S67])               (output mask @ [S65])
+```
+
+This is a multi-block "fan-out" pattern — one query, two key blocks,
+two output masks per iter. Confirming the algorithmic structure
+needs the launcher source (which we don't have); this interpretation
+is **Tier B**.
+
+#### What this resolves about §11 (the upper-32-lane question)
+
+The full body length is now confirmed at 35 instructions: pass A
+(19 insns: lines 4–22) + pass B (16 insns: lines 23–38) = 35 ✓.
+
+This **does not** by itself decide between Layouts A / B / C in §11
+— that question is about what's in the upper 32 lanes of one vreg
+during a single VCMP, not about how many compute passes a single
+iter performs. But it does mean **§11's "Layout B" is not the
+operative pattern here** — Layout B postulated "two output rows of
+the same tile packed into one vreg," whereas what we see is "two
+output rows of two *different* tiles, each computed in a separate
+pass with its own VCMPs and VSTI." The work is unrolled across
+*tiles*, not within a single vreg's 64 lanes.
+
+So §11's question (padded vs packed-within-vreg vs replicated)
+remains open for what's in the upper 32 lanes during one VCMP, and
+the resolution paths in §11 still apply.
+
+### 3.3 The post-loop `VDUPS.b32` (line 39)
+
+```asm
+VDUPS.b32 V0, S20, P1, #1           ; V0 ← S20 broadcast to all 64 lanes (b32, mask P1, position #1)
+```
+
+**`VDUPS`** = "vector duplicate scalar." Per the PTO ISA repo
+(`pto-isa/.../vector/ops/predicate-and-materialization/vdup.md`):
+"Duplicate scalar or vector element to all lanes." Semantically
+equivalent to `VLDI` with `#dist = brc_b32`, but the source is a
+**scalar register** (`S20` here), not a UB address.
+
+Position of this instruction (after VLOOPV2's #35-insn body) places
+it **post-loop**. Its role is most likely **resetting V0 for a
+subsequent code section** — e.g., V0 was used as the all-zero tile
+in the loop's `VSEL.b32 V2, V1, V0, P3`, and the same physical V0 is
+about to be repurposed for some downstream step that wants `S20`
+broadcast across all lanes. The Tier on what S20 holds is C; without
+the surrounding code the role is inferred from position only.
+
+### 3.4 Updated full instruction listing
+
+For reference, the complete content of `~/Documents/docs/assembler.as`:
+
+```asm
+;══════════ Pre-loop predicate setup ══════════
+PSET.b32 P1, #8                     ; P1 ← VL64 (all 64 i32 lanes active)
+PSET.b32 P2, #15                    ; P2 ← ALLF (all lanes false; PXOR no-op pattern)
+
+;══════════ VLOOP header ══════════
+VLOOPV2_V310 S3, #35, #1, #1        ; iter count = S3, body length = 35,
+                                    ; layer = innermost, last loop in this layer
+
+;══════════ Body — Pass A  (lines 4–22, 19 insns) ══════════
+VLDI V2, [S6],  #0,  #0, #0         ; k_offset row (pass A)
+VLDI V3, [S69], #16, #0, #1         ; q_offset stream (pass A)
+VLDI V4, [S68], #1,  #3, #1         ; q_attn[i] brc_b32 — SHARED across both passes
+VLDI V5, [S10], #0,  #0, #0         ; k_attn row (pass A)
+VLDAS ULD0, [S12]                   ; pass A's precomputed-C buffer base
+SMOV.b32 S70, S12                   ; S70 ← S12
+VADDS.s32 V2, V2, S8, P1            ; V2 += pid·BLOCK
+VCMP.LE.s32 P5, V3, V2, P1          ; A_row = triu_causal
+VCMP.EQ.s32 P4, V4, V5, P1          ; B_row = (q_attn == k_attn)
+VLDUI V6, ULD0, [S70], #0           ; load C bytes
+SMOV.b32 S70, S18                   ; ★ advance S70 to S18 — sets up pass B's C source
+MOVVP.b32 P3, V6, #0                ; P3 = C (pass A)
+PXOR P3, P3, P2, P1                 ; (no-op vnot slot)
+POR  P3, P4, P3, P1                 ; D = B | C
+PAND P3, P5, P3, P1                 ; E = A & D
+VCMP.EQ.s32 P4, V3, V2, P1          ; F_row = (q_off == k_off)
+POR  P3, P3, P4, P1                 ; result = E | F
+VSEL.b32 V2, V1, V0, P3             ; i1 → i32
+VSTI V2, [S67], #16, #2, P1, #1     ; store result to UB[S67]
+
+;══════════ Body — Pass B  (lines 23–38, 16 insns) ══════════
+VLDI V2, [S14], #0,  #0, #0         ; k_offset row (pass B's region)
+VLDI V3, [S66], #16, #0, #1         ; q_offset stream (pass B's region)
+VLDI V5, [S16], #0,  #0, #0         ; k_attn row (pass B's region)
+VLDAS ULD0, [S18]                   ; pass B's precomputed-C buffer base
+                                    ; (note: no SMOV here — S70 was set by pass A's tail SMOV S70, S18)
+VADDS.s32 V2, V2, S8, P1            ; V2 += pid·BLOCK (same S8 — both passes share program-id stride)
+VCMP.LE.s32 P5, V3, V2, P1          ; A_row for pass B
+VCMP.EQ.s32 P4, V4, V5, P1          ; B_row — V4 reused unchanged from pass A
+VLDUI V6, ULD0, [S70], #0           ; load C bytes for pass B
+MOVVP.b32 P3, V6, #0                ; P3 = C (pass B)
+PXOR P3, P3, P2, P1                 ; (no-op vnot slot)
+POR  P3, P4, P3, P1                 ; D
+PAND P3, P5, P3, P1                 ; E
+VCMP.EQ.s32 P4, V3, V2, P1          ; F_row for pass B
+POR  P3, P3, P4, P1                 ; result for pass B
+VSEL.b32 V2, V1, V0, P3             ; i1 → i32
+VSTI V2, [S65], #16, #2, P1, #1     ; store result to UB[S65]   ◄── different from pass A's [S67]
+
+;══════════ Post-loop ══════════
+VDUPS.b32 V0, S20, P1, #1           ; reset V0 ← S20 broadcast (likely staging V0 for downstream code)
+```
+
+#### Notes on the new structure
+
+- **Body length matches `#instr=35`** (19 + 16 = 35). No body insns are missing.
+- **V4 lifetime**: q_attn[i] (V4) is loaded once per iter via `brc_b32`
+  and **reused across both passes**. Pass B does not reload V4. This
+  is the dominant compute reuse between passes — both compares
+  `(q_attn[i] == k_attn[j_passA])` and `(q_attn[i] == k_attn[j_passB])`
+  share V4.
+- **S8 reuse**: same program-id stride applied in both passes' VADDS.
+- **V0, V1 reuse**: the constant 0/1 tiles are loaded once (somewhere
+  pre-loop, not shown) and used in both VSEL ops without reload —
+  Optimization 6 hoisting these is correct *and consistent with how
+  the kernel already treats them in pass B*.
+- **`SMOV S70, S18` in pass A acts as the *prologue* to pass B's
+  unaligned-load**: by the time pass B reaches `VLDUI V6, ULD0, [S70], #0`,
+  S70 is already pointing at S18.
 
 ## 4. Translation back to Triton source
 
@@ -1347,6 +1560,7 @@ descriptions provided directly by the architect.
 | `VSEL.b32`          | **A**| `pto-isa/docs/isa/vector/ops/compare-select/vsel.md` (Vd[i] = mask ? Vt[i] : Vf[i]) |
 | `vreg = 256 B`      | **A**| `pto-isa/docs/isa/machine-model/execution-agents.md`                         |
 | `VADDS.s32`         | B    | "vector add scalar" — strong naming inference; arch spec not yet provided    |
+| `VDUPS.b32`         | **A** | `pto-isa/docs/isa/vector/ops/predicate-and-materialization/vdup.md` ("Duplicate scalar … to all lanes") |
 | `MOVVP.b32`         | B    | "move vreg → predicate"; mode bit `#0` semantics inferred (LSB-extract vs ≠0 test) |
 | `VLDAS`             | C    | "vector load address (set up unaligned ctx)"; pattern-matched from usage     |
 | `VLDUI`             | C    | "vector load unaligned, immediate"; field meanings unclear without spec      |
@@ -1363,6 +1577,12 @@ To finalize the table to 100% Tier-A:
 4. `VLDUI vd, ULDn, [sn], #imm` — relationship between ULDn and the offset register
 5. `VADDS.type Vd, Vs, Sn, Pmask` — broadcast-add semantics formally stated
 6. `_V310` suffix — what the encoding variant identifies (chip revision? layer config?)
+7. **Algorithmic role of pass A vs pass B** — same query × two different key blocks?
+   Two halves of one tile with different precomputed masks? Resolution requires
+   the launcher source.
+8. **`VDUPS.b32 V0, S20, P1, #1` post-loop** — what S20 holds and what
+   downstream code expects V0 to be after this reset. Resolution requires
+   disassembling beyond line 39.
 
 ## 10. Reproducibility
 
@@ -1386,6 +1606,26 @@ needs documenting).
 The annotated assembly assumes V2 / V3 / V5 use only the lower 32
 lanes of their 64-lane vreg, with the upper 32 either padded, packed
 with a second row, or replicated. None of these is verified.
+
+### Status update from §3.2 — body-length resolved, lane question still open
+
+§3.2 confirmed the full 35-instruction body via the updated assembler
+listing, and revealed a **two-pass structure**: pass A (lines 4–22)
+and pass B (lines 23–38) operate on different source/destination
+addresses but share V4, V0, V1, S8, P1, P2.
+
+The two-pass observation makes one of the original layout
+hypotheses **less likely** but does not pick between them
+definitively:
+
+- **Layout B (packed two rows in one vreg)** is now *less* likely
+  for the kernel as a whole — what we see is unrolling across
+  separate compute regions (each pass has its own VCMPs, VLDIs,
+  VSTI), not packing of two rows inside one vreg's 64 lanes.
+  Layout B would have produced one vreg-load with two rows-worth
+  of data and one VCMP that consumed both halves.
+- **Layouts A (padded) and C (replicated)** remain possible for
+  what's in the upper 32 lanes during a single pass's compute.
 
 ### What's pinned down
 
