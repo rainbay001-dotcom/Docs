@@ -1159,6 +1159,136 @@ apply them.
    (recompute C inline) rather than option β (hold C in P-reg).
    The §6.6 Opt 2 optimization would help camodel too.
 
+### 5.2 Cycle-accurate timing per instruction (CANN 9.0.0 build)
+
+Per-instruction cycle counts from the camodel trace of
+`mask_kernel_a5.o` (the `dur` column in
+`helloworld_cast_vs_nocast_comparison.md` §4.7.3.8.1). `dur` is
+**per-instruction completion latency** — issue cycle → result
+available — not issue-to-issue spacing. Multi-pipe overlap means
+the wall-clock cycle span is far below the sum of `dur` values.
+
+#### Pre-loop section (12 instructions)
+
+| PC          | Mnemonic         | Pipe    | Cycles | Role                                          |
+|-------------|------------------|---------|-------:|-----------------------------------------------|
+| `0x10d0d200`| `RV_VLDI`        | RVECLD  |    10  | Load constants (TILE_OFFSETS, masks)         |
+| `0x10d0d204`| `RV_VLDI`        | RVECLD  |    10  | Load constants                                |
+| `0x10d0d208`| `RV_PSET B32`    | RVECEX  |     7  | Set predicate (lane-mask-all-true)            |
+| `0x10d0d20c`| `RV_VDUPS B32`   | RVECEX  |     7  | Broadcast q_offset positions to lanes         |
+| `0x10d0d210`| `RV_PSET B32`    | RVECEX  |     7  | Set predicate (row-mask)                      |
+| `0x10d0d214`| `RV_PSET B32`    | RVECEX  |     7  | Set predicate (col-mask)                      |
+| `0x10d0d218`| `RV_SMOV`        | RVECSU  |     2  | Scalar move (loop-iv start)                   |
+| `0x10d0d21c`| `RV_VDUPS B32`   | RVECEX  |     7  | Broadcast k_offset positions to lanes         |
+| `0x10d0d220`| `RV_SMOVI`       | RVECSU  |     1  | Scalar move-immediate (BLOCK = 32)            |
+| `0x10d0d224`| `RV_SMOVI`       | RVECSU  |     1  | Scalar move-immediate (loop bound)            |
+| `0x10d0d228`| `RV_VCMP_EQ S32` | RVECEX  |     7  | F = q_offset == k_offset (★ pre-computed once) |
+| `0x10d0d22c`| `RV_PXOR B8`     | RVECEX  |     8  | Invert tail/loop-end predicate                |
+|             | **sum**          |         | **74**  | (no overlap assumed)                          |
+
+#### Loop marker (1 instruction)
+
+| PC          | Mnemonic   | Pipe    | Cycles |                                  |
+|-------------|------------|---------|-------:|----------------------------------|
+| `0x10d0d230`| `RV_VLOOP` | RVECLP  |     1  | VLOOP start (32 iterations)      |
+
+#### Body — per VLOOP iter (12 instructions)
+
+| PC          | Mnemonic            | Pipe    | Cycles | Role                                       |
+|-------------|---------------------|---------|-------:|--------------------------------------------|
+| `0x10d0d234`| `RV_VLDI`           | RVECLD  |    10  | Load q_attn[i]                             |
+| `0x10d0d238`| `RV_VLDI`           | RVECLD  |    11  | Load k_attn (this row)                     |
+| `0x10d0d23c`| `RV_VCMP_EQ S32`    | RVECEX  |     7  | B = (q_attn[i] == k_attn)                  |
+| `0x10d0d240`| `RV_POR B8`         | RVECEX  |     8  | B \| C                                     |
+| `0x10d0d244`| `RV_VCMP_LE S32`    | RVECEX  |     7  | A = (q_offset[i] <= k_offset)              |
+| `0x10d0d248`| `RV_VCMP_EQ S32`    | RVECEX  |     7  | C = (k_attn == 0)                          |
+| `0x10d0d24c`| `RV_PAND B8`        | RVECEX  |     8  | A & (B \| C)                               |
+| `0x10d0d250`| `RV_POR B8`         | RVECEX  |     8  | (A & (B \| C)) \| F  ← final mask          |
+| `0x10d0d254`| `RV_VSEL B32`       | RVECEX  |     7  | i1 → i32 widening                          |
+| `0x10d0d258`| `RV_VCVT_I2I`       | RVECEX  |     8  | i32 → i8 narrowing                         |
+| `0x10d0d25c`| `RV_VSTI`           | RVECST  |    14  | Store 32-byte vector                       |
+| `0x10d0d260`| `RV_SEND`           | RVECST  |    10  | Signal iter done                           |
+|             | **sum**             |         | **105** | (per iter, no overlap assumed)            |
+
+#### Cycle accounting — serial vs parallel
+
+```
+Pre-loop sum (no overlap):              74 cyc
+VLOOP marker:                            1 cyc
+Body sum × 32 iters (no overlap):  105 × 32 = 3,360 cyc
+                                          ─────────
+Total if fully serialized:                3,435 cyc
+
+Camodel-measured wall-clock:              1,431 cyc
+
+Effective parallelism:                3,435 / 1,431 ≈ 2.4× pipeline overlap
+```
+
+The 2.4× factor comes from multi-pipe issue overlap. The five A5
+pipes (RVECEX, RVECLD, RVECST, RVECSU, RVECLP) can issue
+concurrently, so a load on RVECLD overlaps with compute on RVECEX
+overlaps with a store-completion drain on RVECST overlaps with
+scalar setup on RVECSU.
+
+#### Per-pipe cycle budget per iter
+
+Sum of `dur` per iter, split by pipe:
+
+| Pipe    | Per-iter `dur` sum | Notes |
+|---------|-------------------:|-------|
+| RVECLD  |  10 + 11 = **21**  | Two VLDIs (q_attn + k_attn loads) |
+| RVECEX  |  7+8+7+7+8+8+7+8 = **60** | All VCMPs + predicate algebra + VSEL + VCVT |
+| RVECST  |  14 + 10 = **24**  | VSTI store + SEND signal |
+| RVECSU  |   0                | (none in body — scalar setup is pre-loop) |
+| RVECLP  |   0                | (only VLOOP marker, pre-body) |
+| **per-iter sum** | **105**    |                                              |
+
+The longest pipe-chain is RVECEX at 60 cyc/iter — this sets the
+**lower bound** on iter latency given perfect parallelism. Actual
+wall-clock per iter ≈ 1,356 / 32 = **42.4 cyc**, which is *better*
+than 60 — meaning the RVECEX ops themselves are pipelined (can
+issue every few cycles, not waiting for previous to retire).
+
+#### Per-mask-row cycle cost
+
+```
+Cycles per output row  =  (1,431 − 74 − 1) / 32  =  1,356 / 32  ≈  42.4 cyc/row
+Events per output row  =                452 / 32  ≈  14.1 events/row
+```
+
+So each 32-element row of mask costs **~42 cycles** on hardware,
+executing ~14 instructions per row. Pipeline parallelism makes the
+wall-clock cost ≈40 % of the serial-instruction sum.
+
+#### Useful inferences
+
+| Observation | What it implies |
+|---|---|
+| 4 × `VCMP` × 7 cyc = 28 cyc on RVECEX per iter | Compares dominate the body's compute budget |
+| `RV_VSTI` at 14 cyc — slowest single op in body | Store path is the biggest single-issue cost |
+| `RV_VLDI` at 10–11 cyc but on RVECLD pipe | Load latency hidden behind RVECEX compute |
+| `RV_PSET` / `RV_PAND` / `RV_POR` all 7–8 cyc | Predicate algebra is no cheaper than vector compare |
+| `RV_VLOOP` at 1 cyc | Loop-control overhead is essentially free |
+| Total wall-clock 1,431 cyc vs serial 3,435 cyc | 2.4× pipeline overlap; ~70 % pipe utilization |
+
+#### Cycle-cost translation for missed optimizations
+
+Combining the per-op `dur` data with the missed-optimization tally
+in §6.11 lets us turn op-count savings into approximate cycle
+savings (assuming the saved op is on the critical path, which is
+the optimistic case):
+
+| Optimization | Op saved/iter × 32 iters | Approx cycle saving (per `dur`) |
+|---|---:|---:|
+| §6.11 F-hoist (saves 2× `VCMP_EQ` per iter — already done in CANN 9.0.0)  | 64 ops    | 64 × 7 ≈ 448 cyc (already realized in the 1,431-cyc figure) |
+| §6.6 Opt 2 (C in P-reg, saves 1× `VCMP_EQ` per iter — NOT in either build) | 32 ops    | 32 × 7 ≈ 224 cyc potential further saving |
+| §6.8 Opt 4 (V2 hoist — already done in CANN 9.0.0)                        | 0 ops/iter (hoisted) | 0 (already realized) |
+| If today's build also implemented §6.6 Opt 2 | — | **estimated ~1,200 cyc total** (≈16 % faster) |
+
+(Cycle savings are upper bounds — real impact depends on whether
+the saved op was on the critical path or hidden by parallelism. A
+camodel re-trace with the optimization applied would settle this.)
+
 ## 6. A5 codegen wins — MLIR ops that disappear into hardware modes
 
 `hivmc-a5` exploits two A5 hardware features to eliminate entire MLIR
