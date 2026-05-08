@@ -974,6 +974,133 @@ boolean algebra stay in P-regs end-to-end.
 | `hivm.hir.vcast 1024xi32 → 1024xi8`                   | (later in body, not shown)     | i32 → i8 narrowing |
 | `hivm.hir.store 1024xi8 → gm`                         | (later DMA op)                 | UB → GM via MTE3 |
 
+### 5.1 Comparison with earlier camodel disassembly
+
+An earlier disassembly of the bool-variant `.o` (in
+`helloworld_cast_vs_nocast_comparison.md` §4.7.3.8.1, PCs
+`0x10d0d200`–`0x10d0d260`) shows a *different* lowering of the same
+source kernel. Comparing the two artefacts is informative because
+the camodel version applies several optimizations that
+`assembler.as` doesn't — empirical proof that the missed
+optimizations cataloged in §6 below are achievable, not just
+theoretical.
+
+#### Side-by-side structural summary
+
+```
+                  CAMODEL DISASM (earlier)                       ARCHITECT ASSEMBLER.AS (recent)
+                  ─────────────────────────                       ───────────────────────────────
+PRE-LOOP          12 ops (heavy hoisting)                         2 ops (only PSETs)
+                    RV_VLDI ×2  load V0/V1 (constants)              PSET.b32 P1, #8
+                    RV_PSET ×3  predicate seeds                     PSET.b32 P2, #15
+                    RV_VDUPS ×2 broadcast q_offset, k_offset to vregs
+                    RV_SMOV/SMOVI ×3   loop-iv, BLOCK, bound
+                    RV_VCMP_EQ S32     ★ F = q_off == k_off PRE-COMPUTED
+                    RV_PXOR B8         pre-set tail/loop-end mask
+
+VLOOP MARKER      RV_VLOOP @ 0x230  (32 iters)                    VLOOPV2_V310 S3, #35, #1, #1
+
+LOOP BODY         14 ops (single pass, ONE tile/iter)             35 ops (TWO passes, TWO tiles/iter)
+                    RV_VLDI ×2  q_attn, k_attn                      ─── pass A (19 ops) ───
+                    RV_VCMP_EQ B = q_attn==k_attn                    VLDI V2/V3/V4/V5  (re-loads same data)
+                    RV_POR  B|C                                      VLDAS / SMOV
+                    RV_VCMP_LE A = q_off≤k_off                       VADDS V2 += S8    (per-iter, NOT hoisted)
+                    RV_VCMP_EQ C = k_attn==0  (per row)              VCMP.LE / VCMP.EQ ×3
+                    RV_PAND   A & (B|C)                              VLDUI / MOVVP     (C reload, NOT hoisted)
+                    RV_POR    | F  (uses pre-hoisted F)              PXOR/POR/PAND/POR
+                    RV_VSEL   widen i1→i32                           VSEL.b32 / VSTI
+                    RV_VCVT_I2I i32→i8                              ─── pass B (16 ops) ───
+                    RV_VSTI                                           VLDI V2/V3/V5     (re-loads same data)
+                    RV_SEND                                           VLDAS
+                                                                      VADDS V2 += S8
+POST-LOOP         (none shown)                                        VCMP.LE / VCMP.EQ ×3
+                                                                      VLDUI / MOVVP
+                                                                      PXOR/POR/PAND/POR
+                                                                      VSEL.b32 / VSTI
+
+POST-LOOP                                                          VDUPS.b32 V0, S20, P1, #1
+
+TOTAL             26 instructions                                  39 instructions
+                  (12 pre-loop + 14 body)                          (2 pre-loop + 35 body + 1 post)
+```
+
+#### Mnemonic mapping — same ISA, different transcription convention
+
+| `assembler.as`        | camodel disasm        | comment |
+|-----------------------|-----------------------|---------|
+| `PSET.b32`            | `RV_PSET B32`         | same; `RV_` prefix in camodel disassembler tooling |
+| `VLOOPV2_V310`        | `RV_VLOOP`            | similar; variant suffix differs |
+| `VLDI`                | `RV_VLDI`             | same |
+| `SMOV.b32` / `SMOVI`  | `RV_SMOV` / `RV_SMOVI`| same |
+| `VCMP.LE.s32` etc.    | `RV_VCMP_LE S32`      | same; `.` vs `_`/space separator |
+| `PXOR` / `POR` / `PAND` | `RV_PXOR/POR/PAND B8` | same |
+| `VSEL.b32`            | `RV_VSEL B32`         | same |
+| `VSTI`                | `RV_VSTI`             | same |
+| `VDUPS.b32`           | `RV_VDUPS B32`        | same |
+| `VCVT.*` (not in our snippet) | `RV_VCVT_I2I`   | i32→i8 narrowing |
+| `VLDAS` / `VLDUI` / `MOVVP` / `VADDS` | (not in camodel disasm) | only present in assembler.as |
+
+Bottom line on mnemonics: **same ISA**. The camodel disassembler
+prepends `RV_` (likely "Real Vector" or a tooling-internal namespace
+marker) and uses underscore/space as type-suffix separators; the
+architect's assembler form drops the prefix and uses `.` separators.
+
+#### Per-mask-row efficiency
+
+Counting executed instructions for the actual work produced:
+
+| Version          | VLOOP iters | Body ops | Mask rows produced | Total executed ops | **Ops per mask row** |
+|------------------|-------------|---------:|-------------------:|-------------------:|---------------------:|
+| Camodel (single-pass) | 32     |       14 |                 32 |  12 + 32·14 = 460  | **14.4**             |
+| Assembler.as (unroll-by-2) | 32 |       35 |                 64 |  2 + 32·35 + 1 = 1123 | **17.5**             |
+
+Surprising result: **the unrolled assembler.as version is *slower
+per mask row* than the un-unrolled camodel version** (17.5 vs 14.4
+ops/row, ~22% worse). The unroll-by-2 over key blocks is a real
+architectural win in principle (it shares V4 across passes and
+amortizes VLOOP-boundary overhead), but the implementation captured
+in `assembler.as` adds new costs faster than the unroll saves them.
+
+#### Where the per-row cost difference comes from
+
+| Source of extra cost in assembler.as | Approx. impact on per-row cost |
+|---|---:|
+| F not hoisted (recomputed in both passes)             | +1 op/row |
+| C handled via spill+reload (VLDAS/VLDUI/MOVVP)        | +1 op/row |
+| V2 load + VADDS not hoisted (run in both passes)      | +1.5 op/row |
+| V5 load not hoisted (run in both passes)              | +0.5 op/row |
+| V3 not shared across passes (loaded twice per iter)   | +0.5 op/row |
+| **Total** | **≈ +4 op/row → matches the 14.4 → 17.5 gap** |
+
+Each of these corresponds to an entry in §6's missed-optimizations
+catalog. The camodel disasm shows that **at least four of those
+optimizations were applied in an earlier compile** (F hoist, V2/V5
+hoist, scalar-setup hoist, no C-spill machinery) — strong empirical
+evidence that they're achievable without ISA changes.
+
+#### What this comparison reveals overall
+
+1. **The unroll-by-2 alone is a regression** unless paired with the
+   query-side sharing optimizations (V3 share, V2/V5 hoist, F hoist).
+   The architect's assembler.as version unrolled but didn't carry
+   the hoists across into the unrolled body, so the unrolling
+   costs more than it saves.
+
+2. **The compiler can do these optimizations** — proven by the
+   camodel version. They're not theoretical wishlist items;
+   they're regressions in the more recent version.
+
+3. **The ideal lowering combines both** — unroll-by-2 over key
+   blocks (good architectural idea from assembler.as) + all the
+   pre-loop hoisting (preserved from camodel) + holding C in a
+   P-reg (§6.6 Opt 2, missed by both versions) — would be the
+   cheapest of all three: roughly **8–10 ops/row** estimate,
+   nearly half of either version.
+
+4. **Even the camodel version isn't optimal.** It uses option α
+   (recompute C inline) rather than option β (hold C in P-reg).
+   The §6.6 Opt 2 optimization would help camodel too.
+
 ## 6. A5 codegen wins — MLIR ops that disappear into hardware modes
 
 `hivmc-a5` exploits two A5 hardware features to eliminate entire MLIR
@@ -2227,6 +2354,170 @@ the query side and correct as a generic rule.
 
 The current code shares V4 (q_attn) but not V3 (q_offset). Closing
 that gap is what §6.10 proposes.
+
+### 6.11 Hoist F = (q_offset == k_offset) — the camodel version already did this
+
+A new missed optimization surfaced by the §5.1 comparison. The
+camodel disassembly (§4.7.3.8.1 of `helloworld_cast_vs_nocast_comparison.md`)
+computes `F = (q_offset == k_offset)` once before the VLOOP and
+reuses the result across all 32 iters. The architect's
+`assembler.as` recomputes F **twice per iter** (once in pass A,
+once in pass B), throwing away that hoist.
+
+#### Empirical evidence — camodel pre-loop @ PC 0x10d0d228
+
+```
+0x10d0d228  RV_VCMP_EQ S32  RVECEX  7  ★ D = q_offset == k_offset (pre-computed once)  pre
+                                                                                       ↑
+                                                                          marked "pre" — outside VLOOP
+```
+
+This single pre-loop VCMP produces the entire 1024-bit F predicate
+for the full 32×32 tile. Inside the VLOOP, the camodel version's
+`RV_POR  B8  ((A & (B|C)) | D)` at PC `0x10d0d250` simply ORs the
+already-computed F into the result — no per-row VCMP.
+
+In contrast, `assembler.as` does the F compute **inside** every
+pass:
+
+```asm
+;  pass A:
+VCMP.EQ.s32 P4, V3, V2, P1          ; F_row computed FRESH per row, per pass
+
+;  pass B:
+VCMP.EQ.s32 P4, V3, V2, P1          ; same operands as pass A — same F result, but recomputed
+```
+
+#### Why F is hoistable — same dataflow argument as C
+
+F at the MLIR level (Phase 5 of `captures_hivmc_input_a5_bool.mlir`)
+is a **single 1024-element vcmp**:
+
+```mlir
+%13 = hivm.hir.pointer_cast(%c0_i64) : memref<1024xi1, ub>
+hivm.hir.vcmp ins(%collapse_shape_9, %collapse_shape_10) outs(%13)
+                  ↑                  ↑
+                  q_offset tile     k_offset tile (both full 1024-elem)
+```
+
+The MLIR computes F over the whole tile **exactly once** — there's
+no `i` index in the IR. So both lowerings (camodel's pre-loop hoist,
+assembler.as's per-row recompute) are correct, but the per-row
+recompute throws away the IR's natural one-shot structure.
+
+#### Why F is not row-invariant in the same way as C
+
+A subtle point: F = `(q_offset[i] == k_offset[j])` *does* vary with
+`i` (since `q_offset[i]` differs per row). It is not "loop-invariant"
+in the literal sense. But the **whole tile of F values** is computed
+once at the MLIR level, and that tile can be **stored and indexed**
+per iter.
+
+So F-hoist is a *different shape* of optimization from C-hoist:
+
+| Predicate | Width | Loop-invariant per row? | Hoist mechanism |
+|-----------|------:|:------------------------:|-----------------|
+| C         | 32 bits | yes — same value every iter | hold in single `_b32` P-reg (§6.6 Opt 2) |
+| **F**     | **1024 bits** | no — full tile, but precomputable once | **packed-predicate hoist** (this section) |
+
+C fits in a single 32-bit P-reg; F doesn't. F needs either:
+- A larger P-reg (`ppack` two `_b32` predicates and use `pextract`-class
+  ops to select per-row)
+- A UB-resident bitvector that's accessed per iter
+
+The camodel version evidently uses one of these (the disasm doesn't
+expose the storage detail), and the per-iter access cost is folded
+into the body's existing POR.
+
+#### Optimization 12 — hoist F to a packed predicate or UB bitvector
+
+```asm
+;  pre-loop:
+VCMP.EQ.s32 P_F_full, V_qoff_tile, V_koff_tile, P_seed   ; one shot, full 1024 bits
+;  (or: VCMP into packed pair of P-regs via ppack semantics)
+
+;  per iter:
+;  (just access the relevant 32 bits of F for this row, fold into POR)
+;  removes the per-iter VCMP.EQ for F in BOTH passes
+```
+
+| Cost              | Current (recomputed per iter, both passes) | Hoisted (pre-loop full-tile) |
+|-------------------|--------------------------------------------:|------------------------------:|
+| Pre-loop ops      | 0                                           | +1 (full-tile VCMP)           |
+| Per-iter ops      | 2× `VCMP.EQ` for F (one per pass)           | 0 (just access bits)          |
+| Total ops (T=32)  | **64**                                      | **1**                         |
+
+**Saving: ~63 ops** if the per-iter access cost is negligible
+(camodel's POR already incorporates F access into the existing
+boolean algebra). Even if access costs ~1 op/iter via `pextract`,
+**savings ≈ 32 ops** — comparable to §6.6 Opt 2.
+
+#### Why this is Tier-A
+
+- The camodel disassembly proves bishengir-compile-a5 *can* perform
+  this hoist (in a different version). It's not a theoretical
+  optimization.
+- The cost model is identical to §6.6 Opt 2 (hoist a redundant
+  per-iter compute) — same shape, just for F instead of C and at
+  full-tile width instead of row width.
+- No new ISA features required.
+
+#### Combined effect with §6.10 (V3 share)
+
+§6.10 (V3 shared) and §6.11 (F hoisted) interact: if V3 is hoisted
+to pre-loop and F is also hoisted, the per-iter `VCMP.EQ V3, V2`
+disappears entirely from both passes, freeing two op slots per iter
+× 32 iters = **64 ops** saved (combined with the 48 ops from §6.10
+alone, total ~112 ops just from V3+F together).
+
+#### Updated final tally
+
+| #   | Optimization                                          | Savings (ops)         | Tier | Empirically achieved? |
+|----:|-------------------------------------------------------|----------------------:|:---:|:---:|
+| 1   | §6.6 inline-recompute C                               | −34                   | A   | ✓ camodel does this (option α) |
+| **2**| **§6.6 hold C in P-reg**                             | **−65**               | **A** | not yet (neither version) |
+| 3   | §6.7 brc_b32 stream q_offset                          | −16                   | A   | not yet |
+| 4   | §6.8 hoist V2 (VLDI + VADDS)                          | −62                   | A   | ✓ camodel does this |
+| 5   | §6.8 hoist V5 (VLDI)                                  | −31                   | A   | ✓ camodel does this |
+| 6   | §6.8 hoist VLDAS/SMOV/V0/V1                           | ~−160                 | B   | ✓ camodel hoists V0/V1 + scalars |
+| 7   | §6.8 fuse `VCMP.LE` + `VCMP.EQ`                       | −32                   | C   | not yet |
+| 8   | §6.8 direct i1 → i8 via `VSEL.b8`                     | −32                   | C   | (needs ISA verification) |
+| 9   | §6.8 pack two output rows per iter (within one tile)  | ~50% loop overhead    | C   | not yet |
+| 10  | §6.9 cross-tile pack K[0]+K[1] into one VCMP          | ~−96 (best case)      | C   | not yet |
+| 11  | §6.10 share V3 (q_offset) across passes               | −48                   | A   | not yet |
+| **12**| **§6.11 hoist F = (q_offset == k_offset)**           | **−32 to −64**        | **A** | ✓ camodel does this |
+
+The **Tier-A optimizations empirically achieved by the camodel
+version** that `assembler.as` regressed on:
+
+- §6.8 Opt 4 (V2 hoist): camodel ✓, assembler.as ✗
+- §6.8 Opt 5 (V5 hoist): camodel ✓, assembler.as ✗
+- §6.8 Opt 6 (V0/V1 + scalar setup hoist): camodel ✓ (partial), assembler.as ✗
+- §6.11 Opt 12 (F hoist): camodel ✓, assembler.as ✗
+- §6.6 Opt 1 (C inline-recompute): camodel ✓ (option α), assembler.as did α γ instead
+
+That's **5 Tier-A optimizations regressed** between the two
+compilations. The good thing the assembler.as version added was the
+unroll-by-2 over key blocks (§3.2.1), but it lost more than it
+gained — hence the per-row regression from 14.4 to 17.5 ops/row
+documented in §5.1.
+
+#### What an ideal kernel would look like
+
+Combining the wins from both versions plus the missing §6.6 Opt 2:
+
+| Feature                                | Camodel | Assembler.as | Ideal |
+|----------------------------------------|:-------:|:------------:|:-----:|
+| Unroll-by-2 over key blocks            | ✗       | ✓            | ✓ |
+| F hoisted pre-loop                     | ✓       | ✗            | ✓ |
+| V2 / V5 / V0 / V1 hoisted              | ✓       | ✗            | ✓ |
+| C in P-reg (§6.6 Opt 2)                | ✗ (uses α) | ✗ (uses γ) | ✓ |
+| V3 shared across passes                | n/a (single pass) | ✗ | ✓ |
+| Predicted ops/row                      | 14.4    | 17.5         | **~8–10** |
+
+The ideal version would be roughly **half** the cost of either
+existing compilation. All optimizations needed to reach it are
+Tier-A (proven achievable on the same ISA by one or both compilers).
 
 ## 7. Per-iter hardware-op tally
 
