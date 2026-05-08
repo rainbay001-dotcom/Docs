@@ -974,37 +974,73 @@ boolean algebra stay in P-regs end-to-end.
 | `hivm.hir.vcast 1024xi32 → 1024xi8`                   | (later in body, not shown)     | i32 → i8 narrowing |
 | `hivm.hir.store 1024xi8 → gm`                         | (later DMA op)                 | UB → GM via MTE3 |
 
-### 5.1 Comparison with another compiler-version's disassembly (camodel-traced)
+### 5.1 Comparison with today's CANN 9.0.0 compile (camodel-traced)
 
 A separate disassembly of the bool-variant kernel (in
 `helloworld_cast_vs_nocast_comparison.md` §4.7.3.8.1, PCs
 `0x10d0d200`–`0x10d0d260`) shows a *different* lowering of the same
 source kernel. Both artefacts are real compiler output, but from
-**different `bishengir-compile-a5` versions** — not different
-incremental optimizations of one stable compiler. Provenance:
+**different `bishengir-compile-a5` builds**:
 
-- **Camodel-traced version** — `bishengir-compile-a5` output that we
-  built and traced through camodel ourselves at an earlier date.
-  Version is known to us (the build we ran).
+- **Today's CANN 9.0.0 build** — `bishengir-compile-a5` output that we
+  built ourselves on the GCP VM (`mask_kernel_a5.o`, 3,792 B) and
+  traced through camodel. Cycle-accurate timing data is available;
+  see the table below.
 - **`assembler.as`** — `objdump` output of a binary produced by a
   *different* compiler build, with **no version metadata available**.
   Origin of the binary is opaque; we have only the disassembled
-  text.
+  text — no `.o`, no cycle data.
 
-Because we don't know which version is older or which optimization
-flags either was built with, we **cannot** call differences between
-them "regressions" or "improvements" — only "differences." The
-analysis below catalogs the structural and per-row-cost differences
-without claiming any direction of evolution.
+Because we don't know `assembler.as`'s provenance, we **cannot** call
+differences between the two "regressions" or "improvements" — only
+"differences." The analysis below catalogs the structural and
+per-row-cost differences without claiming any direction of
+evolution.
 
-That said, the camodel side has the considerable advantage that we
+The CANN-9.0.0 side has the considerable advantage that we
 **already have its cycle-accurate trace**. The `assembler.as` side
 gives us an instruction sequence but no timing.
+
+#### Cycle-accurate data we already have for the CANN-9.0.0 build
+
+From `cann_900_simulator_coverage.md` (§"Empirical mnemonic
+frequency comparison: 910B1 vs A5"), the camodel trace of
+`mask_kernel_a5.o` produced under simulator `Ascend950PR_9572`:
+
+| Metric                | A5 (CANN 9.0.0) | 910B1 (CANN 8.5.0) | Ratio |
+|-----------------------|----------------:|-------------------:|------:|
+| **Total events**      |        **452**  |              9,459 | 0.05× |
+| **Cycle span**        |      **1,431**  |             27,645 | 0.05× |
+
+Mnemonic-class breakdown (from the same trace):
+
+| Class                          | A5 count | Notes |
+|--------------------------------|---------:|-------|
+| `RV_VCMP_EQ` / `RV_VCMP_LE`    | 65 + 32 = **97** | per-element compares |
+| `RV_PAND` / `RV_POR` / `RV_PXOR` | 32 + 64 + 1 = **97** | predicate ALU |
+| `RV_VSEL`                       | **32** | i1 → i32 widening |
+| `RV_PSET`                       | **3**  | predicate seeds |
+| `PUSH_PB`                       | **1**  | predicate-buffer push |
+| `RV_VLDI` / `RV_VSTI`           | 66 + 32 = **98** | vector loads/stores |
+| `RV_VLOOP`                      | **1**  | replaces 1024-iter scalar loop |
+| `RV_VCVT_I2I`                   | **32** | i32 → i8 narrowing |
+| `RV_VDUPS`                      | **2**  | scalar broadcast |
+| Scalar setup (MOV_*, ADD_IMM, …)| ~70    | small kernel prologue |
+
+Per the §4.7.3.8.1 PC-by-PC disassembly, this kernel runs **32
+VLOOP iterations** (one per output row of the 32×32 tile) — Layout A
+or C from §11, *not* Layout B (no two-row packing within a vreg
+in this build).
+
+Mapping the cycle/event counts to the per-mask-row efficiency:
+1,431 cycles / 32 mask rows = **44.7 cycles per mask row**, or
+452 events / 32 = **14.1 events per mask row**, very close to the
+14.4 ops/row figure we computed structurally for this version.
 
 #### Side-by-side structural summary
 
 ```
-                  COMPILER-VERSION-A (camodel-traced)              COMPILER-VERSION-B (assembler.as objdump)
+                  TODAY'S CANN 9.0.0 (camodel-traced .o)            UNKNOWN-VERSION (assembler.as objdump)
                   ──────────────────────────────────                ──────────────────────────────────────────
 PRE-LOOP          12 ops (heavy hoisting)                         2 ops (only PSETs)
                     RV_VLDI ×2  load V0/V1 (constants)              PSET.b32 P1, #8
@@ -1100,27 +1136,26 @@ apply them.
 
 1. **The unroll-by-2 alone is not a clear win unless** paired with
    the query-side sharing optimizations (V3 share, V2/V5 hoist, F
-   hoist). Version-B (assembler.as) unrolled but didn't carry the
-   hoists across into the unrolled body, and the unrolling costs
-   more than it saves at that point. Whether this is a deliberate
-   trade-off (e.g. for code-size reasons) or a missed optimization
-   in version-B's pass pipeline isn't determinable from the
-   disassembly alone.
+   hoist). The unknown-version (`assembler.as`) unrolled but didn't
+   carry the hoists across into the unrolled body, and at that
+   point the unrolling costs more than it saves. Whether this is a
+   deliberate trade-off (e.g. for code-size reasons) or a missed
+   optimization in that build's pass pipeline isn't determinable
+   from the disassembly alone.
 
 2. **The optimizations are achievable by `bishengir-compile-a5`** —
-   proven by version-A. They're not theoretical wishlist items.
-   Whether version-B's failure to apply them is a regression, a
-   deliberate choice, or a different code path entirely is unclear
-   without provenance metadata for version-B's build.
+   proven by today's CANN 9.0.0 build, with cycle-accurate camodel
+   evidence (1,431 cycles, 452 events for the full kernel). They're
+   not theoretical wishlist items.
 
 3. **The ideal lowering combines both** — unroll-by-2 over key
-   blocks (good architectural idea from assembler.as) + all the
-   pre-loop hoisting (preserved from camodel) + holding C in a
-   P-reg (§6.6 Opt 2, missed by both versions) — would be the
-   cheapest of all three: roughly **8–10 ops/row** estimate,
-   nearly half of either version.
+   blocks (good architectural idea from `assembler.as`) + all the
+   pre-loop hoisting (already in today's CANN-9.0.0 build) +
+   holding C in a P-reg (§6.6 Opt 2, missed by both) — would be
+   the cheapest of all three: roughly **8–10 ops/row** estimate,
+   nearly half of either existing version.
 
-4. **Even the camodel version isn't optimal.** It uses option α
+4. **Even today's CANN-9.0.0 build isn't optimal.** It uses option α
    (recompute C inline) rather than option β (hold C in P-reg).
    The §6.6 Opt 2 optimization would help camodel too.
 
@@ -2510,39 +2545,42 @@ alone, total ~112 ops just from V3+F together).
 | 11  | §6.10 share V3 (q_offset) across passes               | −48                   | A   | not yet |
 | **12**| **§6.11 hoist F = (q_offset == k_offset)**           | **−32 to −64**        | **A** | ✓ camodel does this |
 
-The **Tier-A optimizations empirically achieved by version-A
-(camodel-traced)** that version-B (`assembler.as`) does not apply:
+The **Tier-A optimizations empirically achieved by today's
+CANN-9.0.0 build (camodel-traced)** that the unknown-version
+(`assembler.as`) does not apply:
 
-- §6.8 Opt 4 (V2 hoist): version-A ✓, version-B ✗
-- §6.8 Opt 5 (V5 hoist): version-A ✓, version-B ✗
-- §6.8 Opt 6 (V0/V1 + scalar setup hoist): version-A ✓ (partial), version-B ✗
-- §6.11 Opt 12 (F hoist): version-A ✓, version-B ✗
-- §6.6 Opt 1 (C inline-recompute): version-A ✓ (option α), version-B uses option γ instead
+- §6.8 Opt 4 (V2 hoist): CANN 9.0.0 ✓, `assembler.as` ✗
+- §6.8 Opt 5 (V5 hoist): CANN 9.0.0 ✓, `assembler.as` ✗
+- §6.8 Opt 6 (V0/V1 + scalar setup hoist): CANN 9.0.0 ✓ (partial), `assembler.as` ✗
+- §6.11 Opt 12 (F hoist): CANN 9.0.0 ✓, `assembler.as` ✗
+- §6.6 Opt 1 (C inline-recompute): CANN 9.0.0 ✓ (option α), `assembler.as` uses option γ instead
 
-That's **5 Tier-A optimizations applied by one compiler version but
-not the other**. Version-B does add unroll-by-2 over key blocks
-(§3.2.1), which version-A doesn't have — but that one optimization
-alone yields less benefit than the five hoists version-A applies,
-which is why version-B comes out 22% slower per mask row (17.5 vs
-14.4 ops/row).
+That's **5 Tier-A optimizations applied by today's CANN-9.0.0 build
+but not the unknown-version build**. The unknown-version side does
+add unroll-by-2 over key blocks (§3.2.1), which the CANN 9.0.0 build
+doesn't have — but that one optimization alone yields less benefit
+than the five hoists CANN 9.0.0 applies, which is why
+the unknown-version side comes out 22% slower per mask row
+(17.5 vs 14.4 ops/row).
 
-Whether version-B's omission of the hoists is a regression in a
-later compiler, a deliberate trade-off, or a different toolchain
-build entirely cannot be determined from the disassembly alone — we
-have no provenance metadata for version-B.
+Whether the unknown-version's omission of the hoists is a regression
+in a different version of `bishengir-compile-a5`, a deliberate
+trade-off, or a different toolchain build entirely cannot be
+determined from the disassembly alone — we have no provenance
+metadata for that binary.
 
 #### What an ideal kernel would look like
 
 Combining the wins from both versions plus the missing §6.6 Opt 2:
 
-| Feature                                | Version-A (camodel) | Version-B (assembler.as) | Ideal |
-|----------------------------------------|:-------------------:|:------------------------:|:-----:|
-| Unroll-by-2 over key blocks            | ✗                   | ✓                        | ✓ |
-| F hoisted pre-loop                     | ✓                   | ✗                        | ✓ |
-| V2 / V5 / V0 / V1 hoisted              | ✓                   | ✗                        | ✓ |
-| C in P-reg (§6.6 Opt 2)                | ✗ (uses α)          | ✗ (uses γ)               | ✓ |
-| V3 shared across passes                | n/a (single pass)   | ✗                        | ✓ |
-| Predicted ops/row                      | 14.4                | 17.5                     | **~8–10** |
+| Feature                                | CANN 9.0.0 (today's build, camodel-traced) | `assembler.as` (unknown version) | Ideal |
+|----------------------------------------|:------------------------------------------:|:--------------------------------:|:-----:|
+| Unroll-by-2 over key blocks            | ✗                                          | ✓                                | ✓ |
+| F hoisted pre-loop                     | ✓                                          | ✗                                | ✓ |
+| V2 / V5 / V0 / V1 hoisted              | ✓                                          | ✗                                | ✓ |
+| C in P-reg (§6.6 Opt 2)                | ✗ (uses α)                                 | ✗ (uses γ)                       | ✓ |
+| V3 shared across passes                | n/a (single pass)                          | ✗                                | ✓ |
+| Predicted ops/row                      | 14.4 (44.7 cycles measured)                | 17.5 (no timing)                 | **~8–10** |
 
 The ideal version would be roughly **half** the cost of either
 existing compilation. All optimizations needed to reach it are
