@@ -1291,8 +1291,28 @@ camodel re-trace with the optimization applied would settle this.)
 
 ### 5.3 Hardware parallelism budget per micro-architecture component
 
-Sources: PTO ISA repo (`pto-isa/docs/isa/machine-model/execution-agents.md`)
-and local arch reference (`~/Documents/docs/ascend_910c_microarchitecture.md`).
+Sources, in order of authority:
+
+- **Tier A — Vendor-published**: hiascend.com official NPU
+  architecture-version pages, fetched via `/doc_center/source/`:
+  - `atlas_ascendc_10_0065` — A5/9572 (351x) architecture spec.
+    Source for: dual UB bank ports (2R+0W or 1R+1W), SSBuffer
+    direct AIC↔AIV path, SIMT register file, L0A format
+    FRACTAL_NZ, loop modes, cross-core sync modes, CUBE tile size.
+  - `atlas_ascendc_10_0009` — NPU arch version index.
+- **Tier A — Vendor-published**: PTO ISA repo
+  (`pto-isa/docs/isa/machine-model/execution-agents.md`,
+  `vector/ops/`). Source for: 5 pipe names + per-pipe roles,
+  vreg = 256 B / 64 i32 lanes, MaskReg width, vector ALU
+  semantics.
+- **Tier A — Vendor-published**: PTO ISA costmodel.
+  Source for: vector pipeline cycle model
+  (startup + completion + per_repeat × repeats + (repeats−1) × interval).
+- **Local synthesis** (transcription only):
+  `~/Documents/docs/ascend_910c_microarchitecture.md` integrates
+  the above into a single readable reference. The microarch doc
+  itself is not original research — every per-cycle / per-port
+  figure traces back to one of the vendor sources above.
 
 #### A5 AIV core — five independent pipes, each 1 op/cyc
 
@@ -1328,6 +1348,8 @@ end-of-pipe drain ≈ 23 cyc.
 
 #### UB bandwidth — A5's per-cycle bank-port budget
 
+> Source: hiascend.com `atlas_ascendc_10_0065` (351x official spec page, fetched 2026-04-14). Tier A.
+
 A5 (351x profile) doubled the UB read bandwidth versus A2/A3:
 
 | Profile | UB structure                       | Per-cycle bandwidth         |
@@ -1339,14 +1361,21 @@ So one AIV cycle on A5 sustains either:
 - Two parallel reads (256 B + 256 B = 512 B/cyc) targeting different bank groups, OR
 - One read + one write (256 B + 256 B)
 
+Conflict rules (per the same source):
+- Read-write on same bank: serializes
+- Write-write on same group: serializes
+- 3+ reads on same group: serializes
+
 This is what enables the back-to-back `RV_VLDI` (q_attn + k_attn)
 in our trace to issue in adjacent cycles — they target different
-UB bank groups. Same-bank read+write or 3+ same-group reads cause
-conflicts and serialize.
+UB bank groups.
 
 #### Vector-pipeline cycle model (A2/A3 baseline; A5 similar)
 
-From `ascend_910c_microarchitecture.md`:
+> Source: PTO ISA costmodel constants. Tier A.
+
+From the PTO ISA costmodel as transcribed in
+`ascend_910c_microarchitecture.md`:
 
 ```
 total_cycles = startup + completion + repeats × per_repeat + (repeats − 1) × interval
@@ -1366,6 +1395,10 @@ available). Throughput is much higher: in steady state, RVECEX
 can issue a different op every 1-2 cyc.
 
 #### Cluster-level parallelism (1 AIC + 2 AIV per cluster on A5)
+
+> Source for AIC/AIV ratios and SSBuffer datapath: hiascend.com
+> `atlas_ascendc_10_0065`. Source for cluster counts (25 vs 18) and
+> CVID mapping: PTO ISA repo `pto-cvid-cluster-id-mapping.md`. Tier A.
 
 | Concurrency dimension       | A2/A3                   | A5                                          |
 |-----------------------------|-------------------------|---------------------------------------------|
