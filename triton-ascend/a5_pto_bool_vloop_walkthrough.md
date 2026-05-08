@@ -1289,6 +1289,170 @@ the optimistic case):
 the saved op was on the critical path or hidden by parallelism. A
 camodel re-trace with the optimization applied would settle this.)
 
+### 5.3 Hardware parallelism budget per micro-architecture component
+
+Sources: PTO ISA repo (`pto-isa/docs/isa/machine-model/execution-agents.md`)
+and local arch reference (`~/Documents/docs/ascend_910c_microarchitecture.md`).
+
+#### A5 AIV core — five independent pipes, each 1 op/cyc
+
+| Pipe        | Functional unit                | Theoretical issue rate | Used in our kernel (per iter) | Utilization |
+|-------------|--------------------------------|------------------------|-------------------------------:|------------:|
+| **RVECEX**  | Vector ALU + predicate ALU      | **1 op/cyc**            | 8 ops × 7-8 cyc = **60 cyc**  | 60/42 = **143 %** (longest pipe — bottleneck) |
+| **RVECLD**  | Vector load (UB → vreg)         | **1 load/cyc**          | 2 ops × 10-11 cyc = **21 cyc** | 21/42 = 50 %        |
+| **RVECST**  | Vector store + flag-send        | **1 store/cyc**         | 2 ops × 10-14 cyc = **24 cyc** | 24/42 = 57 %        |
+| **RVECSU**  | Aux scalar unit (SIMD_VF)       | **1 scalar op/cyc**     | 0 cyc (all hoisted in CANN 9.0.0) | 0 %               |
+| **RVECLP**  | Loop control                    | **1 op/cyc**            | VLOOPV2: 1 cyc (pre-body)      | <1 %               |
+
+Theoretical peak: 5 ops in flight per cycle if each routes to a
+different pipe. Wall-clock per iter is 42.4 cyc; longest-pipe sum
+is 60 cyc on RVECEX. The 60 > 42 numbers say RVECEX itself is
+**internally pipelined** — successive ops can issue every few
+cycles even though each takes 7-8 cyc end-to-end (issue → result).
+
+#### Vector ALU data-parallelism (RVECEX issue width)
+
+One RVECEX op processes one full **256-byte vreg** per issue:
+
+| Element type             | Lanes per vreg | Per-cycle elements |
+|--------------------------|---------------:|-------------------:|
+| `i8` / `u8`              | 256            | 256                |
+| `i16` / `u16` / `f16` / `bf16` | 128      | 128                |
+| **`i32` / `u32` / `f32`**| **64**         | **64**             |
+| `i64` / `u64`            | 32             | 32                 |
+
+A logical 1024-element VCMP at i32 width lowers to **⌈1024/64⌉ = 16
+hardware vector instructions**. With perfect pipelining (one issue
+every cycle on RVECEX) those 16 ops complete in ~16 cyc + 7 cyc
+end-of-pipe drain ≈ 23 cyc.
+
+#### UB bandwidth — A5's per-cycle bank-port budget
+
+A5 (351x profile) doubled the UB read bandwidth versus A2/A3:
+
+| Profile | UB structure                       | Per-cycle bandwidth         |
+|---------|------------------------------------|-----------------------------|
+| A2/A3 (220x) | 16 bank groups × 3 banks × 4 KB | 1R + 1W per cycle          |
+| **A5 (351x)** | 8 bank groups × 2 banks × 16 KB | **2R + 0W**  *or*  **1R + 1W** per cycle |
+
+So one AIV cycle on A5 sustains either:
+- Two parallel reads (256 B + 256 B = 512 B/cyc) targeting different bank groups, OR
+- One read + one write (256 B + 256 B)
+
+This is what enables the back-to-back `RV_VLDI` (q_attn + k_attn)
+in our trace to issue in adjacent cycles — they target different
+UB bank groups. Same-bank read+write or 3+ same-group reads cause
+conflicts and serialize.
+
+#### Vector-pipeline cycle model (A2/A3 baseline; A5 similar)
+
+From `ascend_910c_microarchitecture.md`:
+
+```
+total_cycles = startup + completion + repeats × per_repeat + (repeats − 1) × interval
+```
+
+| Op category               | Startup | Completion | Per-repeat | Interval |
+|---------------------------|--------:|-----------:|-----------:|---------:|
+| `vector_dup` (broadcast)  | 14      | 14         | 1          | 13       |
+| INT add/sub/min/max       | 13      | 17         | 1          | 18       |
+| INT mul/div               | 13      | 18         | 1          | 18       |
+| FP add/sub                | 13      | 19         | 1          | 18       |
+| FP exp / sqrt             | 13      | 26-29      | 4          | 18       |
+
+The 7-8 cyc `dur` figures we see for VCMP / POR / etc. in the
+trace fit the **completion latency** model (issue → result
+available). Throughput is much higher: in steady state, RVECEX
+can issue a different op every 1-2 cyc.
+
+#### Cluster-level parallelism (1 AIC + 2 AIV per cluster on A5)
+
+| Concurrency dimension       | A2/A3                   | A5                                          |
+|-----------------------------|-------------------------|---------------------------------------------|
+| AIV-AIV in same cluster     | Independent kernels      | Independent kernels                         |
+| AIC ↔ AIV datapath          | Via Global Memory        | **Direct via SSBuffer** (L0C↔UB, UB↔L1)     |
+| Cross-cluster comm          | GM routing               | SSBuffer for adjacent clusters              |
+| Clusters per die            | 25                       | **18**                                      |
+| Total cores per die         | 75 (25 AIC + 50 AIV)     | **54 (18 AIC + 36 AIV)**                    |
+
+Mask kernel only uses **AIV** (`hivm.module_core_type = AIV`);
+AIC sits idle. So per-die there are **36 AIV cores** that could
+each run an independent `mask_kernel` instance — but a single
+invocation runs on **just one AIV**. Multi-core scaling is
+launcher-level (`tl.program_id(...)`), not within mask_kernel itself.
+
+#### Cube unit (irrelevant to mask_kernel, included for completeness)
+
+The AIC's CUBE unit does GEMM-class workloads at high MAC throughput:
+
+| Dtype | M × K × N | MACs/cycle |
+|-------|-----------|-----------:|
+| FP16  | 16 × 16 × 16 | **4,096** |
+| INT8  | 16 × 32 × 16 | **8,192** |
+| INT4  | 16 × 64 × 16 | 16,384 (removed on A5) |
+
+Mask kernel runs on AIV only; the AIC's CUBE unit is idle. Mask is
+typically consumed by a downstream FlashAttention CUBE kernel —
+that's where the CUBE throughput matters.
+
+#### Putting it together — per-kernel utilization numbers
+
+```
+                    Available parallelism                   Used by mask_kernel        Utilization
+                    ─────────────────────                   ───────────────────        ───────────
+Per AIV cycle:      5 pipes × 1 op = 5 ops/cyc              ~2 ops/cyc                 40 %
+Per AIV vec op:     64 i32 lanes (256 B)                    32 lanes useful + 32 pad   50 %
+Per AIV UB cycle:   2R + 1W = 768 B/cyc                     1R per VLDI                 33 %
+Per cluster:        1 AIC + 2 AIV concurrent                1 AIV active                33 %
+Per die:            18 AIC + 36 AIV concurrent              1 AIV active                 2 %
+```
+
+Three layers of unused capacity:
+
+1. **Pipe parallelism within one AIV: 60 %  unused.** The 5 pipes
+   could in principle do 2.5× more work per cycle if better
+   scheduled. The §6.8 Opt 4-6 hoisting optimizations would free
+   up RVECLD / RVECSU slots in the body, tightening the
+   instruction stream. The §6.11 F-hoist is already pulling work
+   off RVECEX and into pre-loop.
+
+2. **Vector lane utilization: 50 % unused.** Per §11, 32 of the 64
+   i32 lanes are computing on padded/replicated data each iter.
+   The §6.9 cross-tile-pack optimization (or any layout that fills
+   the upper 32 lanes with useful data, like the §6.10 V3
+   sharing) would let the upper half do real work, doubling
+   per-VCMP throughput.
+
+3. **Cluster + die utilization: 97 % unused.** Only 1 of 36 AIV
+   cores is doing work on a single mask_kernel invocation. This is
+   not a per-kernel optimization issue — it's a launcher-level
+   one. To scale, the launcher needs to invoke mask_kernel with
+   `tl.program_id(0..35)` so all 36 AIV cores run in parallel.
+
+#### Implications for the missed-optimization tally
+
+The §6 missed optimizations land on different layers of this
+parallelism hierarchy:
+
+| Optimization          | Frees which budget?                          |
+|-----------------------|----------------------------------------------|
+| §6.6 Opt 2 (C in P-reg) | RVECEX (one fewer VCMP per iter)             |
+| §6.7 (brc_b32 q_offset) | RVECLD + UB (smaller per-iter load)          |
+| §6.8 Opt 4 (V2 hoist) | RVECLD + RVECEX (one fewer load + add per iter) |
+| §6.8 Opt 5 (V5 hoist) | RVECLD                                        |
+| §6.8 Opt 6 (V0/V1 hoist) | RVECLD                                     |
+| §6.8 Opt 7 (VCMP fuse)| RVECEX                                        |
+| §6.8 Opt 9 (2-row pack)| Vector lanes (uses upper 32)                |
+| §6.9 (cross-tile pack)| Vector lanes + RVECLD                        |
+| §6.10 (V3 share)      | RVECLD + UB tile                             |
+| §6.11 (F hoist)       | RVECEX                                        |
+
+The biggest pressure point is **RVECEX** (the longest pipe at 60
+cyc/iter). Optimizations that free RVECEX slots have the most
+direct cycle impact — those are §6.6 Opt 2, §6.11 F-hoist, §6.8
+Opt 7 (VCMP fuse), and (indirectly) §6.10 (avoiding redundant
+operands setup in the body).
+
 ## 6. A5 codegen wins — MLIR ops that disappear into hardware modes
 
 `hivmc-a5` exploits two A5 hardware features to eliminate entire MLIR
