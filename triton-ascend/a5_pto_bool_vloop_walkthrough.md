@@ -1293,13 +1293,19 @@ camodel re-trace with the optimization applied would settle this.)
 
 Sources, in order of authority:
 
-- **Tier A — Vendor-published**: hiascend.com official NPU
-  architecture-version pages, fetched via `/doc_center/source/`:
-  - `atlas_ascendc_10_0065` — A5/9572 (351x) architecture spec.
-    Source for: dual UB bank ports (2R+0W or 1R+1W), SSBuffer
-    direct AIC↔AIV path, SIMT register file, L0A format
-    FRACTAL_NZ, loop modes, cross-core sync modes, CUBE tile size.
-  - `atlas_ascendc_10_0009` — NPU arch version index.
+- **Tier A — Vendor-published**: hiascend.com CANN 9.0.0 stable
+  documentation (verified live 2026-05-08, pages updated
+  2026/04/30):
+  - `programug/Ascendcopdevg/atlas_ascendc_10_00065.html` —
+    "NPU架构版本351x" (A5/9572 architecture spec).
+    Source for: SSBuffer direct AIC↔AIV path, SIMT hardware
+    (DCache 128 KB, 4 warp schedulers/AIV, SIMT RegFile 128 KB),
+    L0A format FRACTAL_NZ, data path additions, loop modes,
+    Fixpipe enhancements, CUBE tile size.
+  - `programug/Ascendcopdevg/atlas_ascendc_best_practices_10_00021.html` —
+    "避免bank冲突（Atlas 350 加速卡）" (UB bank-conflict avoidance).
+    Source for: UB structure (256 KB / 16 banks / 8 groups),
+    per-cycle bank-port semantics, conflict rules.
 - **Tier A — Vendor-published**: PTO ISA repo
   (`pto-isa/docs/isa/machine-model/execution-agents.md`,
   `vector/ops/`). Source for: 5 pipe names + per-pipe roles,
@@ -1348,27 +1354,86 @@ end-of-pipe drain ≈ 23 cyc.
 
 #### UB bandwidth — A5's per-cycle bank-port budget
 
-> Source: hiascend.com `atlas_ascendc_10_0065` (351x official spec page, fetched 2026-04-14). Tier A.
+> Source: hiascend.com `atlas_ascendc_best_practices_10_00021.html`
+> ("避免bank冲突（Atlas 350 加速卡）") — verified live on
+> 2026-05-08 against current CANN 9.0.0 stable docs (page updated
+> 2026/04/30). Tier A.
 
-A5 (351x profile) doubled the UB read bandwidth versus A2/A3:
+UB structure on A5 (Atlas 350), **verbatim from the source**:
 
-| Profile | UB structure                       | Per-cycle bandwidth         |
-|---------|------------------------------------|-----------------------------|
-| A2/A3 (220x) | 16 bank groups × 3 banks × 4 KB | 1R + 1W per cycle          |
-| **A5 (351x)** | 8 bank groups × 2 banks × 16 KB | **2R + 0W**  *or*  **1R + 1W** per cycle |
+> Unified Buffer总大小为256K，划分为16个bank。每个bank由512行
+> 组成，每行长度为32B。这16个bank进一步组织为8个bank group，
+> 每个bank group包含2个bank。
 
-So one AIV cycle on A5 sustains either:
-- Two parallel reads (256 B + 256 B = 512 B/cyc) targeting different bank groups, OR
-- One read + one write (256 B + 256 B)
+Translation:
 
-Conflict rules (per the same source):
-- Read-write on same bank: serializes
-- Write-write on same group: serializes
-- 3+ reads on same group: serializes
+> UB total: **256 KB** = 16 banks × 512 rows × 32 B/row, organized
+> as **8 bank groups × 2 banks each**.
 
-This is what enables the back-to-back `RV_VLDI` (q_attn + k_attn)
-in our trace to issue in adjacent cycles — they target different
-UB bank groups.
+Per-cycle access rule, **verbatim**:
+
+> 具体来说，Vector计算单元每拍（一个指令周期）能够从每个bank
+> group中读取或写入一行数据。
+
+Translation:
+
+> Per cycle (one instruction cycle), the Vector compute unit can
+> read OR write **one row of data per bank group**.
+
+So one row = 32 B, and 8 groups × 1 row/group = **256 B/cycle
+aggregate** UB↔vreg bandwidth — matching the documented vector
+throughput.
+
+Conflict rules, **verbatim**:
+
+> - 读写冲突：读操作和写操作同时尝试访问同一个bank。
+> - 写写冲突：多个写操作同时尝试访问同一个bank group。
+> - 读读冲突：两个读操作同时尝试访问同一个bank，或者两个以上
+>   读操作同时尝试访问同一个bank group。
+
+Translation:
+
+| Conflict type   | Trigger                                                                 |
+|-----------------|-------------------------------------------------------------------------|
+| Read-write      | Read + write on the **same bank**                                       |
+| Write-write     | Multiple writes on the **same bank group**                              |
+| Read-read       | Two reads on the **same bank**, or **3+ reads** on the same bank group  |
+
+So within one bank group, per cycle:
+
+- 2 reads on **different** banks of the group: ✓ OK
+- 1 read + 1 write on different banks: ✓ OK
+- 1 write alone: ✓ OK
+- Same-bank R+W, 2 W on same group, or 3+ R on same group: ✗ serializes
+
+#### Earlier "2R + 0W or 1R + 1W per cycle" framing — clarification
+
+My earlier framing of A5's UB as "2R + 0W or 1R + 1W per cycle"
+was a **per-bank-group** rule, not a per-UB-total cap. Per the
+verbatim source above:
+
+- **Per bank group, per cycle**: ≤ 2 R (different banks) or 1 R + 1
+  W (different banks) or 1 W alone
+- **Per UB, per cycle (8 groups in parallel)**: aggregate up to
+  256 B/cycle, distributed across the 8 groups subject to the
+  per-group constraints
+
+The **256 B/cycle aggregate matches the documented Vector unit
+throughput** — UB and Vector are bandwidth-balanced.
+
+Compared to A2/A3 (220x): I'd previously written A2/A3 as
+"1R+1W per cycle". The current 220x conflict-avoidance page is at
+`atlas_ascendc_best_practices_10_00020.html` and would have its
+own per-group rules; comparison details still need re-verification
+against today's 220x doc page (Tier-B until rechecked).
+
+#### Mask-kernel-relevant takeaway
+
+The back-to-back `RV_VLDI` ops in the VLOOP body for q_attn (V4)
+and k_attn (V5) work because each load distributes across the 8
+bank groups, with **different banks within each group** for the
+two operands. The conflict rules permit this (2 reads on different
+banks of the same group is OK).
 
 #### Vector-pipeline cycle model (A2/A3 baseline; A5 similar)
 
