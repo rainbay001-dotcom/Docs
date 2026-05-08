@@ -432,6 +432,35 @@ blocks by a factor of 2** during inlining. Each VLOOP iteration
 processes one query row against **two** key blocks, sharing the
 expensive query-side state across the two unrolled bodies.
 
+#### Visual: the unrolled VLOOP body
+
+![VLOOPV2 body — two passes per iter, V4 shared](figures/a5_two_pass_unroll.png)
+
+The shared-resources box at top (yellow) holds V4 = q_attn[i], S8,
+V0/V1, P1/P2 — all loaded or set up once per iter. Two side-by-side
+pass boxes (blue = pass A, green = pass B) each load their own
+key-side data (k_attn, k_offset, precomputed C) and write to their
+own output buffer. The orange V4 arrows from the shared box into
+both passes show the q_attn[i] reuse — V4 is loaded **once** but
+fed into the VCMP.EQ in **both** passes.
+
+#### Visual: the launcher transformation that produced this
+
+![Launcher unroll-by-2 — before vs. after](figures/a5_unroll_before_after.png)
+
+Left: the straight launcher form has an outer loop over key blocks
+and an inner VLOOP over query rows; q_attn[i] is reloaded once per
+inner iter, so total q_attn loads = `N · 32 = 32N`. Right: after
+unroll-by-2 over the outer (key-block) loop, the inner VLOOP body
+contains both passes; q_attn[i] is loaded once per VLOOP iter and
+reused across both passes, so total q_attn loads = `(N/2) · 32 = 16N`
+— exactly half. VLOOP-boundary overhead is also amortized over twice
+as many key blocks per VLOOP-set up.
+
+The cost is that the per-iter body grows from 19 instructions
+(single-pass) to 35 instructions (matching the `#instr=35` we
+observed).
+
 #### The launcher pattern, before and after unrolling
 
 A typical Triton-Ascend attention-mask launcher iterates over key
