@@ -974,22 +974,38 @@ boolean algebra stay in P-regs end-to-end.
 | `hivm.hir.vcast 1024xi32 → 1024xi8`                   | (later in body, not shown)     | i32 → i8 narrowing |
 | `hivm.hir.store 1024xi8 → gm`                         | (later DMA op)                 | UB → GM via MTE3 |
 
-### 5.1 Comparison with earlier camodel disassembly
+### 5.1 Comparison with another compiler-version's disassembly (camodel-traced)
 
-An earlier disassembly of the bool-variant `.o` (in
+A separate disassembly of the bool-variant kernel (in
 `helloworld_cast_vs_nocast_comparison.md` §4.7.3.8.1, PCs
 `0x10d0d200`–`0x10d0d260`) shows a *different* lowering of the same
-source kernel. Comparing the two artefacts is informative because
-the camodel version applies several optimizations that
-`assembler.as` doesn't — empirical proof that the missed
-optimizations cataloged in §6 below are achievable, not just
-theoretical.
+source kernel. Both artefacts are real compiler output, but from
+**different `bishengir-compile-a5` versions** — not different
+incremental optimizations of one stable compiler. Provenance:
+
+- **Camodel-traced version** — `bishengir-compile-a5` output that we
+  built and traced through camodel ourselves at an earlier date.
+  Version is known to us (the build we ran).
+- **`assembler.as`** — `objdump` output of a binary produced by a
+  *different* compiler build, with **no version metadata available**.
+  Origin of the binary is opaque; we have only the disassembled
+  text.
+
+Because we don't know which version is older or which optimization
+flags either was built with, we **cannot** call differences between
+them "regressions" or "improvements" — only "differences." The
+analysis below catalogs the structural and per-row-cost differences
+without claiming any direction of evolution.
+
+That said, the camodel side has the considerable advantage that we
+**already have its cycle-accurate trace**. The `assembler.as` side
+gives us an instruction sequence but no timing.
 
 #### Side-by-side structural summary
 
 ```
-                  CAMODEL DISASM (earlier)                       ARCHITECT ASSEMBLER.AS (recent)
-                  ─────────────────────────                       ───────────────────────────────
+                  COMPILER-VERSION-A (camodel-traced)              COMPILER-VERSION-B (assembler.as objdump)
+                  ──────────────────────────────────                ──────────────────────────────────────────
 PRE-LOOP          12 ops (heavy hoisting)                         2 ops (only PSETs)
                     RV_VLDI ×2  load V0/V1 (constants)              PSET.b32 P1, #8
                     RV_PSET ×3  predicate seeds                     PSET.b32 P2, #15
@@ -1073,22 +1089,29 @@ in `assembler.as` adds new costs faster than the unroll saves them.
 | **Total** | **≈ +4 op/row → matches the 14.4 → 17.5 gap** |
 
 Each of these corresponds to an entry in §6's missed-optimizations
-catalog. The camodel disasm shows that **at least four of those
-optimizations were applied in an earlier compile** (F hoist, V2/V5
-hoist, scalar-setup hoist, no C-spill machinery) — strong empirical
-evidence that they're achievable without ISA changes.
+catalog. The camodel-traced version shows that **at least four of
+those optimizations were applied by *some* `bishengir-compile-a5`
+build** (F hoist, V2/V5 hoist, scalar-setup hoist, no C-spill
+machinery) — strong empirical evidence that they're achievable on
+this ISA, even if the build that produced `assembler.as` doesn't
+apply them.
 
 #### What this comparison reveals overall
 
-1. **The unroll-by-2 alone is a regression** unless paired with the
-   query-side sharing optimizations (V3 share, V2/V5 hoist, F hoist).
-   The architect's assembler.as version unrolled but didn't carry
-   the hoists across into the unrolled body, so the unrolling
-   costs more than it saves.
+1. **The unroll-by-2 alone is not a clear win unless** paired with
+   the query-side sharing optimizations (V3 share, V2/V5 hoist, F
+   hoist). Version-B (assembler.as) unrolled but didn't carry the
+   hoists across into the unrolled body, and the unrolling costs
+   more than it saves at that point. Whether this is a deliberate
+   trade-off (e.g. for code-size reasons) or a missed optimization
+   in version-B's pass pipeline isn't determinable from the
+   disassembly alone.
 
-2. **The compiler can do these optimizations** — proven by the
-   camodel version. They're not theoretical wishlist items;
-   they're regressions in the more recent version.
+2. **The optimizations are achievable by `bishengir-compile-a5`** —
+   proven by version-A. They're not theoretical wishlist items.
+   Whether version-B's failure to apply them is a regression, a
+   deliberate choice, or a different code path entirely is unclear
+   without provenance metadata for version-B's build.
 
 3. **The ideal lowering combines both** — unroll-by-2 over key
    blocks (good architectural idea from assembler.as) + all the
@@ -2487,37 +2510,45 @@ alone, total ~112 ops just from V3+F together).
 | 11  | §6.10 share V3 (q_offset) across passes               | −48                   | A   | not yet |
 | **12**| **§6.11 hoist F = (q_offset == k_offset)**           | **−32 to −64**        | **A** | ✓ camodel does this |
 
-The **Tier-A optimizations empirically achieved by the camodel
-version** that `assembler.as` regressed on:
+The **Tier-A optimizations empirically achieved by version-A
+(camodel-traced)** that version-B (`assembler.as`) does not apply:
 
-- §6.8 Opt 4 (V2 hoist): camodel ✓, assembler.as ✗
-- §6.8 Opt 5 (V5 hoist): camodel ✓, assembler.as ✗
-- §6.8 Opt 6 (V0/V1 + scalar setup hoist): camodel ✓ (partial), assembler.as ✗
-- §6.11 Opt 12 (F hoist): camodel ✓, assembler.as ✗
-- §6.6 Opt 1 (C inline-recompute): camodel ✓ (option α), assembler.as did α γ instead
+- §6.8 Opt 4 (V2 hoist): version-A ✓, version-B ✗
+- §6.8 Opt 5 (V5 hoist): version-A ✓, version-B ✗
+- §6.8 Opt 6 (V0/V1 + scalar setup hoist): version-A ✓ (partial), version-B ✗
+- §6.11 Opt 12 (F hoist): version-A ✓, version-B ✗
+- §6.6 Opt 1 (C inline-recompute): version-A ✓ (option α), version-B uses option γ instead
 
-That's **5 Tier-A optimizations regressed** between the two
-compilations. The good thing the assembler.as version added was the
-unroll-by-2 over key blocks (§3.2.1), but it lost more than it
-gained — hence the per-row regression from 14.4 to 17.5 ops/row
-documented in §5.1.
+That's **5 Tier-A optimizations applied by one compiler version but
+not the other**. Version-B does add unroll-by-2 over key blocks
+(§3.2.1), which version-A doesn't have — but that one optimization
+alone yields less benefit than the five hoists version-A applies,
+which is why version-B comes out 22% slower per mask row (17.5 vs
+14.4 ops/row).
+
+Whether version-B's omission of the hoists is a regression in a
+later compiler, a deliberate trade-off, or a different toolchain
+build entirely cannot be determined from the disassembly alone — we
+have no provenance metadata for version-B.
 
 #### What an ideal kernel would look like
 
 Combining the wins from both versions plus the missing §6.6 Opt 2:
 
-| Feature                                | Camodel | Assembler.as | Ideal |
-|----------------------------------------|:-------:|:------------:|:-----:|
-| Unroll-by-2 over key blocks            | ✗       | ✓            | ✓ |
-| F hoisted pre-loop                     | ✓       | ✗            | ✓ |
-| V2 / V5 / V0 / V1 hoisted              | ✓       | ✗            | ✓ |
-| C in P-reg (§6.6 Opt 2)                | ✗ (uses α) | ✗ (uses γ) | ✓ |
-| V3 shared across passes                | n/a (single pass) | ✗ | ✓ |
-| Predicted ops/row                      | 14.4    | 17.5         | **~8–10** |
+| Feature                                | Version-A (camodel) | Version-B (assembler.as) | Ideal |
+|----------------------------------------|:-------------------:|:------------------------:|:-----:|
+| Unroll-by-2 over key blocks            | ✗                   | ✓                        | ✓ |
+| F hoisted pre-loop                     | ✓                   | ✗                        | ✓ |
+| V2 / V5 / V0 / V1 hoisted              | ✓                   | ✗                        | ✓ |
+| C in P-reg (§6.6 Opt 2)                | ✗ (uses α)          | ✗ (uses γ)               | ✓ |
+| V3 shared across passes                | n/a (single pass)   | ✗                        | ✓ |
+| Predicted ops/row                      | 14.4                | 17.5                     | **~8–10** |
 
 The ideal version would be roughly **half** the cost of either
 existing compilation. All optimizations needed to reach it are
-Tier-A (proven achievable on the same ISA by one or both compilers).
+Tier-A — each is empirically achieved by *some* `bishengir-compile-a5`
+version on this ISA (proving feasibility), even if no single version
+combines all of them.
 
 ## 7. Per-iter hardware-op tally
 
