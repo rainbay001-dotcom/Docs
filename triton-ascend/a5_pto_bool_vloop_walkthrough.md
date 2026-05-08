@@ -2077,6 +2077,157 @@ actually *wants* the upper 32 lanes used.
 | 9   | §6.8 pack two output rows per iter (within one tile)  | ~50% loop overhead    | C   |
 | **10**| **§6.9 cross-tile pack K[0]+K[1] into one VCMP**     | **~−96 (best case)**  | **C** |
 
+### 6.10 Share V3 (q_offset) across passes the same way V4 (q_attn) is shared
+
+Same insight as §3.2.1 / §3.2.3 (V4 reuse), applied to the
+*next* query-side operand: `q_offset` (V3). The compiler shares V4
+across the two unrolled passes but redundantly reloads V3, even
+though both passes process the **same query row** and therefore
+need **identical** q_offset data.
+
+#### What hivmc-a5 does today
+
+```asm
+;  inside the VLOOP body:
+;  pass A:
+VLDI V3, [S69], #16, #0, #1         ; full-VL load, +512 B post-incr — pass A's q_offset stream
+…                                   ; uses V3 in two VCMPs (LE → A_row, EQ → F_row)
+
+;  pass B:
+VLDI V3, [S66], #16, #0, #1         ; ★ different address, but SAME q_offset[i] data!
+…                                   ; uses V3 in two VCMPs again
+```
+
+`[S69]` and `[S66]` point at two **separate pre-broadcast tiles**.
+Both tiles hold q_offset[:, None] data — broadcast across columns
+identically. The launcher likely materialised one tile per
+unrolled pass and never noticed they hold identical bits.
+
+#### Why both passes need the same V3
+
+Per §3.2.1 and §3.2.3, both passes within one VLOOP iter compute
+mask outputs for **the same query block** against two different
+key blocks. q_offset is a query-side operand — same value across
+both passes by definition:
+
+| Operand          | Per-iter access | Same across passes? | Sharable? |
+|------------------|-----------------|:-------------------:|:---------:|
+| q_attn (V4)      | brc_b32 +4 B    | yes                 | ✓ (already shared in asm) |
+| **q_offset (V3)**| full-VL +512 B  | **yes**             | **✓ (NOT shared in asm — missed)** |
+| k_attn (V5)      | full-VL no incr | no (different K block per pass) | ✗ |
+| k_offset (V2)    | full-VL no incr | no (different K block per pass) | ✗ |
+
+V3 satisfies *exactly* the same "varies per iter AND identical
+across passes" criterion as V4. By the §3.2.3 argument (lane-aligned
+VCMPs don't care about absolute K positions; the LHS is what
+matters), pass B can directly reuse V3 from pass A — no reload, no
+second pre-broadcast tile.
+
+#### Optimization 11 — share V3 across passes
+
+```asm
+;  pass A:
+VLDI V3, [S69], #16, #0, #1         ; load q_offset row ONCE per iter
+…                                   ; pass A's VCMPs use V3
+
+;  pass B:
+;  REMOVE  VLDI V3, [S66], …        ← redundant load eliminated
+…                                   ; pass B's VCMPs reuse V3 (no reload)
+```
+
+Per-iter savings:
+- −1 VLDI per iter (the redundant V3 reload in pass B)
+- −256 B per iter of UB read bandwidth
+- −4096 B of pre-loop UB tile (the second pre-broadcast tile is no
+  longer needed if we eliminate it; alternatively keep one tile and
+  retain the savings)
+
+| Cost              | Current (V3 reloaded per pass) | Optimized (V3 shared)   |
+|-------------------|-------------------------------:|------------------------:|
+| Pre-loop ops      | 2× vbrc (~32 ops, two tiles)    | 1× vbrc (~16 ops)       |
+| Per-iter VLDI     | 2× (one per pass)               | 1×                      |
+| Per-iter VCMPs    | 4× (2 per pass: LE + EQ)        | 4× (unchanged)          |
+| UB tile bytes     | 2 × 4096 = 8 KB                 | 4 KB (or 0 if combined with §6.7) |
+| Per-iter UB read  | 2 × 256 = 512 B                 | 256 B                   |
+| Total ops (T=32)  | 32 + 32×6 = **224 ops**         | 16 + 32×5 = **176 ops** |
+
+**Saving: 48 ops + 4 KB UB tile + 8 KB read bandwidth.**
+
+#### Combined with §6.7 (brc_b32 q_offset) — full q_offset cleanup
+
+§6.7 proposed switching q_offset's load to `brc_b32` (mirroring V4's
+4 B/iter scalar stream). If that fires AND V3 is shared across passes:
+
+```asm
+;  pre-loop: nothing (no tile materialised)
+;
+;  per iter (single load, both passes use V3):
+VLDI V3, [S_qoff], #1, #3, #1       ; brc_b32: 1 i32 → all 64 lanes
+…
+;  pass A's VCMPs use V3
+…
+;  pass B's VCMPs reuse V3 (no reload)
+```
+
+Combined savings vs. current:
+- −16 ops pre-loop (no vbrc tile filling)
+- −2 VLDIs per iter → −1 if §6.7 already eliminated one, then −32 from §6.10
+- −8 KB UB tile (both pre-broadcast tiles eliminated)
+- −16 KB read bandwidth (no per-iter 256 B reads at all)
+
+Together they fully bring q_offset's handling in line with q_attn's.
+
+#### Why this was missed
+
+Same root pattern as §6.6 / §6.7: hivmc-a5 honoured the MLIR's
+storage typing (each unrolled launcher pass has its own pre-broadcast
+tile in the IR) and didn't notice that the two tiles hold identical
+bits. The cross-pass-sharing pass that WOULD catch this needs to
+recognize "two memref<i32, ub> values whose source data flow is
+identical can be unified into one." That's a non-trivial dataflow
+analysis at the MLIR level, but the hardware-level evidence (V4
+reuse already implemented for q_attn) shows the compiler has the
+*mechanism* to do this — it just isn't applying it consistently to
+all query-side operands.
+
+#### Updated final tally
+
+| #   | Optimization                                          | Savings (ops)         | Tier |
+|----:|-------------------------------------------------------|----------------------:|:---:|
+| 1   | §6.6 inline-recompute C                               | −34                   | A   |
+| **2**| **§6.6 hold C in P-reg**                             | **−65**               | **A** |
+| 3   | §6.7 brc_b32 stream q_offset                          | −16                   | A   |
+| 4   | §6.8 hoist V2 (VLDI + VADDS)                          | −62                   | A   |
+| 5   | §6.8 hoist V5 (VLDI)                                  | −31                   | A   |
+| 6   | §6.8 hoist VLDAS/SMOV/V0/V1                           | ~−160                 | B   |
+| 7   | §6.8 fuse `VCMP.LE` + `VCMP.EQ`                       | −32                   | C   |
+| 8   | §6.8 direct i1 → i8 via `VSEL.b8`                     | −32                   | C   |
+| 9   | §6.8 pack two output rows per iter (within one tile)  | ~50% loop overhead    | C   |
+| 10  | §6.9 cross-tile pack K[0]+K[1] into one VCMP          | ~−96 (best case)      | C   |
+| **11**| **§6.10 share V3 across passes (mirror V4 reuse)**   | **−48**               | **A** |
+
+#### Why this is Tier-A
+
+- The optimization mirrors a transformation the compiler already
+  successfully performs for V4. The mechanism is proven; only the
+  pattern-matching needs to extend to V3.
+- The cost model is unambiguous (§6.4-style): both V3 loads produce
+  identical bits, so eliminating one is pure savings with zero risk
+  of breaking correctness.
+- No new ISA features required.
+
+#### General principle: "any query-side operand should be shared across passes"
+
+§3.2.1 established that the compiler unrolled over key blocks. That
+means every **query-side** operand (q_attn, q_offset) is by
+construction identical in both passes within one iter, and every
+**key-side** operand (k_attn, k_offset, C, output) is by
+construction different. Sharing across passes is therefore safe for
+the query side and correct as a generic rule.
+
+The current code shares V4 (q_attn) but not V3 (q_offset). Closing
+that gap is what §6.10 proposes.
+
 ## 7. Per-iter hardware-op tally
 
 Compute portion of the body (excluding loads/stores/sync):
