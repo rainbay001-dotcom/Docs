@@ -3653,6 +3653,52 @@ This optimization is structurally what the 4-queue AIV architecture
 was designed to enable. The mask_kernel body itself doesn't
 change — only the launcher's tile-scheduling / sync code does.
 
+#### Concrete steady-state cycle accounting
+
+For one tile (one launch) of `assembler.as`:
+
+```
+Pre-loop MTE2 (load 4 operands from GM):  ~700 cyc   ◄── target of Opt 21
+VLOOP body (32 iters × 2 passes/iter):    ~1,400 cyc  ◄── already efficient via intra-iter overlap
+Post-loop MTE3 (store result to GM):       ~100 cyc
+                                            ─────────
+Total per tile (no cross-launch overlap):  ~2,200 cyc
+```
+
+**Without Opt 21** (current launcher), back-to-back launches
+serialize at ~2,200 cyc per tile.
+
+**With Opt 21** (cross-launch pipelining):
+
+```
+Launch 0:  700 (MTE2) + 1400 (VLOOP) + 100 (MTE3)  = 2,200 cyc total
+Launch 1:                  └─ 700 cyc MTE2 hidden under launch 0's VLOOP
+                              + 1400 (VLOOP) + 100 (MTE3) = 1,500 cyc additional
+Launch 2:                                       └─ 700 cyc MTE2 hidden under launch 1's VLOOP
+                                                  + 1400 + 100              = 1,500 cyc additional
+…
+
+Steady state: ~1,500 cyc per launch instead of ~2,200 cyc.
+                ────────────────────────────────────────
+                ≈ 32% per-launch latency reduction
+```
+
+The 32% improvement is **on top of** what the unroll-by-2's
+intra-iter overlap already buys. The two optimizations are
+complementary, not redundant: unroll-by-2 keeps the body's
+RVECLD/RVECEX queues busy together; Opt 21 keeps the entire AIV
+pipeline busy across launch boundaries.
+
+#### Why this matters specifically for FlashAttention
+
+In FlashAttention's outer loop, mask_kernel is invoked once per
+(query_block, key_block) pair, often back-to-back with the same
+query block against many key blocks. This is exactly the
+back-to-back-launch scenario where Opt 21's cross-launch prefetch
+gives the largest aggregate saving — ~700 cyc × N launches per
+attention head, scaling with the number of key blocks per query
+block.
+
 ### 6.19 ND-DMA Cache alignment for operand pointers (Opt 22)
 
 Source: hardware-architecture diagram. The AIV side has an
