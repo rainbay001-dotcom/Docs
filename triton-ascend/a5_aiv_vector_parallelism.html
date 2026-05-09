@@ -57,7 +57,118 @@ bank-port budget, vreg width) onto a single chart with empirical
 numbers from the camodel trace.
 </p>
 
-<h2>1. Top-level vector-subsystem diagram</h2>
+<h2>1. Reference: full 351x hardware architecture</h2>
+
+<p>The diagram below is the vendor-published top-level architecture
+figure for the 351x family (Atlas 350, codename Da Vinci C310 — the
+A5 generation). Source: hiascend.com
+<code>atlas_ascendc_10_00065</code>, opening figure
+(<code>zh-cn_image_0000002531522468</code>). Page-update date
+2026/04/30, fetched verbatim 2026-05-09. The remaining sections of
+this page extract <i>only the AIV (vector) side</i> of this diagram
+and overlay empirical numbers from the camodel trace.</p>
+
+<div style="text-align:center; margin: 1em 0;">
+  <img src="figures/atlas_ascendc_10_00065/01_hardware_architecture.png"
+       alt="A5 (351x / Atlas 350) hardware architecture — vendor diagram"
+       style="max-width: 100%; border: 1px solid #cbd0d6; border-radius: 4px;"/>
+  <div class="src" style="margin-top: 0.4em;">
+    <code>figures/atlas_ascendc_10_00065/01_hardware_architecture.png</code>
+    — vendor figure, <code>atlas_ascendc_10_00065</code>
+  </div>
+</div>
+
+<h3>1.1 Die-level layout (above the diagram)</h3>
+
+<table>
+<thead>
+<tr><th>Property</th><th>220x (older)</th><th><b>351x / A5 (this doc)</b></th></tr>
+</thead>
+<tbody>
+<tr>
+  <td>AIC : AIV ratio per cluster</td>
+  <td class="num">1 : 1</td>
+  <td class="num"><b>1 : 2</b></td>
+</tr>
+<tr>
+  <td>Clusters per die</td>
+  <td class="num">25</td>
+  <td class="num"><b>18</b></td>
+</tr>
+<tr>
+  <td>Total cores per die</td>
+  <td class="num">75 (25 AIC + 50 AIV)</td>
+  <td class="num"><b>54 (18 AIC + 36 AIV)</b></td>
+</tr>
+<tr>
+  <td>AIC ↔ AIV datapath</td>
+  <td>via Global Memory</td>
+  <td><b>direct via SSBuffer</b> (L0C ↔ UB, UB ↔ L1)</td>
+</tr>
+<tr>
+  <td>AIV Scalar unit</td>
+  <td>single Scalar</td>
+  <td><b>Scalar + Aux Scalar</b> (RVECSU inside SIMD_VF)</td>
+</tr>
+<tr>
+  <td>SIMT support on AIV</td>
+  <td>—</td>
+  <td>4 Warp Schedulers + 128 KB SIMT DCache + 128 KB SIMT regfile</td>
+</tr>
+<tr>
+  <td>UB capacity per AIV</td>
+  <td>192 KB</td>
+  <td><b>256 KB</b> (16 banks / 8 groups)</td>
+</tr>
+</tbody>
+</table>
+
+<h3>1.2 What's in the diagram, top-to-bottom</h3>
+
+<ul>
+<li><b>AIC side (left half):</b> Cube unit (matrix engine) + Fixpipe
+(channel merge / split for the s8/u8/s4/u4/fp32 fractals shown in
+figs 9–11) + L1 buffer + L0A / L0B (Cube operand banks) + L0C (Cube
+accumulator) + AIC Scalar unit + AIC DCache / ICache. Driven by 4
+AIC instruction queues: <b>Cube / FixPipe / MTE1 / MTE2</b>.</li>
+
+<li><b>AIV side (right half):</b> SIMT path (Warp Scheduler + SIMT
+DCache + SIMT Register File) and SIMD path (Vector Register File +
+Aux Scalar) both feeding into the <b>Vector unit</b>; UB; AIV
+DCache / ICache; AIV Scalar. Driven by 4 AIV instruction queues:
+<b>MTE2 / MTE3 / SIMD VF / SIMT VF</b>.</li>
+
+<li><b>Between AIC and AIV:</b> <b>SSBuffer</b> — this is a
+<i>scalar-only sync channel</i> between the two cores' Scalar
+units (visible as the small box bridging AIC Scalar and AIV
+Scalar). It is <b>not</b> a data fast path; the data fast path on
+351x is <b>UB ↔ L1 directly</b> (the wide arrow on the diagram
+that bypasses GM). The figure-12 SSBuffer topology and the §6.15
+note in the markdown doc clarify this.</li>
+
+<li><b>MTE pipes:</b> MTE1 (L1 ↔ L0A/L0B/BT), MTE2 (GM →
+{L1, L0A/L0B, UB}), MTE3 (UB → GM), Fixpipe (L0C → GM / L1).</li>
+
+<li><b>ND-DMA Cache:</b> small staging cache in front of UB on the
+AIV side; coalesces non-aligned GM-side bursts into bank-aligned
+UB writes. Transparent — kernel can't address it.</li>
+
+<li><b>Cube datatypes:</b> FP32 / FP16 / BF16 / HiF8 / FP8_E4M3 /
+U8 / S8. <b>Vector datatypes:</b> U8 / U16 / U32 / S8 / S16 / S32 /
+BF16 / FP16 / FP32. The Cube is <i>idle</i> in
+<code>mask_kernel</code> — only the right half of this diagram
+matters for the rest of this page.</li>
+</ul>
+
+<div class="callout">
+<b>What the AIV-only diagram in §2 omits relative to the full
+architecture.</b> Cube + Fixpipe + L1 + L0A/L0B/L0C + AIC Scalar
++ MTE1 + AIC DCache/ICache + SSBuffer scalar-sync channel — these
+are all on the AIC side and are dead silicon for
+<code>mask_kernel</code>. Everything else is preserved.
+</div>
+
+<h2>2. Top-level vector-subsystem diagram</h2>
 
 <div style="overflow-x: auto;">
 <svg viewBox="0 0 1300 920" xmlns="http://www.w3.org/2000/svg" style="background:#fafafa">
@@ -360,7 +471,7 @@ numbers from the camodel trace.
 </svg>
 </div>
 
-<h2>2. Module reference — what each block on the diagram means</h2>
+<h2>3. Module reference — what each block on the AIV diagram means</h2>
 
 <p>Memory and register blocks on the diagram fall into two camps:
 <b>transparent</b> (hardware-managed; the assembler never names them)
@@ -529,7 +640,7 @@ optimization can actually schedule against.</p>
 </tr>
 
 <tr style="background:#fff8e1">
-  <td colspan="4"><b>Functional pipes (full table in §3)</b></td>
+  <td colspan="4"><b>Functional pipes (full table in §4)</b></td>
 </tr>
 <tr>
   <td><b>RVECEX</b></td><td>Pipe</td><td>Indirectly</td>
@@ -572,7 +683,7 @@ Software-managed blocks (UB, RegTensor, MaskReg, the queues) are
 where actual scheduling decisions happen.
 </div>
 
-<h2>3. Per-pipe parallelism table (verified empirically)</h2>
+<h2>4. Per-pipe parallelism table (verified empirically)</h2>
 
 <table>
 <thead>
@@ -688,7 +799,7 @@ work off RVECEX onto idle pipes (or eliminate RVECEX work entirely)
 have the largest cycle-saving leverage.
 </div>
 
-<h2>4. Steady-state in-flight counts at cycle 1700–1750 (mid-loop)</h2>
+<h2>5. Steady-state in-flight counts at cycle 1700–1750 (mid-loop)</h2>
 
 <table>
 <thead>
@@ -724,7 +835,7 @@ matches Little's law:
 <code>RVECEX in flight ≈ issue rate × latency = 1.28 × 7 = 9</code>
 or with peak ≈ <code>2 × 7 = 14</code>.</p>
 
-<h2>5. Three granularities of parallelism in the AIV</h2>
+<h2>6. Three granularities of parallelism in the AIV</h2>
 
 <table>
 <thead>
@@ -788,7 +899,7 @@ or with peak ≈ <code>2 × 7 = 14</code>.</p>
 </tbody>
 </table>
 
-<h2>6. Where each missed-optimization lands on this map</h2>
+<h2>7. Where each missed-optimization lands on this map</h2>
 
 <table>
 <thead>
@@ -847,7 +958,7 @@ slack — convert at ratio close to <b>0</b> unless you remove enough
 to drop in-flight count below the issue rate × latency floor.
 </div>
 
-<h2>7. Verification recipe</h2>
+<h2>8. Verification recipe</h2>
 
 <p>Anyone reading this can re-derive every empirical number above
 in 5 lines of Python against the committed trace JSON:</p>
@@ -863,7 +974,7 @@ for pipe in ['RVECEX','RVECLD','RVECST','RVECSU','MTE2','MTE3','PUSHQ']:
           f'issue_rate={len(pe)/span:.3f} ops/cyc')
 </pre>
 
-<h2>8. Cross-references</h2>
+<h2>9. Cross-references</h2>
 
 <ul>
   <li><code>a5_pto_bool_vloop_walkthrough.md</code> §5.3 — vendor-published architecture facts (sources & verbatim quotes)</li>
