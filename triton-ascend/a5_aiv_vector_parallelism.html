@@ -360,7 +360,219 @@ numbers from the camodel trace.
 </svg>
 </div>
 
-<h2>2. Per-pipe parallelism table (verified empirically)</h2>
+<h2>2. Module reference — what each block on the diagram means</h2>
+
+<p>Memory and register blocks on the diagram fall into two camps:
+<b>transparent</b> (hardware-managed; the assembler never names them)
+versus <b>software-managed</b> (kernel code addresses them by name and
+must issue explicit moves). Knowing which is which determines what an
+optimization can actually schedule against.</p>
+
+<table>
+<thead>
+<tr>
+  <th>Block</th>
+  <th>Kind</th>
+  <th>Visible to kernel?</th>
+  <th>Description</th>
+</tr>
+</thead>
+<tbody>
+
+<tr style="background:#fff8e1">
+  <td colspan="4"><b>Memory hierarchy (left-to-right on the top row)</b></td>
+</tr>
+
+<tr>
+  <td><b>Global Memory (GM)</b></td>
+  <td>HBM, off-die</td>
+  <td>Yes — by VA</td>
+  <td>Backing store for <code>tl.load</code> / <code>tl.store</code>
+  pointers. Reached only via MTE2 (load) / MTE3 (store) DMA — there
+  is no scalar load instruction that touches GM directly.</td>
+</tr>
+
+<tr>
+  <td><b>L2 Cache</b></td>
+  <td>SRAM, on-die, <b>transparent</b></td>
+  <td>No</td>
+  <td>Hardware-managed cache between GM and the on-die scratchpads
+  (PIPT, ~128–192 MB across 910C / A5 variants). The kernel issues
+  no "load into L2" or "evict from L2" instruction — MTE2 from GM
+  to UB is just cached on the way through. The only knob software
+  has is access pattern: stride-friendly successive bursts hit the
+  same lines and therefore the same MTE2 latency budget.</td>
+</tr>
+
+<tr>
+  <td><b>ND-DMA Cache</b></td>
+  <td>SRAM, on-die, <b>transparent</b></td>
+  <td>No</td>
+  <td>A small staging cache in front of UB that coalesces
+  non-aligned / strided MTE2 bursts into bank-aligned UB writes. No
+  instruction targets it; it exists so non-256B-aligned offsets
+  don't pay an extra UB bank-conflict penalty. Opt 22 (align ops to
+  256 B) is "feed it pre-aligned bursts so it has nothing to do" —
+  not "schedule it explicitly".</td>
+</tr>
+
+<tr>
+  <td><b>Unified Buffer (UB)</b></td>
+  <td>SRAM, 256 KB, <b>software-managed scratchpad</b></td>
+  <td>Yes — by UB address</td>
+  <td>The only on-die memory the assembler addresses by name. 16
+  banks in 8 groups × 2 banks each; per-group port budget is 2R+0W
+  <i>or</i> 1R+1W, aggregate 256 B/cyc (matches Vector ALU width).
+  Conflict rules: R+W same bank ✗, 2W same group ✗, 3+R same group
+  ✗. <code>VLDI</code> / <code>VSTI</code> read/write here;
+  <code>MTE2</code>/<code>MTE3</code> load/store here. Everything
+  to the left of UB on the diagram is invisible to the kernel.</td>
+</tr>
+
+<tr style="background:#fff8e1">
+  <td colspan="4"><b>Instruction queues (4 independent issue fronts)</b></td>
+</tr>
+
+<tr>
+  <td><b>MTE2 queue</b></td>
+  <td>Hardware queue</td>
+  <td>Indirectly — via DMA insns</td>
+  <td>GM → UB DMA stream. Independent issue front: MTE2 ops
+  dispatch in the same cycle as SIMD-VF compute, which is what
+  enables Opt 21 cross-launch prefetch (overlap launch N's compute
+  with launch N+1's MTE2). 10 events in this trace (all pre-loop —
+  the loop body is UB-resident).</td>
+</tr>
+<tr>
+  <td><b>MTE3 queue</b></td>
+  <td>Hardware queue</td>
+  <td>Indirectly</td>
+  <td>UB → GM DMA stream. Single-issue. Long-latency (~990 cyc per
+  burst here). Drains at the end of the launch.</td>
+</tr>
+<tr>
+  <td><b>SIMD VF queue</b></td>
+  <td>Hardware queue</td>
+  <td>Yes</td>
+  <td>The vector-function front-end that <code>mask_kernel</code>
+  uses. Feeds RVECEX / RVECLD / RVECST / RVECSU / RVECLP. ★ This
+  is the queue that actually runs the loop body.</td>
+</tr>
+<tr>
+  <td><b>SIMT VF queue</b></td>
+  <td>Hardware queue</td>
+  <td>Only via SIMT-mode kernel</td>
+  <td>SIMT path with 4 warp schedulers and a 128 KB regfile. Idle
+  in <code>mask_kernel</code> (kernel is pure SIMD). Opt 16 would
+  add ~4× scaling if a SIMT-mode variant existed.</td>
+</tr>
+<tr>
+  <td><b>Scalar / SU control</b></td>
+  <td>Scalar pipe</td>
+  <td>Yes</td>
+  <td>RVECSU + RVECLP. Issues address arithmetic, loop counters,
+  and the <code>VLOOPV2</code> marker. All 4 SU events in this
+  trace are pre-loop — the body is straight-line.</td>
+</tr>
+
+<tr style="background:#fff8e1">
+  <td colspan="4"><b>Vector registers + compute</b></td>
+</tr>
+
+<tr>
+  <td><b>RegTensor (vreg)</b></td>
+  <td>Register file</td>
+  <td>Yes — V0..V255</td>
+  <td>Vector register, VL = 256 B = 2048 b. Physical layout: 8
+  VLanes × 32 B each. Element counts depend on dtype: 256 i8 / 128
+  i16 / 128 fp16 / 64 i32 / 64 fp32 / 32 i64. The Vector ALU
+  reads/writes one full RegTensor per cycle.</td>
+</tr>
+<tr>
+  <td><b>MaskReg</b></td>
+  <td>Predicate register file</td>
+  <td>Yes — P0..P7</td>
+  <td>Width = VL / 8 = 32 B = 256 b — one bit per i8 lane (or
+  fewer bits used for wider dtypes). Built by <code>RV_PSET</code>,
+  combined by <code>RV_PAND</code> / <code>RV_POR</code> /
+  <code>RV_PXOR</code>, consumed as the predicate operand on every
+  vector op. The "P1" in <code>VADDS.s32 V2,V2,S8,P1</code> selects
+  which lanes write back.</td>
+</tr>
+<tr>
+  <td><b>UnalignRegFor{Load,Store}</b></td>
+  <td>Register, <b>partly transparent</b></td>
+  <td>Indirectly — via <code>VLDAS</code> / <code>VLDUI</code></td>
+  <td>Holds the cross-bank residue when a UB↔vreg move spans bank
+  boundaries. <code>VLDAS</code> primes it with a UB address;
+  <code>VLDUI</code> later pulls aligned data through it. The ALU
+  never reads it directly — it's plumbing for unaligned access.
+  Opt 23 (align the C-buffer to 32 B) eliminates the
+  <code>VLDAS</code> + <code>SMOV</code> setup pair entirely
+  because aligned <code>VLDI</code> bypasses this register.</td>
+</tr>
+<tr>
+  <td><b>Vector ALU</b></td>
+  <td>Datapath</td>
+  <td>Indirectly — RVECEX backend</td>
+  <td>256 B/cyc datapath sitting behind the RVECEX pipe. Supports
+  U8/U16/U32, S8/S16/S32, BF16/FP16/FP32. Width matches UB
+  aggregate per-cycle bandwidth — the bus is balanced.</td>
+</tr>
+<tr>
+  <td><b>SIMT Register File</b></td>
+  <td>Register file (SIMT path)</td>
+  <td>Only via SIMT-mode kernel</td>
+  <td>128 KB total, fed by 4 warp schedulers. Distinct from the
+  RegTensor file: SIMT and SIMD paths have separate register
+  storage. Idle in <code>mask_kernel</code>.</td>
+</tr>
+
+<tr style="background:#fff8e1">
+  <td colspan="4"><b>Functional pipes (full table in §3)</b></td>
+</tr>
+<tr>
+  <td><b>RVECEX</b></td><td>Pipe</td><td>Indirectly</td>
+  <td>Vector ALU + predicate ALU. Dual-issue. ★ Bottleneck pipe at
+  64 % utilization in this trace.</td>
+</tr>
+<tr>
+  <td><b>RVECLD</b></td><td>Pipe</td><td>Indirectly</td>
+  <td>Vector load (UB → vreg). Dual-issue. 18 % utilized — large
+  slack budget.</td>
+</tr>
+<tr>
+  <td><b>RVECST</b></td><td>Pipe</td><td>Indirectly</td>
+  <td>Vector store + flag-send (UB ← vreg, plus inter-core sync
+  bits). Dual-issue. 9 % utilized.</td>
+</tr>
+<tr>
+  <td><b>RVECSU</b></td><td>Pipe</td><td>Indirectly</td>
+  <td>Auxiliary scalar pipe inside SIMD_VF. Single-issue.</td>
+</tr>
+<tr>
+  <td><b>RVECLP</b></td><td>Pipe</td><td>Indirectly</td>
+  <td>Loop-control pipe. Single-issue. Carries
+  <code>VLOOPV2</code> only.</td>
+</tr>
+
+</tbody>
+</table>
+
+<div class="callout callout-info">
+<b>Why "transparent" matters for optimization.</b>
+Transparent blocks (L2, ND-DMA Cache, UnalignReg<i>partly</i>) cannot
+be scheduled against directly — the only way to influence them is
+through the <i>access pattern</i> of the instructions that flow
+through them. That's why every Opt that touches the left half of the
+diagram (Opt 21 prefetch, Opt 22 alignment, Opt 23 buffer alignment)
+is phrased as <i>"shape your MTE2/UB ops so the transparent layer has
+an easy time"</i>, not <i>"issue an instruction to manage L2"</i>.
+Software-managed blocks (UB, RegTensor, MaskReg, the queues) are
+where actual scheduling decisions happen.
+</div>
+
+<h2>3. Per-pipe parallelism table (verified empirically)</h2>
 
 <table>
 <thead>
@@ -476,7 +688,7 @@ work off RVECEX onto idle pipes (or eliminate RVECEX work entirely)
 have the largest cycle-saving leverage.
 </div>
 
-<h2>3. Steady-state in-flight counts at cycle 1700–1750 (mid-loop)</h2>
+<h2>4. Steady-state in-flight counts at cycle 1700–1750 (mid-loop)</h2>
 
 <table>
 <thead>
@@ -512,7 +724,7 @@ matches Little's law:
 <code>RVECEX in flight ≈ issue rate × latency = 1.28 × 7 = 9</code>
 or with peak ≈ <code>2 × 7 = 14</code>.</p>
 
-<h2>4. Three granularities of parallelism in the AIV</h2>
+<h2>5. Three granularities of parallelism in the AIV</h2>
 
 <table>
 <thead>
@@ -576,7 +788,7 @@ or with peak ≈ <code>2 × 7 = 14</code>.</p>
 </tbody>
 </table>
 
-<h2>5. Where each missed-optimization lands on this map</h2>
+<h2>6. Where each missed-optimization lands on this map</h2>
 
 <table>
 <thead>
@@ -635,7 +847,7 @@ slack — convert at ratio close to <b>0</b> unless you remove enough
 to drop in-flight count below the issue rate × latency floor.
 </div>
 
-<h2>6. Verification recipe</h2>
+<h2>7. Verification recipe</h2>
 
 <p>Anyone reading this can re-derive every empirical number above
 in 5 lines of Python against the committed trace JSON:</p>
@@ -651,7 +863,7 @@ for pipe in ['RVECEX','RVECLD','RVECST','RVECSU','MTE2','MTE3','PUSHQ']:
           f'issue_rate={len(pe)/span:.3f} ops/cyc')
 </pre>
 
-<h2>7. Cross-references</h2>
+<h2>8. Cross-references</h2>
 
 <ul>
   <li><code>a5_pto_bool_vloop_walkthrough.md</code> §5.3 — vendor-published architecture facts (sources & verbatim quotes)</li>
