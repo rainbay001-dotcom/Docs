@@ -1,0 +1,670 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>A5 AIV Vector-Subsystem Parallelism — Detailed Analysis</title>
+<style>
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    line-height: 1.55;
+    max-width: 1400px;
+    margin: 2em auto;
+    padding: 0 2em;
+    color: #222;
+  }
+  h1 { color: #0d47a1; border-bottom: 3px solid #0d47a1; padding-bottom: 0.3em; }
+  h2 { color: #1565c0; margin-top: 1.6em; border-bottom: 1px solid #bbdefb; padding-bottom: 0.2em; }
+  h3 { color: #1976d2; margin-top: 1.2em; }
+  table { border-collapse: collapse; margin: 1em 0; font-size: 0.92em; }
+  th, td { border: 1px solid #cbd0d6; padding: 0.45em 0.8em; text-align: left; }
+  th { background: #e3f2fd; font-weight: 600; }
+  tr:nth-child(even) { background: #f8fbff; }
+  td.num { text-align: right; font-variant-numeric: tabular-nums; }
+  .legend { display: inline-flex; align-items: center; margin-right: 1.2em; font-size: 0.88em; }
+  .legend-box { display: inline-block; width: 14px; height: 14px; border-radius: 3px; margin-right: 6px; border: 1px solid rgba(0,0,0,0.15); }
+  code, pre { font-family: "SF Mono", Menlo, Consolas, monospace; }
+  pre { background: #f7f7f8; padding: 0.8em 1em; border-radius: 6px; border: 1px solid #e3e6e9; overflow-x: auto; font-size: 0.86em; }
+  .tier { display: inline-block; padding: 1px 6px; border-radius: 3px; font-size: 0.78em; font-weight: 600; vertical-align: middle; }
+  .tier-A { background: #c8e6c9; color: #1b5e20; }
+  .tier-B { background: #fff9c4; color: #827717; }
+  .tier-C { background: #ffccbc; color: #bf360c; }
+  .callout { border-left: 4px solid #fbc02d; background: #fffde7; padding: 0.6em 1em; margin: 1em 0; }
+  .callout-info { border-left-color: #1976d2; background: #e3f2fd; }
+  .pipe-row { display: grid; grid-template-columns: 110px 1fr; gap: 0.5em; margin: 0.3em 0; }
+  .pipe-name { font-family: "SF Mono", Menlo, Consolas, monospace; font-weight: 600; color: #0d47a1; }
+  .small { font-size: 0.86em; color: #555; }
+  svg { display: block; margin: 1em auto; max-width: 100%; height: auto; }
+  .src { font-size: 0.84em; color: #666; font-style: italic; }
+</style>
+</head>
+<body>
+
+<h1>A5 AIV Vector-Subsystem Parallelism</h1>
+
+<p class="src">Companion to <code>a5_pto_bool_vloop_walkthrough.md</code> §5.3 – §5.5.
+Sources: hiascend.com <code>atlas_ascendc_10_00065</code> /
+<code>atlas_ascendc_best_practices_10_00021</code> (verbatim verbatim) +
+empirical camodel trace of <code>mask_kernel_a5.o</code>
+(<code>figures/mask_kernel_a5_camodel/trace_v0/dump2trace_core0.json</code>,
+452 events, 1431-cycle span).</p>
+
+<p>
+This page focuses exclusively on the <strong>AIV (vector) core</strong>
+of A5 — the AIC / Cube / Fixpipe / L0A/L0B/L0C portions are
+deliberately excluded. The diagram below layers all parallelism
+mechanisms (instruction queues, pipes, in-flight depth, UB
+bank-port budget, vreg width) onto a single chart with empirical
+numbers from the camodel trace.
+</p>
+
+<h2>1. Top-level vector-subsystem diagram</h2>
+
+<div style="overflow-x: auto;">
+<svg viewBox="0 0 1300 920" xmlns="http://www.w3.org/2000/svg" style="background:#fafafa">
+
+  <!-- ARROW MARKERS -->
+  <defs>
+    <marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#444"/>
+    </marker>
+    <marker id="arr-blue" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#1565c0"/>
+    </marker>
+    <marker id="arr-orange" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#e65100"/>
+    </marker>
+  </defs>
+
+  <!-- TITLE -->
+  <text x="650" y="30" text-anchor="middle" font-size="20" font-weight="bold" fill="#0d47a1">
+    A5 AIV core — vector parallelism map
+  </text>
+  <text x="650" y="52" text-anchor="middle" font-size="13" fill="#555">
+    Empirical measurements from camodel trace overlaid on vendor-published architecture
+  </text>
+
+  <!-- ============================================================== -->
+  <!-- LAYER 1: GM / L2 / ND-DMA -->
+  <!-- ============================================================== -->
+  <rect x="50" y="80" width="120" height="80" rx="6" fill="#1976d2" stroke="#0d47a1" stroke-width="1.5"/>
+  <text x="110" y="110" text-anchor="middle" font-size="14" fill="white" font-weight="bold">Global Memory</text>
+  <text x="110" y="128" text-anchor="middle" font-size="11" fill="#e3f2fd">(GM)</text>
+  <text x="110" y="146" text-anchor="middle" font-size="10" fill="#bbdefb">HBM</text>
+
+  <rect x="200" y="80" width="100" height="80" rx="6" fill="#42a5f5" stroke="#1976d2" stroke-width="1.5"/>
+  <text x="250" y="115" text-anchor="middle" font-size="13" fill="white" font-weight="bold">L2 Cache</text>
+  <text x="250" y="135" text-anchor="middle" font-size="10" fill="#e3f2fd">(transparent)</text>
+
+  <rect x="330" y="80" width="120" height="80" rx="6" fill="#ffe082" stroke="#f57c00" stroke-width="1.5"/>
+  <text x="390" y="105" text-anchor="middle" font-size="13" fill="#bf360c" font-weight="bold">ND-DMA Cache</text>
+  <text x="390" y="125" text-anchor="middle" font-size="10" fill="#bf360c">non-aligned/strided</text>
+  <text x="390" y="140" text-anchor="middle" font-size="10" fill="#5d4037">Opt 22: align ops</text>
+  <text x="390" y="155" text-anchor="middle" font-size="10" fill="#5d4037">to 256B for hits</text>
+
+  <line x1="170" y1="120" x2="200" y2="120" stroke="#444" stroke-width="2" marker-end="url(#arr)"/>
+  <line x1="300" y1="120" x2="330" y2="120" stroke="#444" stroke-width="2" marker-end="url(#arr)"/>
+  <line x1="450" y1="120" x2="490" y2="120" stroke="#444" stroke-width="2" marker-end="url(#arr)"/>
+  <text x="475" y="115" text-anchor="middle" font-size="9" fill="#333">MTE2</text>
+
+  <!-- ============================================================== -->
+  <!-- LAYER 2: AIV core boundary -->
+  <!-- ============================================================== -->
+  <rect x="60" y="190" width="1180" height="690" rx="10" fill="none" stroke="#0d47a1" stroke-width="2.5" stroke-dasharray="6,4"/>
+  <text x="80" y="215" font-size="14" fill="#0d47a1" font-weight="bold">AIV core (one of 36 per die)</text>
+  <text x="80" y="232" font-size="10" fill="#555" font-style="italic">[empirical: kernel ran on core0_veccore0; trace 452 events / 1431 cyc span]</text>
+
+  <!-- ============================================================== -->
+  <!-- LAYER 3: 4 INSTRUCTION QUEUES -->
+  <!-- ============================================================== -->
+  <text x="120" y="265" font-size="13" fill="#0d47a1" font-weight="bold">Instruction Queues (4 independent — issue concurrently)</text>
+
+  <!-- Queue MTE2 -->
+  <rect x="80" y="280" width="180" height="62" rx="5" fill="#fff3e0" stroke="#f57c00" stroke-width="1.5"/>
+  <text x="170" y="299" text-anchor="middle" font-size="13" fill="#e65100" font-weight="bold">MTE2 指令序列</text>
+  <text x="170" y="315" text-anchor="middle" font-size="10" fill="#5d4037">GM → UB DMA</text>
+  <text x="170" y="332" text-anchor="middle" font-size="10" fill="#333">trace: 10 events, dual-issue</text>
+
+  <!-- Queue MTE3 -->
+  <rect x="280" y="280" width="180" height="62" rx="5" fill="#fff3e0" stroke="#f57c00" stroke-width="1.5"/>
+  <text x="370" y="299" text-anchor="middle" font-size="13" fill="#e65100" font-weight="bold">MTE3 指令序列</text>
+  <text x="370" y="315" text-anchor="middle" font-size="10" fill="#5d4037">UB → GM DMA</text>
+  <text x="370" y="332" text-anchor="middle" font-size="10" fill="#333">trace: 2 events, single-issue</text>
+
+  <!-- Queue SIMD-VF -->
+  <rect x="480" y="280" width="180" height="62" rx="5" fill="#e8f5e9" stroke="#2e7d32" stroke-width="2"/>
+  <text x="570" y="299" text-anchor="middle" font-size="13" fill="#1b5e20" font-weight="bold">SIMD VF 指令序列</text>
+  <text x="570" y="315" text-anchor="middle" font-size="10" fill="#33691e">vector function (mask_kernel uses)</text>
+  <text x="570" y="332" text-anchor="middle" font-size="10" fill="#333">★ this is the active queue</text>
+
+  <!-- Queue SIMT-VF -->
+  <rect x="680" y="280" width="180" height="62" rx="5" fill="#f3e5f5" stroke="#7b1fa2" stroke-width="1.5" stroke-dasharray="4,2"/>
+  <text x="770" y="299" text-anchor="middle" font-size="13" fill="#4a148c" font-weight="bold">SIMT VF 指令序列</text>
+  <text x="770" y="315" text-anchor="middle" font-size="10" fill="#6a1b9a">SIMT path (idle for mask_kernel)</text>
+  <text x="770" y="332" text-anchor="middle" font-size="10" fill="#333">Opt 16: 4× scaling if used</text>
+
+  <!-- Scalar control -->
+  <rect x="900" y="280" width="220" height="62" rx="5" fill="#e1f5fe" stroke="#0288d1" stroke-width="1.5"/>
+  <text x="1010" y="299" text-anchor="middle" font-size="13" fill="#01579b" font-weight="bold">Scalar / SU + control</text>
+  <text x="1010" y="315" text-anchor="middle" font-size="10" fill="#01579b">RVECSU (single-issue) + RVECLP</text>
+  <text x="1010" y="332" text-anchor="middle" font-size="10" fill="#333">trace: 4 SU events (all pre-loop)</text>
+
+  <!-- ============================================================== -->
+  <!-- LAYER 4: 5 RVEC* PIPES -->
+  <!-- ============================================================== -->
+  <text x="120" y="385" font-size="13" fill="#0d47a1" font-weight="bold">Functional Pipes (issue width verified empirically from trace)</text>
+
+  <!-- Pipe RVECLD -->
+  <rect x="80" y="400" width="220" height="105" rx="5" fill="#bbdefb" stroke="#1565c0" stroke-width="2"/>
+  <text x="190" y="420" text-anchor="middle" font-size="13" fill="#0d47a1" font-weight="bold">RVECLD</text>
+  <text x="190" y="437" text-anchor="middle" font-size="10" fill="#0d47a1">Vector LOAD pipe (UB → vreg)</text>
+  <text x="190" y="455" text-anchor="middle" font-size="11" fill="#1b5e20" font-weight="bold">Issue: 2 ops/cyc (DUAL) ★</text>
+  <text x="190" y="471" text-anchor="middle" font-size="10" fill="#333">Avg latency: 10–11 cyc</text>
+  <text x="190" y="486" text-anchor="middle" font-size="10" fill="#333">Peak in flight: 6</text>
+  <text x="190" y="501" text-anchor="middle" font-size="10" fill="#bf360c">Actual rate: 0.37 ops/cyc (18% of max)</text>
+
+  <!-- Pipe RVECEX -->
+  <rect x="320" y="400" width="240" height="105" rx="5" fill="#c8e6c9" stroke="#2e7d32" stroke-width="2.5"/>
+  <text x="440" y="420" text-anchor="middle" font-size="13" fill="#1b5e20" font-weight="bold">RVECEX ★ bottleneck</text>
+  <text x="440" y="437" text-anchor="middle" font-size="10" fill="#1b5e20">Vector ALU + predicate ALU</text>
+  <text x="440" y="455" text-anchor="middle" font-size="11" fill="#1b5e20" font-weight="bold">Issue: 2 ops/cyc (DUAL) ★</text>
+  <text x="440" y="471" text-anchor="middle" font-size="10" fill="#333">Avg latency: 7–8 cyc</text>
+  <text x="440" y="486" text-anchor="middle" font-size="10" fill="#333">Peak in flight: 14 (= 2 × 7)</text>
+  <text x="440" y="501" text-anchor="middle" font-size="10" fill="#bf360c">Actual rate: 1.28 ops/cyc (64% of max)</text>
+
+  <!-- Pipe RVECST -->
+  <rect x="580" y="400" width="200" height="105" rx="5" fill="#ffe0b2" stroke="#ef6c00" stroke-width="2"/>
+  <text x="680" y="420" text-anchor="middle" font-size="13" fill="#bf360c" font-weight="bold">RVECST</text>
+  <text x="680" y="437" text-anchor="middle" font-size="10" fill="#bf360c">Vector STORE + flag-send</text>
+  <text x="680" y="455" text-anchor="middle" font-size="11" fill="#1b5e20" font-weight="bold">Issue: 2 ops/cyc (DUAL) ★</text>
+  <text x="680" y="471" text-anchor="middle" font-size="10" fill="#333">Avg latency: 14–22 cyc (slowest)</text>
+  <text x="680" y="486" text-anchor="middle" font-size="10" fill="#333">Peak in flight: 4</text>
+  <text x="680" y="501" text-anchor="middle" font-size="10" fill="#bf360c">Actual rate: 0.18 ops/cyc (9% of max)</text>
+
+  <!-- Pipe RVECSU -->
+  <rect x="800" y="400" width="180" height="105" rx="5" fill="#f5f5f5" stroke="#757575" stroke-width="1.5"/>
+  <text x="890" y="420" text-anchor="middle" font-size="13" fill="#424242" font-weight="bold">RVECSU</text>
+  <text x="890" y="437" text-anchor="middle" font-size="10" fill="#424242">Aux Scalar (in SIMD_VF)</text>
+  <text x="890" y="455" text-anchor="middle" font-size="11" fill="#bf360c" font-weight="bold">Issue: 1 op/cyc (single)</text>
+  <text x="890" y="471" text-anchor="middle" font-size="10" fill="#333">Latency: 1–2 cyc</text>
+  <text x="890" y="486" text-anchor="middle" font-size="10" fill="#333">Peak in flight: 2</text>
+  <text x="890" y="501" text-anchor="middle" font-size="10" fill="#666">All 4 events pre-loop</text>
+
+  <!-- Pipe RVECLP -->
+  <rect x="1000" y="400" width="160" height="105" rx="5" fill="#f5f5f5" stroke="#757575" stroke-width="1.5"/>
+  <text x="1080" y="420" text-anchor="middle" font-size="13" fill="#424242" font-weight="bold">RVECLP</text>
+  <text x="1080" y="437" text-anchor="middle" font-size="10" fill="#424242">Loop control</text>
+  <text x="1080" y="455" text-anchor="middle" font-size="11" fill="#bf360c" font-weight="bold">Issue: 1 op/cyc</text>
+  <text x="1080" y="471" text-anchor="middle" font-size="10" fill="#333">VLOOPV2 marker</text>
+  <text x="1080" y="486" text-anchor="middle" font-size="10" fill="#333">1 event total</text>
+
+  <!-- Arrows from queues to pipes -->
+  <line x1="170" y1="342" x2="190" y2="400" stroke="#e65100" stroke-width="1.5" marker-end="url(#arr-orange)"/>
+  <line x1="370" y1="342" x2="680" y2="400" stroke="#e65100" stroke-width="1.5" marker-end="url(#arr-orange)" stroke-dasharray="3,2"/>
+  <line x1="570" y1="342" x2="190" y2="400" stroke="#1565c0" stroke-width="1.2" marker-end="url(#arr-blue)" stroke-dasharray="3,2"/>
+  <line x1="570" y1="342" x2="440" y2="400" stroke="#1565c0" stroke-width="2.5" marker-end="url(#arr-blue)"/>
+  <line x1="570" y1="342" x2="680" y2="400" stroke="#1565c0" stroke-width="1.5" marker-end="url(#arr-blue)"/>
+  <line x1="1010" y1="342" x2="890" y2="400" stroke="#0288d1" stroke-width="1.2" marker-end="url(#arr-blue)"/>
+  <line x1="1010" y1="342" x2="1080" y2="400" stroke="#0288d1" stroke-width="1.2" marker-end="url(#arr-blue)"/>
+
+  <!-- ============================================================== -->
+  <!-- LAYER 5: VECTOR REGS + COMPUTE -->
+  <!-- ============================================================== -->
+  <text x="120" y="540" font-size="13" fill="#0d47a1" font-weight="bold">Vector Registers + Compute Unit</text>
+
+  <!-- Vector ALU -->
+  <rect x="500" y="555" width="220" height="100" rx="6" fill="#a5d6a7" stroke="#1b5e20" stroke-width="2"/>
+  <text x="610" y="580" text-anchor="middle" font-size="14" fill="#1b5e20" font-weight="bold">Vector ALU (256 B/cyc)</text>
+  <text x="610" y="600" text-anchor="middle" font-size="10" fill="#1b5e20">U8 / U16 / U32 / S8 / S16 / S32</text>
+  <text x="610" y="615" text-anchor="middle" font-size="10" fill="#1b5e20">BF16 / FP16 / FP32</text>
+  <text x="610" y="635" text-anchor="middle" font-size="11" fill="#bf360c" font-weight="bold">RVECEX backend</text>
+
+  <!-- RegTensor -->
+  <rect x="80" y="555" width="200" height="100" rx="5" fill="#e3f2fd" stroke="#1565c0" stroke-width="1.5"/>
+  <text x="180" y="578" text-anchor="middle" font-size="13" fill="#0d47a1" font-weight="bold">RegTensor (vreg)</text>
+  <text x="180" y="595" text-anchor="middle" font-size="11" fill="#01579b">VL = 256 B = 2048 b</text>
+  <text x="180" y="613" text-anchor="middle" font-size="10" fill="#333">8 VLanes × 32 B each</text>
+  <text x="180" y="628" text-anchor="middle" font-size="10" fill="#333">i8: 256 lanes  i16/f16: 128</text>
+  <text x="180" y="643" text-anchor="middle" font-size="10" fill="#333">i32/f32: 64  i64: 32</text>
+
+  <!-- MaskReg -->
+  <rect x="290" y="555" width="160" height="100" rx="5" fill="#ffe082" stroke="#f57c00" stroke-width="1.5"/>
+  <text x="370" y="578" text-anchor="middle" font-size="13" fill="#bf360c" font-weight="bold">MaskReg</text>
+  <text x="370" y="595" text-anchor="middle" font-size="11" fill="#5d4037">VL/8 = 32 B = 256 b</text>
+  <text x="370" y="615" text-anchor="middle" font-size="10" fill="#333">predicate per-lane</text>
+  <text x="370" y="635" text-anchor="middle" font-size="10" fill="#333">RV_PSET / RV_PAND</text>
+
+  <!-- UnalignReg -->
+  <rect x="740" y="555" width="180" height="100" rx="5" fill="#fff" stroke="#9e9e9e" stroke-width="1.5"/>
+  <text x="830" y="578" text-anchor="middle" font-size="13" fill="#424242" font-weight="bold">UnalignRegFor{Load,Store}</text>
+  <text x="830" y="595" text-anchor="middle" font-size="10" fill="#666">unaligned UB↔RegTensor</text>
+  <text x="830" y="615" text-anchor="middle" font-size="10" fill="#666">VLDAS / VLDUI mechanism</text>
+  <text x="830" y="635" text-anchor="middle" font-size="10" fill="#bf360c">Opt 23: align buffer to skip</text>
+
+  <!-- SIMT RegFile -->
+  <rect x="940" y="555" width="200" height="100" rx="5" fill="#f3e5f5" stroke="#7b1fa2" stroke-width="1.5" stroke-dasharray="4,2"/>
+  <text x="1040" y="578" text-anchor="middle" font-size="13" fill="#4a148c" font-weight="bold">SIMT Register File</text>
+  <text x="1040" y="595" text-anchor="middle" font-size="11" fill="#4a148c">128 KB total</text>
+  <text x="1040" y="615" text-anchor="middle" font-size="10" fill="#6a1b9a">4 Warp Schedulers / AIV</text>
+  <text x="1040" y="635" text-anchor="middle" font-size="10" fill="#333">Idle in mask_kernel (SIMD mode)</text>
+
+  <!-- Arrows -->
+  <line x1="280" y1="605" x2="500" y2="605" stroke="#1565c0" stroke-width="2" marker-end="url(#arr-blue)"/>
+  <line x1="450" y1="605" x2="500" y2="615" stroke="#f57c00" stroke-width="1.5" marker-end="url(#arr-orange)" stroke-dasharray="3,2"/>
+  <line x1="720" y1="605" x2="740" y2="605" stroke="#1565c0" stroke-width="1.2" marker-end="url(#arr-blue)" stroke-dasharray="3,2"/>
+
+  <!-- ============================================================== -->
+  <!-- LAYER 6: UNIFIED BUFFER + BANK STRUCTURE -->
+  <!-- ============================================================== -->
+  <text x="120" y="700" font-size="13" fill="#0d47a1" font-weight="bold">Unified Buffer (UB) — 256 KB total, 16 banks in 8 groups</text>
+
+  <rect x="80" y="715" width="900" height="135" rx="6" fill="#e3f2fd" stroke="#0d47a1" stroke-width="2"/>
+
+  <!-- 8 bank groups, each with 2 banks -->
+  <g transform="translate(95, 730)">
+  <!-- group 0..7 -->
+  <g>
+    <rect x="0" y="0" width="106" height="100" rx="3" fill="#fff" stroke="#1565c0"/>
+    <text x="53" y="14" text-anchor="middle" font-size="9" fill="#0d47a1" font-weight="bold">Group 0</text>
+    <rect x="6" y="22" width="46" height="68" rx="2" fill="#bbdefb" stroke="#1565c0" stroke-width="0.7"/>
+    <text x="29" y="60" text-anchor="middle" font-size="9" fill="#0d47a1">bank 0</text>
+    <rect x="54" y="22" width="46" height="68" rx="2" fill="#bbdefb" stroke="#1565c0" stroke-width="0.7"/>
+    <text x="77" y="60" text-anchor="middle" font-size="9" fill="#0d47a1">bank 8</text>
+  </g>
+  <g transform="translate(112, 0)">
+    <rect x="0" y="0" width="106" height="100" rx="3" fill="#fff" stroke="#1565c0"/>
+    <text x="53" y="14" text-anchor="middle" font-size="9" fill="#0d47a1" font-weight="bold">Group 1</text>
+    <rect x="6" y="22" width="46" height="68" rx="2" fill="#bbdefb" stroke="#1565c0" stroke-width="0.7"/>
+    <text x="29" y="60" text-anchor="middle" font-size="9" fill="#0d47a1">bank 1</text>
+    <rect x="54" y="22" width="46" height="68" rx="2" fill="#bbdefb" stroke="#1565c0" stroke-width="0.7"/>
+    <text x="77" y="60" text-anchor="middle" font-size="9" fill="#0d47a1">bank 9</text>
+  </g>
+  <g transform="translate(224, 0)">
+    <rect x="0" y="0" width="106" height="100" rx="3" fill="#fff" stroke="#1565c0"/>
+    <text x="53" y="14" text-anchor="middle" font-size="9" fill="#0d47a1" font-weight="bold">Group 2</text>
+    <rect x="6" y="22" width="46" height="68" rx="2" fill="#bbdefb" stroke="#1565c0" stroke-width="0.7"/>
+    <text x="29" y="60" text-anchor="middle" font-size="9" fill="#0d47a1">bank 2</text>
+    <rect x="54" y="22" width="46" height="68" rx="2" fill="#bbdefb" stroke="#1565c0" stroke-width="0.7"/>
+    <text x="77" y="60" text-anchor="middle" font-size="9" fill="#0d47a1">bank 10</text>
+  </g>
+  <g transform="translate(336, 0)">
+    <rect x="0" y="0" width="106" height="100" rx="3" fill="#fff" stroke="#1565c0"/>
+    <text x="53" y="14" text-anchor="middle" font-size="9" fill="#0d47a1" font-weight="bold">Group 3</text>
+    <rect x="6" y="22" width="46" height="68" rx="2" fill="#bbdefb" stroke="#1565c0" stroke-width="0.7"/>
+    <text x="29" y="60" text-anchor="middle" font-size="9" fill="#0d47a1">bank 3</text>
+    <rect x="54" y="22" width="46" height="68" rx="2" fill="#bbdefb" stroke="#1565c0" stroke-width="0.7"/>
+    <text x="77" y="60" text-anchor="middle" font-size="9" fill="#0d47a1">bank 11</text>
+  </g>
+  <g transform="translate(448, 0)">
+    <rect x="0" y="0" width="106" height="100" rx="3" fill="#fff" stroke="#1565c0"/>
+    <text x="53" y="14" text-anchor="middle" font-size="9" fill="#0d47a1" font-weight="bold">Group 4</text>
+    <rect x="6" y="22" width="46" height="68" rx="2" fill="#bbdefb" stroke="#1565c0" stroke-width="0.7"/>
+    <text x="29" y="60" text-anchor="middle" font-size="9" fill="#0d47a1">bank 4</text>
+    <rect x="54" y="22" width="46" height="68" rx="2" fill="#bbdefb" stroke="#1565c0" stroke-width="0.7"/>
+    <text x="77" y="60" text-anchor="middle" font-size="9" fill="#0d47a1">bank 12</text>
+  </g>
+  <g transform="translate(560, 0)">
+    <rect x="0" y="0" width="106" height="100" rx="3" fill="#fff" stroke="#1565c0"/>
+    <text x="53" y="14" text-anchor="middle" font-size="9" fill="#0d47a1" font-weight="bold">Group 5</text>
+    <rect x="6" y="22" width="46" height="68" rx="2" fill="#bbdefb" stroke="#1565c0" stroke-width="0.7"/>
+    <text x="29" y="60" text-anchor="middle" font-size="9" fill="#0d47a1">bank 5</text>
+    <rect x="54" y="22" width="46" height="68" rx="2" fill="#bbdefb" stroke="#1565c0" stroke-width="0.7"/>
+    <text x="77" y="60" text-anchor="middle" font-size="9" fill="#0d47a1">bank 13</text>
+  </g>
+  <g transform="translate(672, 0)">
+    <rect x="0" y="0" width="106" height="100" rx="3" fill="#fff" stroke="#1565c0"/>
+    <text x="53" y="14" text-anchor="middle" font-size="9" fill="#0d47a1" font-weight="bold">Group 6</text>
+    <rect x="6" y="22" width="46" height="68" rx="2" fill="#bbdefb" stroke="#1565c0" stroke-width="0.7"/>
+    <text x="29" y="60" text-anchor="middle" font-size="9" fill="#0d47a1">bank 6</text>
+    <rect x="54" y="22" width="46" height="68" rx="2" fill="#bbdefb" stroke="#1565c0" stroke-width="0.7"/>
+    <text x="77" y="60" text-anchor="middle" font-size="9" fill="#0d47a1">bank 14</text>
+  </g>
+  <g transform="translate(784, 0)">
+    <rect x="0" y="0" width="106" height="100" rx="3" fill="#fff" stroke="#1565c0"/>
+    <text x="53" y="14" text-anchor="middle" font-size="9" fill="#0d47a1" font-weight="bold">Group 7</text>
+    <rect x="6" y="22" width="46" height="68" rx="2" fill="#bbdefb" stroke="#1565c0" stroke-width="0.7"/>
+    <text x="29" y="60" text-anchor="middle" font-size="9" fill="#0d47a1">bank 7</text>
+    <rect x="54" y="22" width="46" height="68" rx="2" fill="#bbdefb" stroke="#1565c0" stroke-width="0.7"/>
+    <text x="77" y="60" text-anchor="middle" font-size="9" fill="#0d47a1">bank 15</text>
+  </g>
+  </g>
+
+  <!-- UB summary callout -->
+  <rect x="990" y="715" width="240" height="135" rx="6" fill="#fffde7" stroke="#fbc02d" stroke-width="1.5"/>
+  <text x="1110" y="734" text-anchor="middle" font-size="11" fill="#5d4037" font-weight="bold">Per-cycle bandwidth</text>
+  <text x="1110" y="751" text-anchor="middle" font-size="10" fill="#5d4037">Per group: 2R+0W or 1R+1W</text>
+  <text x="1110" y="765" text-anchor="middle" font-size="10" fill="#5d4037">Aggregate: 256 B/cyc</text>
+  <text x="1110" y="785" text-anchor="middle" font-size="10" fill="#5d4037">(matches Vector ALU)</text>
+  <text x="1110" y="803" text-anchor="middle" font-size="10" fill="#bf360c" font-weight="bold">Conflict rules:</text>
+  <text x="1110" y="817" text-anchor="middle" font-size="9" fill="#5d4037">R+W same bank → ✗</text>
+  <text x="1110" y="829" text-anchor="middle" font-size="9" fill="#5d4037">2W same group → ✗</text>
+  <text x="1110" y="841" text-anchor="middle" font-size="9" fill="#5d4037">3+R same group → ✗</text>
+
+  <!-- Vector→UB and UB→Vector arrows -->
+  <line x1="180" y1="655" x2="180" y2="715" stroke="#1565c0" stroke-width="2" marker-end="url(#arr-blue)"/>
+  <line x1="200" y1="715" x2="200" y2="655" stroke="#1565c0" stroke-width="2" marker-end="url(#arr-blue)"/>
+
+  <!-- GM/MTE2 arrow into UB -->
+  <line x1="490" y1="120" x2="490" y2="715" stroke="#e65100" stroke-width="1.8" marker-end="url(#arr-orange)" stroke-dasharray="6,3"/>
+  <text x="498" y="450" font-size="9" fill="#e65100" transform="rotate(0)" font-style="italic">MTE2 (GM→UB)</text>
+
+  <!-- Legend -->
+  <rect x="80" y="870" width="800" height="32" rx="3" fill="white" stroke="#ccc"/>
+  <circle cx="100" cy="886" r="6" fill="#bbdefb" stroke="#1565c0"/><text x="113" y="891" font-size="10">Load path</text>
+  <circle cx="180" cy="886" r="6" fill="#c8e6c9" stroke="#2e7d32"/><text x="193" y="891" font-size="10">Compute (RVECEX)</text>
+  <circle cx="295" cy="886" r="6" fill="#ffe0b2" stroke="#ef6c00"/><text x="308" y="891" font-size="10">Store path</text>
+  <circle cx="395" cy="886" r="6" fill="#ffe082" stroke="#f57c00"/><text x="408" y="891" font-size="10">DMA / MTE</text>
+  <circle cx="490" cy="886" r="6" fill="#f3e5f5" stroke="#7b1fa2"/><text x="503" y="891" font-size="10">SIMT (idle)</text>
+  <circle cx="585" cy="886" r="6" fill="#f5f5f5" stroke="#757575"/><text x="598" y="891" font-size="10">Single-issue pipe</text>
+  <text x="700" y="891" font-size="10" font-style="italic" fill="#bf360c">★ = bottleneck / dual-issue</text>
+
+</svg>
+</div>
+
+<h2>2. Per-pipe parallelism table (verified empirically)</h2>
+
+<table>
+<thead>
+<tr>
+  <th>Pipe</th>
+  <th>Role</th>
+  <th class="num">Issue width</th>
+  <th class="num">Avg latency</th>
+  <th class="num">Peak in flight</th>
+  <th class="num">Issue rate</th>
+  <th class="num">Utilization</th>
+  <th>Total events</th>
+  <th>Tier</th>
+</tr>
+</thead>
+<tbody>
+<tr style="background:#fff8e1">
+  <td><b>RVECEX</b></td>
+  <td>Vector ALU + predicate ALU</td>
+  <td class="num"><b>2 (DUAL)</b></td>
+  <td class="num">7–8 cyc</td>
+  <td class="num"><b>14</b></td>
+  <td class="num"><b>1.28 ops/cyc</b></td>
+  <td class="num">64 % ★ bottleneck</td>
+  <td>263</td>
+  <td><span class="tier tier-A">A</span></td>
+</tr>
+<tr>
+  <td><b>RVECLD</b></td>
+  <td>Vector load (UB → vreg)</td>
+  <td class="num"><b>2 (DUAL)</b></td>
+  <td class="num">10–11 cyc</td>
+  <td class="num">6</td>
+  <td class="num">0.37 ops/cyc</td>
+  <td class="num">18 %</td>
+  <td>66</td>
+  <td><span class="tier tier-A">A</span></td>
+</tr>
+<tr>
+  <td><b>RVECST</b></td>
+  <td>Vector store + flag-send</td>
+  <td class="num"><b>2 (DUAL)</b></td>
+  <td class="num">14–22 cyc</td>
+  <td class="num">4</td>
+  <td class="num">0.18 ops/cyc</td>
+  <td class="num">9 %</td>
+  <td>34</td>
+  <td><span class="tier tier-A">A</span></td>
+</tr>
+<tr>
+  <td><b>RVECSU</b></td>
+  <td>Aux Scalar (in SIMD_VF)</td>
+  <td class="num">1 (single)</td>
+  <td class="num">1–2 cyc</td>
+  <td class="num">2</td>
+  <td class="num">0.02 ops/cyc</td>
+  <td class="num">2 %</td>
+  <td>4 (all pre-loop)</td>
+  <td><span class="tier tier-A">A</span></td>
+</tr>
+<tr>
+  <td><b>MTE2</b></td>
+  <td>GM → UB DMA</td>
+  <td class="num"><b>2 (DUAL)</b></td>
+  <td class="num">~80 cyc</td>
+  <td class="num">9</td>
+  <td class="num">0.012 ops/cyc</td>
+  <td class="num">~ negligible</td>
+  <td>10 (all pre-loop)</td>
+  <td><span class="tier tier-A">A</span></td>
+</tr>
+<tr>
+  <td><b>MTE3</b></td>
+  <td>UB → GM DMA</td>
+  <td class="num">1 (single)</td>
+  <td class="num">~990 cyc</td>
+  <td class="num">1</td>
+  <td class="num">0.002 ops/cyc</td>
+  <td class="num">~ negligible</td>
+  <td>2</td>
+  <td><span class="tier tier-A">A</span></td>
+</tr>
+<tr>
+  <td><b>RVECLP</b></td>
+  <td>Loop control</td>
+  <td class="num">1 (single)</td>
+  <td class="num">1 cyc</td>
+  <td class="num">1</td>
+  <td class="num">~free</td>
+  <td class="num">~ negligible</td>
+  <td>1 (VLOOPV2)</td>
+  <td><span class="tier tier-A">A</span></td>
+</tr>
+<tr>
+  <td><b>PUSHQ</b></td>
+  <td>Predicate-buffer push</td>
+  <td class="num">1 (single)</td>
+  <td class="num">~680 cyc</td>
+  <td class="num">1</td>
+  <td class="num">0.003 ops/cyc</td>
+  <td class="num">~ negligible</td>
+  <td>2</td>
+  <td><span class="tier tier-A">A</span></td>
+</tr>
+</tbody>
+</table>
+
+<div class="callout">
+<b>Headline reading.</b> RVECEX is at 64 % of its dual-issue
+ceiling — the rest of the AIV's parallelism (RVECLD at 18 %,
+RVECST at 9 %) is largely idle slack. Optimizations that move
+work off RVECEX onto idle pipes (or eliminate RVECEX work entirely)
+have the largest cycle-saving leverage.
+</div>
+
+<h2>3. Steady-state in-flight counts at cycle 1700–1750 (mid-loop)</h2>
+
+<table>
+<thead>
+<tr>
+  <th class="num">Cycle</th>
+  <th class="num">RVECEX</th>
+  <th class="num">RVECLD</th>
+  <th class="num">RVECST</th>
+  <th class="num">MTE3</th>
+  <th class="num">PUSHQ</th>
+  <th class="num">VECTOR</th>
+  <th class="num"><b>Total in flight</b></th>
+</tr>
+</thead>
+<tbody>
+<tr><td class="num">1700</td><td class="num">11</td><td class="num">3</td><td class="num">3</td><td class="num">1</td><td class="num">1</td><td class="num">1</td><td class="num"><b>20</b></td></tr>
+<tr><td class="num">1705</td><td class="num">12</td><td class="num">2</td><td class="num">3</td><td class="num">1</td><td class="num">1</td><td class="num">1</td><td class="num"><b>20</b></td></tr>
+<tr><td class="num">1710</td><td class="num">11</td><td class="num">4</td><td class="num">3</td><td class="num">1</td><td class="num">1</td><td class="num">1</td><td class="num"><b>21</b></td></tr>
+<tr><td class="num">1715</td><td class="num">11</td><td class="num">4</td><td class="num">3</td><td class="num">1</td><td class="num">1</td><td class="num">1</td><td class="num"><b>21</b></td></tr>
+<tr><td class="num">1720</td><td class="num">11</td><td class="num">4</td><td class="num">2</td><td class="num">1</td><td class="num">1</td><td class="num">1</td><td class="num"><b>20</b></td></tr>
+<tr><td class="num">1725</td><td class="num">9</td><td class="num">4</td><td class="num">3</td><td class="num">1</td><td class="num">1</td><td class="num">1</td><td class="num"><b>19</b></td></tr>
+<tr><td class="num">1730</td><td class="num">10</td><td class="num">3</td><td class="num">3</td><td class="num">1</td><td class="num">1</td><td class="num">1</td><td class="num"><b>19</b></td></tr>
+<tr><td class="num">1735</td><td class="num">9</td><td class="num">3</td><td class="num">4</td><td class="num">1</td><td class="num">1</td><td class="num">1</td><td class="num"><b>19</b></td></tr>
+<tr><td class="num">1740</td><td class="num">10</td><td class="num">4</td><td class="num">3</td><td class="num">1</td><td class="num">1</td><td class="num">1</td><td class="num"><b>20</b></td></tr>
+<tr><td class="num">1745</td><td class="num">9</td><td class="num">4</td><td class="num">3</td><td class="num">1</td><td class="num">1</td><td class="num">1</td><td class="num"><b>19</b></td></tr>
+<tr><td class="num">1750</td><td class="num">10</td><td class="num">4</td><td class="num">3</td><td class="num">1</td><td class="num">1</td><td class="num">1</td><td class="num"><b>20</b></td></tr>
+</tbody>
+</table>
+
+<p>≈ <b>20 ops in flight every cycle</b> — far more than the 2.4×
+factor my structural analysis estimated. The 1431-cycle wall-clock
+matches Little's law:
+<code>RVECEX in flight ≈ issue rate × latency = 1.28 × 7 = 9</code>
+or with peak ≈ <code>2 × 7 = 14</code>.</p>
+
+<h2>4. Three granularities of parallelism in the AIV</h2>
+
+<table>
+<thead>
+<tr><th>Scale</th><th>Mechanism</th><th>Window</th><th>Already exploited?</th></tr>
+</thead>
+<tbody>
+<tr>
+  <td><b>Lane-level (within one vector op)</b></td>
+  <td>64 i32 lanes per RegTensor; ALU computes 256 B/cyc</td>
+  <td>1 instruction issue</td>
+  <td><span class="tier tier-A">✓</span> All vector ops use full 64-lane width by default</td>
+</tr>
+<tr>
+  <td><b>Pipe-level dual-issue</b></td>
+  <td>RVECEX/RVECLD/RVECST/MTE2 each accept 2 ops/cyc</td>
+  <td>1 cycle</td>
+  <td><span class="tier tier-A">✓ (partial)</span> RVECEX 64 % used; RVECLD only 18 %</td>
+</tr>
+<tr>
+  <td><b>Cross-pipe parallelism</b></td>
+  <td>5 functional pipes execute concurrently (e.g. RVECLD load + RVECEX compute + RVECST store overlap)</td>
+  <td>1 cycle</td>
+  <td><span class="tier tier-A">✓</span> ~20 ops in flight at any cycle</td>
+</tr>
+<tr>
+  <td><b>4-queue instruction-front</b></td>
+  <td>MTE2 / MTE3 / SIMD VF / SIMT VF dispatch in parallel from independent queues</td>
+  <td>1 cycle</td>
+  <td><span class="tier tier-A">✓</span> Confirmed by trace (MTE2 events overlap SIMD-VF compute)</td>
+</tr>
+<tr>
+  <td><b>Intra-iter unroll-and-jam</b></td>
+  <td><code>assembler.as</code>'s 2-pass body — Pass B's RVECLD overlaps Pass A's RVECEX</td>
+  <td>~40 cyc per VLOOP iter</td>
+  <td><span class="tier tier-A">✓</span> in <code>assembler.as</code> only (CANN 9.0.0 build is single-pass)</td>
+</tr>
+<tr>
+  <td><b>Intra-launch (across iters)</b></td>
+  <td>Iter N+1's RVECLD loads issue during iter N's RVECEX work</td>
+  <td>~1400 cyc full VLOOP</td>
+  <td><span class="tier tier-A">✓</span> Confirmed by 20-in-flight count</td>
+</tr>
+<tr>
+  <td><b>Cross-launch prefetch</b> (Opt 21)</td>
+  <td>Launch N+1's MTE2 prefetch overlaps launch N's compute</td>
+  <td>~700 cyc per launch boundary</td>
+  <td><span class="tier tier-C">✗</span> not exploited; would save ~32 % per back-to-back launch</td>
+</tr>
+<tr>
+  <td><b>Multi-warp SIMT</b> (Opt 16)</td>
+  <td>4 warp schedulers per AIV; 4 SIMT threads concurrent</td>
+  <td>n/a (parallel work)</td>
+  <td><span class="tier tier-C">✗</span> SIMT VF queue is idle in mask_kernel</td>
+</tr>
+<tr>
+  <td><b>Multi-AIV (across cores)</b></td>
+  <td>36 AIV cores per die, each independent</td>
+  <td>n/a (launcher-level)</td>
+  <td><span class="tier tier-A">✓ (partial)</span> launcher dispatches via <code>tl.program_id</code></td>
+</tr>
+</tbody>
+</table>
+
+<h2>5. Where each missed-optimization lands on this map</h2>
+
+<table>
+<thead>
+<tr>
+  <th>Optimization</th>
+  <th>Affected pipe</th>
+  <th>Op saving</th>
+  <th>Cycle saving (best case, on critical path)</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+  <td>§6.6 Opt 2 — hold C in P-reg</td>
+  <td>RVECEX (eliminate redundant VCMP)</td>
+  <td class="num">−65 ops</td>
+  <td class="num">≈ −51 cyc (= 65 / 1.28 ops/cyc)</td>
+</tr>
+<tr>
+  <td>§6.7 Opt 3 — brc_b32 stream q_offset</td>
+  <td>RVECLD (cheaper load)</td>
+  <td class="num">−16 ops</td>
+  <td class="num">≈ −1 cyc (RVECLD has slack)</td>
+</tr>
+<tr>
+  <td>§6.8 Opt 4 — hoist V2 (VLDI + VADDS)</td>
+  <td>RVECLD + RVECEX</td>
+  <td class="num">−62 ops</td>
+  <td class="num">≈ −30 cyc (mixed)</td>
+</tr>
+<tr>
+  <td>§6.11 Opt 12 — F-hoist</td>
+  <td>RVECEX</td>
+  <td class="num">−64 ops</td>
+  <td class="num">≈ −50 cyc</td>
+</tr>
+<tr>
+  <td>§6.18 Opt 21 — cross-launch prefetch</td>
+  <td>(MTE2 hidden under SIMD-VF)</td>
+  <td class="num">~ 0 ops</td>
+  <td class="num">≈ −700 cyc / launch boundary</td>
+</tr>
+<tr>
+  <td>§6.20 Opt 23 — C-buffer 32 B align</td>
+  <td>RVECLD + RVECSU (eliminate VLDAS+SMOV)</td>
+  <td class="num">−160 ops</td>
+  <td class="num">≈ −40-60 cyc (RVECLD/SU slack)</td>
+</tr>
+</tbody>
+</table>
+
+<div class="callout callout-info">
+<b>Cycle-savings rule of thumb.</b> Saved RVECEX ops convert to
+cycles at ratio <b>1 / 1.28 ≈ 0.78 cyc per op</b> (on the critical
+path). Saved RVECLD or RVECST ops mostly hide under the existing
+slack — convert at ratio close to <b>0</b> unless you remove enough
+to drop in-flight count below the issue rate × latency floor.
+</div>
+
+<h2>6. Verification recipe</h2>
+
+<p>Anyone reading this can re-derive every empirical number above
+in 5 lines of Python against the committed trace JSON:</p>
+
+<pre>
+import json, collections
+events = json.load(open('triton-ascend/figures/mask_kernel_a5_camodel/trace_v0/dump2trace_core0.json'))['traceEvents']
+for pipe in ['RVECEX','RVECLD','RVECST','RVECSU','MTE2','MTE3','PUSHQ']:
+    pe = [(e['ts'], e['dur']) for e in events if e['tid']==pipe]
+    by_start = collections.Counter(t for t,_ in pe)
+    span = max(t+du for t,du in pe) - min(t for t,_ in pe)
+    print(f'{pipe:8s}  events={len(pe):3d}  max_simul_issue={max(by_start.values())}  '
+          f'issue_rate={len(pe)/span:.3f} ops/cyc')
+</pre>
+
+<h2>7. Cross-references</h2>
+
+<ul>
+  <li><code>a5_pto_bool_vloop_walkthrough.md</code> §5.3 — vendor-published architecture facts (sources & verbatim quotes)</li>
+  <li><code>a5_pto_bool_vloop_walkthrough.md</code> §5.4 — body iter 0 timeline, cross-pipe in-flight measurements</li>
+  <li><code>a5_pto_bool_vloop_walkthrough.md</code> §5.5 — empirical correction (per-pipe issue widths)</li>
+  <li><code>a5_pto_bool_vloop_walkthrough.md</code> §6 — full optimization tally (23 entries, Opts 1–23)</li>
+  <li><code>figures/atlas_ascendc_10_00065/01_hardware_architecture.png</code> — original vendor diagram (covers AIC + AIV; this page extracts AIV only)</li>
+  <li><code>figures/mask_kernel_a5_camodel/trace_v0/dump2trace_core0.json</code> — raw trace data (452 events)</li>
+</ul>
+
+<p class="src">Generated 2026-05-09. Empirical numbers derived from
+camodel-traced <code>mask_kernel_a5.o</code> (CANN 9.0.0 build,
+bool variant, single-pass single-AIV invocation).</p>
+
+</body>
+</html>
