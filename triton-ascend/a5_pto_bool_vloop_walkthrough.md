@@ -1879,6 +1879,87 @@ counterfactual camodel run with the optimization actually applied.
 
 Loadable in Chrome's `chrome://tracing/` for visual inspection.
 
+### 5.5 Per-pipe issue width — empirical correction to §5.3
+
+§5.3 stated "5 pipes × 1 op/cyc theoretical issue rate" based on a
+generic reading of the PTO ISA repo's pipe descriptions. The trace
+data shows **four of the seven pipes are actually dual-issue**.
+
+Computed by counting how many events of each pipe ever started at
+the *same* timestamp:
+
+```
+Pipe     events  max_simul_issue  peak_in_flight  issue_rate (ops/cyc)
+─────────────────────────────────────────────────────────────────────
+RVECEX   263     2 (DUAL)         14              1.28   ← bottleneck (64% of 2.0 max)
+RVECLD    66     2 (DUAL)          6              0.37
+RVECST    34     2 (DUAL)          4              0.18
+RVECSU     4     1 (single)        2              0.02
+MTE2      10     2 (DUAL)          9              0.01
+MTE3       2     1 (single)        1              0.002
+PUSHQ      2     1 (single)        1              0.003
+```
+
+#### How to verify this directly
+
+```python
+import json, collections
+events = json.load(open('trace_v0/dump2trace_core0.json'))['traceEvents']
+for pipe in ['RVECEX','RVECLD','RVECST','RVECSU','MTE2','MTE3','PUSHQ']:
+    pe = [(e['ts'], e['dur']) for e in events if e['tid']==pipe]
+    by_start = collections.Counter(t for t,_ in pe)
+    print(pipe, 'max_simul_issue:', max(by_start.values()))
+```
+
+The trace has events with **identical `ts` values** for paired
+issues — e.g. RVECLD events at PCs `0x10d0d234` and `0x10d0d238`
+both starting at cycle 1595, and again at 1598, 1602, … The
+hardware is dual-issuing adjacent VLDIs.
+
+#### Implications
+
+**1. Theoretical max throughput per pipe is 2 ops/cyc, not 1.**
+RVECEX at 1.28 ops/cyc is therefore at **64% of saturation**, not
+"oversaturated at 143%" as §5.3's "1 op/cyc" framing implied.
+
+**2. The Little's Law check holds.** RVECEX: 2 ops/cyc × 7 cyc avg
+latency = 14 in flight at saturation — exactly what the trace shows
+peak. RVECLD: 2 × 10 = 20 in flight at saturation; observed peak 6
+means RVECLD is far from saturation.
+
+**3. RVECEX is still the bottleneck**, but with a higher ceiling
+than I'd estimated. Removing 1 RVECEX op per iter saves up to
+1/1.28 ≈ 0.78 cyc/iter on the critical path, not 1/0.184 ≈ 5.4 cyc/iter
+as my earlier "issue every ~5.4 cyc" framing suggested.
+
+This means the per-op-savings → cycle-savings ratio for the §6
+optimizations is **less optimistic** than I'd written:
+
+| Optimization                         | Op count saved | Cycle saving (corrected, if on RVECEX critical path) |
+|--------------------------------------|---------------:|------------------------------------------------------:|
+| §6.6 Opt 2 (C in P-reg)              | −65 RVECEX ops | ~−51 cyc (was −65 worst-case in §5.4)                 |
+| §6.11 F-hoist                        | −64 RVECEX ops | ~−50 cyc (was −64 worst-case)                         |
+| §6.7 Opt 3 (brc_b32 q_offset)        | −16 RVECLD ops | ~−1 cyc (RVECLD has lots of slack)                    |
+| §6.20 Opt 23 (C-buffer alignment)    | −96 mixed ops  | ~−40-60 cyc (some on RVECLD, some on RVECSU)         |
+
+**4. RVECSU is the only true single-issue pipe** in this trace's
+sample. The 4 RVECSU events (SMOV / SMOVI for loop-iv setup)
+are all pre-loop, so no single-issue contention in the body.
+
+#### Source confidence
+
+- **Tier A**: the per-pipe `max_simul_issue = 2` for RVECEX/RVECLD/RVECST/MTE2 is
+  empirically observed in the trace JSON.
+- **Tier B**: the claim "the hardware enforces dual-issue" — I'm
+  inferring from observation. It could equally be "the compiler
+  always pairs adjacent ops, and the hardware happens to allow it"
+  vs. "the hardware specifically dual-issues paired adjacent ops".
+  The vendor docs we have don't explicitly state per-pipe issue
+  width.
+- The "2 ops/cyc theoretical max" is therefore an empirical lower
+  bound — the actual ceiling could be higher (e.g. if the hardware
+  is 4-wide but the compiler never generates 4-paired ops).
+
 ## 6. A5 codegen wins — MLIR ops that disappear into hardware modes
 
 `hivmc-a5` exploits two A5 hardware features to eliminate entire MLIR
