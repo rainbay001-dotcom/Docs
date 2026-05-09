@@ -1302,11 +1302,24 @@ Sources, fact-by-fact, in order of authority:
 | SIMT DCache up to 128 KB, 128 B granularity, reuses UB | `atlas_ascendc_10_00065.html`                        | "SIMT支持最大128KB Data Cache … 以128B为粒度" |
 | 4 Warp Schedulers per AIV                            | `atlas_ascendc_10_00065.html`                          | "每个AIV有4个Warp Scheduler"           |
 | SIMT Register File 128 KB total + thread-dep alloc   | `atlas_ascendc_10_00065.html`                          | "总容量为128KB的超大容量寄存器"        |
-| L0A format FRACTAL_NZ (vs FRACTAL_ZZ on 220x)        | `atlas_ascendc_10_00065.html`                          | "L0A format … FRACTAL_NZ"              |
+| L0A format FRACTAL_NZ                                | `atlas_ascendc_10_00065.html`                          | "L0A Buffer的分形改为NZ"               |
+| **L0B format FRACTAL_ZN**                            | `atlas_ascendc_10_00065.html`                          | "L0B Buffer：FRACTAL_ZN"               |
+| **L0C format FRACTAL_NZ**                            | `atlas_ascendc_10_00065.html`                          | "L0C Buffer：FRACTAL_NZ"               |
+| **Storage alignment table (UB/L1 32 B, L0A/L0B 512 B, L0C/Bias/Fixpipe 64 B)** | `atlas_ascendc_10_00065.html`         | "各存储单元的最小访问粒度（对齐要求）" |
 | Data-path additions / removals (L0C↔UB, UB↔L1, …)    | `atlas_ascendc_10_00065.html`                          | "增加L0C Buffer -> Unified Buffer …"  |
 | Loop mode Normal + Compact                            | `atlas_ascendc_10_00065.html`                          | "Loop模式 … Normal模式 … Compact模式"  |
 | Fixpipe enhancements (NZ2DN, channel merge/split)    | `atlas_ascendc_10_00065.html`                          | "支持Fixpipe硬件化加速"                |
-| CUBE tile size (16×16 FP16, 16×32 INT8)              | `atlas_ascendc_10_00065.html` + `microarchitecture.md` | (in figures on the page)               |
+| **Vector unit data types (U8/U16/U32/S8/S16/S32/BF16/FP16/FP32)** | `atlas_ascendc_10_00065.html`             | "Vector计算单元支持U8、U16、U32、S8、S16、S32、BF16、FP16、FP32" |
+| **Scalar unit data types (U16/S16/U32/S32/U64/S64/FP64)** | `atlas_ascendc_10_00065.html`                     | "Scalar单元支持U16/S16/U32/S32/U64/S64/FP64" |
+| **Aux Scalar / Scalar split for SIMD_VF**            | `atlas_ascendc_10_00065.html`                          | "Aux Scalar计算单元单独处理SIMD_VF函数内的Scalar计算" |
+| **Cube unit dtype list (FP32/FP16/BF16/HiF8/FP8_E4M3/U8/S8)** | `atlas_ascendc_10_00065.html`                  | "Cube计算单元支持FP32/FP16/BF16/HiF8/FP8_E4M3/U8/S8" |
+| **Cube matmul fractal shapes (FP16: 16×16×16×16; INT8: 16×32×32×16)** | `atlas_ascendc_10_00065.html`         | "一拍完成一个float16数据类型的16x16与16x16大小的矩阵乘" |
+| **RegTensor 256 B / MaskReg VL/8 / UnalignReg{Load,Store}** | `atlas_ascendc_10_00065.html`                  | "Register寄存器" section               |
+| **2R+0W or 1R+1W per bank group per cycle (corrected)** | `atlas_ascendc_10_00065.html`                       | "每个bank group有两组读口和写口，最多同时允许2读0写或者1读1写" |
+| **Cross-core sync 4 modes (0/1/2/4) + flagId 0-10**  | `atlas_ascendc_10_00065.html`                          | "核间同步" section                     |
+| **Same-core sync: SetFlag/WaitFlag pairing, EventID 6/7 reserved** | `atlas_ascendc_10_00065.html`             | "同步控制流程" section                 |
+| **AIC/AIV core ratio of 1:2 (verified)**             | `atlas_ascendc_10_00065.html`                          | (above)                                |
+| CUBE tile size — already covered by full Cube spec above | (consolidated)                                     | —                                      |
 | **UB structure: 256 KB / 16 banks / 8 bank groups**  | **`atlas_ascendc_best_practices_10_00021.html`**       | "总大小为256K，划分为16个bank … 8个bank group" |
 | **Per-cycle UB rule: 1R or 1W per bank group**       | **`atlas_ascendc_best_practices_10_00021.html`**       | "每拍 … 从每个bank group中读取或写入一行数据" |
 | **UB bank-conflict rules (3 types)**                 | **`atlas_ascendc_best_practices_10_00021.html`**       | "读写冲突 … 写写冲突 … 读读冲突"       |
@@ -1385,21 +1398,33 @@ Translation:
 > UB total: **256 KB** = 16 banks × 512 rows × 32 B/row, organized
 > as **8 bank groups × 2 banks each**.
 
-Per-cycle access rule, **verbatim**:
+Per-cycle access — **verbatim from `atlas_ascendc_10_00065`**
+(re-verified live 2026-05-09; supersedes the earlier paraphrase
+which conflated per-group and per-UB capability):
 
-> 具体来说，Vector计算单元每拍（一个指令周期）能够从每个bank
-> group中读取或写入一行数据。
+> 在NPU架构版本220x中，同一个bank group只有一组读口和写口，
+> 最多一拍完成一读或者一写，在本NPU架构版本中每个bank group
+> 有两组读口和写口，最多同时允许2读0写或者1读1写。
 
 Translation:
 
-> Per cycle (one instruction cycle), the Vector compute unit can
-> read OR write **one row of data per bank group**.
+> In NPU 220x, each bank group has only **one read port and one
+> write port** — at most one R or one W per cycle.
+> In this (351x) NPU architecture, each bank group has **two sets
+> of read ports and write ports** — at most simultaneously allows
+> **2R+0W or 1R+1W**.
 
-So one row = 32 B, and 8 groups × 1 row/group = **256 B/cycle
-aggregate** UB↔vreg bandwidth — matching the documented vector
-throughput.
+So **per bank group**, per cycle:
+- 2 reads on different banks: ✓ OK
+- 1 read + 1 write on different banks: ✓ OK
+- 1 write alone: ✓ OK
 
-Conflict rules, **verbatim**:
+And **per UB** (8 groups in parallel): up to 8 × 32 B = **256 B/cycle**
+aggregate at full read width (matching documented Vector unit
+throughput).
+
+Conflict rules from `atlas_ascendc_best_practices_10_00021`,
+**verbatim**:
 
 > - 读写冲突：读操作和写操作同时尝试访问同一个bank。
 > - 写写冲突：多个写操作同时尝试访问同一个bank group。
@@ -1414,33 +1439,36 @@ Translation:
 | Write-write     | Multiple writes on the **same bank group**                              |
 | Read-read       | Two reads on the **same bank**, or **3+ reads** on the same bank group  |
 
-So within one bank group, per cycle:
+#### Storage-unit alignment requirements (verified verbatim)
 
-- 2 reads on **different** banks of the group: ✓ OK
-- 1 read + 1 write on different banks: ✓ OK
-- 1 write alone: ✓ OK
-- Same-bank R+W, 2 W on same group, or 3+ R on same group: ✗ serializes
+> Source: `atlas_ascendc_10_00065` ("各存储单元的最小访问粒度（对齐要求）"). Tier A.
 
-#### Earlier "2R + 0W or 1R + 1W per cycle" framing — clarification
+| Core | Storage Unit       | Alignment |
+|------|--------------------|-----------|
+| AIV  | Unified Buffer     | **32 B**  |
+| AIC  | L1 Buffer          | **32 B**  |
+| AIC  | L0A Buffer         | **512 B** |
+| AIC  | L0B Buffer         | **512 B** |
+| AIC  | L0C Buffer         | **64 B**  |
+| AIC  | BiasTable Buffer   | **64 B**  |
+| AIC  | Fixpipe Buffer     | **64 B**  |
 
-My earlier framing of A5's UB as "2R + 0W or 1R + 1W per cycle"
-was a **per-bank-group** rule, not a per-UB-total cap. Per the
-verbatim source above:
+#### Recommended fractal formats per buffer (verified verbatim)
 
-- **Per bank group, per cycle**: ≤ 2 R (different banks) or 1 R + 1
-  W (different banks) or 1 W alone
-- **Per UB, per cycle (8 groups in parallel)**: aggregate up to
-  256 B/cycle, distributed across the 8 groups subject to the
-  per-group constraints
+> Source: `atlas_ascendc_10_00065` ("各存储单元推荐使用的数据排布格式"). Tier A.
 
-The **256 B/cycle aggregate matches the documented Vector unit
-throughput** — UB and Vector are bandwidth-balanced.
+| Buffer   | Recommended format | Notes                                                |
+|----------|--------------------|------------------------------------------------------|
+| **L0A**  | **FRACTAL_NZ**     | "由于硬件结构变更，本架构下L0A Buffer的分形改为NZ"   |
+| **L0B**  | **FRACTAL_ZN**     | (different from L0A; the asymmetry is part of the architecture) |
+| **L0C**  | **FRACTAL_NZ**     | optimized for matmul                                 |
+| L1       | FRACTAL_NZ recommended | "数据搬运到L0A/L0B Buffer（需分别转换为ZN格式）时，可降低格式转换开销" |
+| UB       | (no format requirement) | "Unified Buffer对数据格式没有要求"               |
 
-Compared to A2/A3 (220x): I'd previously written A2/A3 as
-"1R+1W per cycle". The current 220x conflict-avoidance page is at
-`atlas_ascendc_best_practices_10_00020.html` and would have its
-own per-group rules; comparison details still need re-verification
-against today's 220x doc page (Tier-B until rechecked).
+Note: I previously documented "L0A FRACTAL_NZ" alone; **L0B = FRACTAL_ZN**
+is the additional fact (asymmetric L0A vs L0B fractal). The
+recommendation that L1 be NZ to minimize NZ→ZN conversion cost when
+shipping to L0A/L0B is also new.
 
 #### Mask-kernel-relevant takeaway
 
@@ -1494,19 +1522,109 @@ each run an independent `mask_kernel` instance — but a single
 invocation runs on **just one AIV**. Multi-core scaling is
 launcher-level (`tl.program_id(...)`), not within mask_kernel itself.
 
-#### Cube unit (irrelevant to mask_kernel, included for completeness)
+#### Cube unit (idle in mask_kernel; verified verbatim)
 
-The AIC's CUBE unit does GEMM-class workloads at high MAC throughput:
+> Source: `atlas_ascendc_10_00065` "Cube计算单元" section. Tier A.
 
-| Dtype | M × K × N | MACs/cycle |
-|-------|-----------|-----------:|
-| FP16  | 16 × 16 × 16 | **4,096** |
-| INT8  | 16 × 32 × 16 | **8,192** |
-| INT4  | 16 × 64 × 16 | 16,384 (removed on A5) |
+Verbatim:
+
+> Cube计算单元支持FP32/FP16/BF16/HiF8/FP8_E4M3/U8/S8。 一拍完成
+> 一个float16数据类型的16x16与16x16大小的矩阵乘；如果是int8_t
+> 数据类型，则一拍完成16*32与32*16大小的矩阵乘。
+
+Translation:
+
+> Cube unit supports **FP32 / FP16 / BF16 / HiF8 / FP8_E4M3 / U8 / S8**.
+> Per cycle: one **16×16 × 16×16** FP16 matmul, OR one **16×32 × 32×16** INT8 matmul.
+
+| Dtype | A × B fractal shapes | MACs/cycle |
+|-------|---------------------|-----------:|
+| FP16  | 16×16 × 16×16        | **4,096** |
+| INT8  | 16×32 × 32×16        | **8,192** |
+| INT4  | (removed on A5 — must cast to INT8 first) | n/a |
+
+L0A holds the left-side matrix, L0B the right-side, L0C the result
++ accumulation buffer.
 
 Mask kernel runs on AIV only; the AIC's CUBE unit is idle. Mask is
 typically consumed by a downstream FlashAttention CUBE kernel —
 that's where the CUBE throughput matters.
+
+#### Vector / Scalar / Aux Scalar — supported data types (verified verbatim)
+
+> Source: `atlas_ascendc_10_00065` "Vector计算单元" / "Scalar单元" sections. Tier A.
+
+**Vector unit** (RVECEX pipe):
+
+> Vector计算单元支持U8、U16、U32、S8、S16、S32、BF16、FP16、FP32数据类型。
+> Vector计算单元每拍可处理256字节的数据。
+> Vector计算单元处理的数据来源来自于Register。
+
+Translation: Vector unit supports **U8/U16/U32/S8/S16/S32/BF16/FP16/FP32**.
+Throughput: **256 B/cycle** from RegTensor (matches §5.3 vreg width).
+
+**Scalar unit** (and Aux Scalar inside SIMD_VF functions):
+
+> Scalar单元支持U16/S16/U32/S32/U64/S64/FP64数据类型。
+> 在Regbase架构中，Aux Scalar计算单元单独处理SIMD_VF函数内的Scalar计算，
+> Scalar计算单元处理SIMD_VF函数外的Scalar计算。
+
+Translation: Scalar unit supports **U16/S16/U32/S32/U64/S64/FP64**.
+Aux Scalar handles intra-`SIMD_VF` scalar work; main Scalar handles
+extra-`SIMD_VF` work. (This split is a 351x-only thing; 220x has a
+single Scalar unit.)
+
+#### Vector register types (verified verbatim)
+
+> Source: `atlas_ascendc_10_00065` "Register寄存器" section. Tier A.
+
+| Register type            | Width                 | Role                                                   |
+|--------------------------|-----------------------|--------------------------------------------------------|
+| **RegTensor**            | **VL = 256 B**        | Vector compute operand                                 |
+| **MaskReg**              | **VL/8 = 32 B**       | Element-participation mask                             |
+| **UnalignRegForLoad**    | (buffer)              | Buffer for unaligned UB→RegTensor reads; needs `LoadUnAlignPre` initialization, then `LoadUnAlign` |
+| **UnalignRegForStore**   | (buffer)              | Buffer for unaligned RegTensor→UB writes; uses `StoreUnAlign` API |
+
+The mask kernel's `RV_VLDI` ops in §5.4's trace correspond to
+RegTensor loads; `MaskReg` corresponds to the predicate-set
+operations (`RV_PSET`).
+
+#### Cross-core synchronization — 4 modes (verified verbatim)
+
+> Source: `atlas_ascendc_10_00065` "核间同步" section. Tier A.
+
+A5 supports four cross-core sync modes via `CrossCoreSetFlag` /
+`CrossCoreWaitFlag` API pairs:
+
+| Mode | Scope                                  | Behavior                                                    |
+|-----:|----------------------------------------|-------------------------------------------------------------|
+| **0**| **AIC↔AIC** *or* **AIV↔AIV** (all-cores barrier) | All AICs (or all AIVs) must reach `CrossCoreSetFlag` before any continues past `CrossCoreWaitFlag` |
+| **1**| **AIV↔AIV within one AI Core** (the 2 AIVs in the same cluster) | Both AIVs must `CrossCoreSetFlag` before either's `CrossCoreWaitFlag` releases |
+| **2**| **AIC↔AIV (1:2)** within one cluster | AIC's `CrossCoreSetFlag` releases both AIVs' `CrossCoreWaitFlag`; both AIVs must `Set` before AIC's `Wait` releases |
+| **4**| **AIC↔AIV (1:1)** within one cluster | AIV0 or AIV1 individually paired with AIC; finer granularity than mode 2 |
+
+Verbatim flagId range:
+
+> flagId取值范围是0-10。
+
+Translation: **`flagId` valid range = 0-10**. Each flagId has its
+own counter (initial value 0); `CrossCoreSetFlag` increments,
+`CrossCoreWaitFlag` decrements (blocks if 0).
+
+#### Same-core synchronization — EventID rules (verified verbatim)
+
+> Source: `atlas_ascendc_10_00065` "同步控制流程" section. Tier A.
+
+For intra-core sync (e.g., MTE2 → Vector → MTE3 ordering):
+
+- `SetFlag<HardEvent::X_Y>(eventId)` and `WaitFlag<HardEvent::X_Y>(eventId)`
+  must **be paired with identical template params and eventId** —
+  e.g. `SetFlag<HardEvent::S_MTE3>(1)` and `SetFlag<HardEvent::MTE3_MTE1>(1)`
+  are *different* events even though both use `(1)`.
+- Use `AllocEventID` / `FetchEventID` / `ReleaseEventID` API to
+  manage IDs (manual hard-coding risks exhaustion).
+- Don't set the same EventID consecutively — causes state confusion.
+- **EventID 6 and 7 are reserved** — don't manually use them.
 
 #### Putting it together — per-kernel utilization numbers
 
