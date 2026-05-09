@@ -1348,6 +1348,27 @@ If a number in §5.3 doesn't appear in this fact-by-fact table, it
 is either a derived calculation (e.g. per-row cost = total-cycles /
 iter-count) or a Tier-B inference flagged as such inline.
 
+#### A5 hardware architecture diagram (vendor-published)
+
+![A5 hardware architecture (atlas_ascendc_10_00065)](figures/atlas_ascendc_10_00065/01_hardware_architecture.png)
+
+Source: hiascend.com `atlas_ascendc_10_00065` opening figure. The
+full set of 15 architecture / dataflow / sync diagrams from the same
+page is at `figures/atlas_ascendc_10_00065/` with
+`MANIFEST.md` documenting each. Highlights relevant to mask_kernel:
+
+- **AIC + AIV split** with their separate Scalar / DCache / ICache;
+  SSBuffer between them (replacing GM staging on 220x).
+- **AIV side**: SIMT (Warp Scheduler + SIMT DCache + SIMT Register
+  File) and SIMD (Vector Register File + Aux Scalar) paths into the
+  Vector unit.
+- **MTE pipes**: MTE1 (L1↔L0A/L0B/BT), MTE2 (GM→{L1, L0A/L0B, UB}),
+  MTE3 (UB→GM), Fixpipe (L0C→GM/L1).
+- **AIC instruction queues**: Cube / FixPipe / MTE1 / MTE2.
+- **AIV instruction queues**: MTE2 / MTE3 / SIMD VF / SIMT VF.
+- **ND-DMA Cache** in front of UB on the AIV side for non-aligned
+  GM accesses.
+
 #### A5 AIV core — five independent pipes, each 1 op/cyc
 
 | Pipe        | Functional unit                | Theoretical issue rate | Used in our kernel (per iter) | Utilization |
