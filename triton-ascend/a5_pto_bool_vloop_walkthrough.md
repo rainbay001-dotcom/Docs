@@ -3608,6 +3608,23 @@ separate queues. But across **back-to-back launches**, the next
 launch's MTE2 prefetch can overlap with the current launch's
 SIMD-VF compute. The current launcher doesn't pipeline this.
 
+#### Three granularities of overlap — and what is/isn't already done
+
+The 4-queue architecture enables overlap at three different scales.
+It's important to be clear which we already have and which Opt 21
+adds:
+
+| Granularity | Window | Latency hidden | Already done? |
+|---|---|---|---|
+| **Intra-iter (within one VLOOP body)** | ~40 cyc per iter | Pass B's RVECLD loads hidden under Pass A's RVECEX compute — exactly what `assembler.as`'s **unroll-by-2 over key blocks** (§3.2.1) achieves | **✓ already done** in `assembler.as` via the two-pass body |
+| **Intra-launch (across iters within one VLOOP)** | ~1,400 cyc total VLOOP body | Iter N+1's RVECLD loads + RVECEX compute overlap with iter N's RVECST + RVECEX work; camodel §5.4 shows ~20 ops in flight from this | **✓ already done** by the queue-level pipelining (visible in trace) |
+| **Cross-launch (between separate kernel invocations)** | Across the full launch (~2,200 cyc each) | Launch N+1's pre-loop MTE2 prefetch (~700 cyc) hidden under launch N's VLOOP compute (~1,400 cyc) | **✗ — what Opt 21 adds** |
+
+So `assembler.as`'s two-pass body is **a finer-grained version** of
+the same 4-queue mechanism Opt 21 targets — it's already exploiting
+intra-iter overlap. Opt 21 adds the **separate, complementary**
+cross-launch prefetch capability.
+
 #### Opt 21 — Pipeline launches via cross-queue prefetch
 
 ```
