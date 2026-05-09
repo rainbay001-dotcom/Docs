@@ -1854,7 +1854,8 @@ from removing RVECEX ops are **less than 1:1 with op count**. A
 saved op only saves the cycles by which it would have extended the
 end-of-pipeline drain.
 
-**Adjusted savings estimates** (down-weighted by pipeline overlap):
+**Adjusted savings estimates** (initial, derived from sum-of-`dur`
+parallelism factor):
 
 | Optimization                    | Op count saved | Cycle saving (worst case) | Cycle saving (best case) |
 |---------------------------------|---------------:|--------------------------:|-------------------------:|
@@ -1866,6 +1867,12 @@ The saved-op-to-saved-cycle conversion is somewhere between 1:1
 (if the saved op was on the critical path) and ~1:0.2 (if it was
 hidden by pipeline overlap). Refining this would require a
 counterfactual camodel run with the optimization actually applied.
+
+> **Updated in §5.5 below** with empirically-derived per-pipe
+> issue-rate ratios. The 1:0.2-to-1:1 range above is correct in
+> spirit but §5.5 nails it down: an RVECEX op saved on the critical
+> path saves ≈ 0.78 cyc (= 1 / 1.28 ops/cyc actual issue rate).
+> The §5.5 table is the authoritative version.
 
 #### Trace data location
 
@@ -1940,7 +1947,7 @@ optimizations is **less optimistic** than I'd written:
 | §6.6 Opt 2 (C in P-reg)              | −65 RVECEX ops | ~−51 cyc (was −65 worst-case in §5.4)                 |
 | §6.11 F-hoist                        | −64 RVECEX ops | ~−50 cyc (was −64 worst-case)                         |
 | §6.7 Opt 3 (brc_b32 q_offset)        | −16 RVECLD ops | ~−1 cyc (RVECLD has lots of slack)                    |
-| §6.20 Opt 23 (C-buffer alignment)    | −96 mixed ops  | ~−40-60 cyc (some on RVECLD, some on RVECSU)         |
+| §6.20 Opt 23 (C-buffer alignment)    | ~−160 mixed ops (per §6.20) | ~−40-60 cyc (saved ops are split across RVECLD + RVECSU; both have lots of slack) |
 
 **4. RVECSU is the only true single-issue pipe** in this trace's
 sample. The 4 RVECSU events (SMOV / SMOVI for loop-iv setup)
