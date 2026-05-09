@@ -3460,9 +3460,23 @@ mask_kernel (AIV) → VSTI → UB → SSBuffer → AIC consumer's L1/L0C
 | Per-launch latency penalty        | ~100s of cycles for GM load/store | ~10s of cycles  |
 | Total saving for N tiles per launch | N × 2 KB GM bandwidth            | —                 |
 
+> **Correction (2026-05-09)**: an earlier draft of this section
+> said "SSBuffer carries the mask data." Inspection of the
+> hardware-architecture diagram
+> (`figures/atlas_ascendc_10_00065/01_hardware_architecture.png`)
+> shows **SSBuffer is between AIC's Scalar unit and AIV's Scalar
+> unit — it is a *scalar* synchronization channel, not a data
+> path**. The actual fast data path on 351x is the **UB ↔ L1
+> direct datapath**, a separate 351x feature. The mask bytes flow
+> UB → L1 directly via that hardware path; SSBuffer carries only
+> the cross-core sync flag (`CrossCoreSetFlag` / `CrossCoreWaitFlag`).
+> The savings claim above is still correct — just the mechanism is
+> UB↔L1 datapath plus SSBuffer-mediated sync, not SSBuffer alone.
+
 Tier B (launcher-level, requires the consumer kernel to also be
-configured to accept SSBuffer input, not GM input). Doesn't change
-mask_kernel itself but reshapes the AIV/AIC interface.
+configured to accept the L1-resident mask via the new UB↔L1 path,
+with SSBuffer-mediated sync). Doesn't change mask_kernel itself
+but reshapes the AIV/AIC interface.
 
 ### 6.16 Cast-variant-specific optimizations (Opts 18–20)
 
@@ -3572,6 +3586,204 @@ Net achievable: **~6× cycle reduction per kernel** (per-row 14.4 →
 ~8, plus 4× SIMT scaling) on a single AIV core, with additional
 launcher-level scaling across the 36 AIV cores per die for full-die
 **~144× concurrent mask tiles** vs. current single-AIV invocation.
+
+### 6.18 Cross-launch prefetch via 4 AIV instruction queues (Opt 21)
+
+Source: hardware-architecture diagram
+(`figures/atlas_ascendc_10_00065/01_hardware_architecture.png`).
+
+The diagram shows AIV has **four independent instruction queues**:
+
+```
+AIV instruction queues:
+  ├── MTE2 指令序列      (GM → UB DMA loads)
+  ├── MTE3 指令序列      (UB → GM DMA stores)
+  ├── SIMD VF 指令序列    (vector function compute, what mask_kernel uses)
+  └── SIMT VF 指令序列    (SIMT path, idle in mask_kernel)
+```
+
+Within a single mask_kernel invocation, the camodel trace (§5.4)
+already shows MTE2/MTE3/SIMD-VF events overlapping — they're on
+separate queues. But across **back-to-back launches**, the next
+launch's MTE2 prefetch can overlap with the current launch's
+SIMD-VF compute. The current launcher doesn't pipeline this.
+
+#### Opt 21 — Pipeline launches via cross-queue prefetch
+
+```
+Without prefetch (current):
+  launch N:    MTE2 load (~700 cyc) → SIMD-VF compute (1431 cyc) → MTE3 store
+                                     ┃
+  launch N+1:                        ┃          MTE2 load (~700 cyc) → SIMD-VF → MTE3
+                                     ▼
+                              dead time waiting
+
+With cross-launch prefetch (Opt 21):
+  launch N:    MTE2 load → SIMD-VF compute (1431 cyc) → MTE3 store
+                              │
+  launch N+1:                  └─ MTE2 load (overlapped with launch N compute) → SIMD-VF → MTE3
+                                  ─────────────────────────────────────
+                                  prefetch hidden under previous compute
+```
+
+**Saving**: hides the ~700-cycle MTE2 prefetch latency under the
+previous launch's 1,431-cycle compute. Per back-to-back launch
+pair: ~700 cyc saved. Tier B (launcher-level — requires
+double-buffered UB allocation and SSBuffer-mediated sync between
+adjacent launches' MTE2 and SIMD-VF queues).
+
+This optimization is structurally what the 4-queue AIV architecture
+was designed to enable. The mask_kernel body itself doesn't
+change — only the launcher's tile-scheduling / sync code does.
+
+### 6.19 ND-DMA Cache alignment for operand pointers (Opt 22)
+
+Source: hardware-architecture diagram. The AIV side has an
+**ND-DMA Cache** between L2 Cache and Unified Buffer, in front of
+MTE2:
+
+```
+GM ─→ L2 Cache ─→ ND-DMA Cache ─→ MTE2 ─→ Unified Buffer
+                  ─────────────
+                  (non-aligned/strided DMA cache)
+```
+
+ND-DMA Cache accelerates non-aligned and strided GM accesses. If
+operand GM pointers (`q_attn_ptr`, `k_attn_ptr`, `q_offset_ptr`,
+`k_offset_ptr` — args 2-5 of `mask_kernel`) aren't aligned to the
+ND-DMA cacheline, MTE2 takes additional misses on operand loads.
+
+#### Opt 22 — Align operand pointers to 256 B boundaries
+
+| Cost                            | Misaligned operands | Aligned operands |
+|--------------------------------|---------------------|------------------|
+| MTE2 latency for one 32-elem operand | up to 2× cacheline misses (cross-line splits) | 1 cacheline access |
+| Per-launch overhead            | up to ~tens of cycles per misaligned operand | minimal |
+
+**Saving**: ~10s of cycles per misaligned operand × 4 operands per
+launch ≈ ~50-100 cycles per launch in the worst case.
+
+Tier B — Triton's tensor allocator usually 256 B-aligns large
+tensors, but slices of larger tensors may land at non-256 B
+offsets. Worth verifying with a debugger or by inspecting the
+launcher's pointer arithmetic.
+
+### 6.20 C-buffer 32 B alignment to replace VLDAS+VLDUI with VLDI (Opt 23)
+
+The current `assembler.as` body uses the unaligned-load mechanism
+to read C bytes from UB:
+
+```asm
+VLDAS ULD0, [S12]              ; UnalignRegForLoad context setup
+SMOV.b32 S70, S12              ; offset register snapshot
+…
+VLDUI V6, ULD0, [S70], #0      ; UNALIGNED load via UnalignRegForLoad
+MOVVP.b32 P3, V6, #0           ; vreg → predicate
+```
+
+The `UnalignRegForLoad` register type exists specifically for
+"connection-non-aligned-address" UB↔RegTensor reads (per §5.3's
+verbatim register-types subsection). The kernel uses this path
+because the C-bytes buffer was allocated at an arbitrary offset
+within UB, possibly not on a 32 B boundary.
+
+**Per-iter cost of the unaligned-load path**:
+
+```
+VLDAS (set up ULD0)        ~1-2 cyc (RVECLD or RVECSU)
+SMOV S70, S12              ~1-2 cyc (RVECSU)
+VLDUI (unaligned load)     ~10-12 cyc (RVECLD, slower than VLDI)
+MOVVP (vreg → predicate)   ~7 cyc (RVECEX)
+─────────────────────────
+Total: ~20 cyc per iter
+```
+
+If the C-bytes buffer were aligned at a 32 B boundary, the body
+could use the simple aligned-load path:
+
+```asm
+VLDI V6, [S_C], #0, #0, #0    ; ALIGNED load (no ULD0 needed)
+MOVVP.b32 P3, V6, #0          ; vreg → predicate
+```
+
+#### Opt 23 — Align C-bytes buffer to 32 B in UB
+
+| Cost                          | Current (unaligned via VLDAS+VLDUI) | Aligned (VLDI direct) | Saving      |
+|------------------------------|-------------------------------------|-----------------------|-------------|
+| Pre-loop ops (VLDAS setup)   | 1                                   | 0                     | −1          |
+| Per-iter VLDAS / SMOV        | 1 + 1 = 2                            | 0                     | −2 per iter |
+| Per-iter VLDUI               | 1 (~10-12 cyc)                       | 1 (VLDI, ~10 cyc)     | (small per-op) |
+| Per-iter MOVVP               | 1                                    | 1                     | unchanged   |
+
+**Per-iter saving**: −2 ops (VLDAS + SMOV eliminated). Across both
+passes in `assembler.as`'s 35-insn body: −4 ops/iter.
+At T = 32 iters: **−128 ops total**.
+
+For the unrolled `assembler.as` two-pass body: also eliminates the
+mid-iter `SMOV S70, S18` between passes (since each pass now uses
+its own aligned address directly), giving an additional −1 op/iter
+× 32 iters = **−32 ops**.
+
+**Combined**: roughly **−160 ops per kernel** if the C-buffer is
+32 B-aligned at allocation time. Tier-A — the only requirement is
+that the launcher allocates the C-bytes buffer at a 32 B-aligned UB
+offset, which costs nothing.
+
+#### Why today's CANN-9.0.0 build avoids this
+
+Today's CANN-9.0.0 build (camodel-traced, single-pass) doesn't have
+this problem because it uses **option α** (recompute C inline via
+VCMP) rather than spilling to UB — there's no buffer to misalign.
+So this optimization specifically targets `assembler.as`'s
+spill-and-reload approach (option γ in §6.6).
+
+If `assembler.as`'s lowering is kept (option γ), Opt 23 should be
+applied. If switched to option β (C in P-reg, §6.6 Opt 2), Opts 23
+and §6.6 Opt 2 are mutually exclusive — option β is strictly
+better and supersedes Opt 23.
+
+### 6.21 Updated final tally — now 23 optimizations
+
+| #   | Optimization                                          | Savings (ops)         | Tier | Source                       |
+|----:|-------------------------------------------------------|-----------------------|:---:|------------------------------|
+| 1   | §6.6 inline-recompute C                               | −34                   | A   | structural                   |
+| **2**| **§6.6 hold C in P-reg**                             | **−65**               | **A** | structural                |
+| 3   | §6.7 brc_b32 stream q_offset                          | −16                   | A   | structural                   |
+| 4   | §6.8 hoist V2 (VLDI + VADDS)                          | −62                   | A   | structural                   |
+| 5   | §6.8 hoist V5 (VLDI)                                  | −31                   | A   | structural                   |
+| 6   | §6.8 hoist VLDAS/SMOV/V0/V1                           | ~−160                 | B   | structural                   |
+| 7   | §6.8 fuse VCMP.LE + VCMP.EQ                           | −32                   | C   | ISA-dependent                |
+| 8   | §6.8 direct i1 → i8 via VSEL.b8                       | −32                   | C   | ISA-dependent                |
+| 9   | §6.8 pack two output rows per iter                    | ~50% loop o-h         | C   | structural                   |
+| 10  | §6.9 cross-tile pack K[0]+K[1] into one VCMP          | ~−96                  | C   | structural                   |
+| 11  | §6.10 share V3 across passes                          | −48                   | A   | structural                   |
+| 12  | §6.11 hoist F = q_offset == k_offset                  | −32 to −64            | A   | structural                   |
+| 13  | §6.12 bank-aware UB layout                            | 0–10 cyc/iter         | A   | μarch (`atlas_…_00021`)      |
+| 14  | §6.12 co-locate C-reload + result-VSTI                | 0–5 cyc/iter           | A   | μarch (`atlas_…_00021`)      |
+| 15  | §6.13 single-VCMP via packed V5 (K[A]+K[B])           | −48                   | B   | μarch                        |
+| **16**| **§6.14 SIMT mode (4 warps/AIV)**                    | **4× per-AIV**         | **C** | μarch (`atlas_…_00065`)   |
+| **17**| **§6.15 UB↔L1 direct mask handoff (corrected from SSBuffer)** | **−2 KB GM/tile** | **B** | μarch (`atlas_…_00065`)   |
+| 18  | §6.16 cast: eliminate i1→f16→i32 widenings            | −192                  | A   | predicate-reg arch           |
+| 19  | §6.16 cast: skip i32→f32→i1→f16→i8 chain              | −96                   | A   | predicate-reg arch           |
+| 20  | §6.16 cast: full migration to P-reg algebra           | converges to bool     | A   | structural                   |
+| **21**| **§6.18 cross-launch prefetch via 4 AIV queues**     | **~−700 cyc/launch-pair** | **B** | μarch (4-queue diagram) |
+| 22  | §6.19 ND-DMA Cache alignment of operand pointers     | ~−50-100 cyc/launch    | B   | μarch (ND-DMA Cache diagram) |
+| **23**| **§6.20 C-buffer 32 B alignment (VLDI not VLDAS+VLDUI)** | **−160 ops** for `assembler.as` | **A** | μarch + ISA |
+
+#### Net per-artifact projection (refreshed)
+
+| Artifact                        | Current state              | After Tier-A only (Opts 1-12 + 17 + 23) | After all incl. SIMT |
+|--------------------------------|----------------------------|----------------------------------------:|---------------------:|
+| `assembler.as` (unknown ver.)  | 17.5 ops/row, no timing    | ~7 ops/row (with Opts 1-12 hoist + Opt 23 align) | per-AIV **4× scaling** |
+| CANN-9.0.0 bool `.o`           | 1,431 cyc, 14.4 ops/row    | ~1,000 cyc, ~9 ops/row                  | per-AIV **4× scaling** |
+| Cast variant                   | ~2× of bool (estimated)    | ≈ bool (Opts 18-20 converge)            | per-AIV **4× scaling** |
+
+The big new finding for `assembler.as` specifically: **Opt 23
+(C-buffer alignment) is a pure-launcher fix that eliminates ~160
+ops without any compiler change**. Combined with Opts 4/5/11
+(hoists and V3 sharing), `assembler.as` could close the 22% per-row
+gap with the camodel-traced version even before any of the more
+ambitious μarch optimizations fire.
 
 ## 7. Per-iter hardware-op tally
 
