@@ -27,21 +27,36 @@ the cycle-trace JSON (`../trace_v0/dump2trace_core0.json`):
 
 ## Key findings extracted (also see `a5_aiv_vector_parallelism.html` §7)
 
-- **OoO rename buffer**: 15 entries V + 15 entries P; 5 frees/cyc.
-- **Lane counts (now exact, from sub-pipe labels in dumps)**:
+- **Three OoO structures (not one ROB)**: IDU dispatch buffer (capacity ≥ 6),
+  OOO rename free-list (15 V + 15 P, 5 frees/cyc), per-pipe retirement
+  (no single global structure).
+- **Lane counts** (exact, from sub-pipe labels in `LSU.dump` / `EXU.dump`):
   - RVECEX = **2 lanes** (EXU0 + EXU1, balanced 393 / 396 events)
   - RVECLD = **2 lanes** (LDU0 + LDU1, balanced 34 / 33 events)
-  - RVECST = **1 lane** (STU only — no STU0/STU1 split)
+  - RVECST = **1 lane** (STU only — paired stores serialize through it)
 - **UB read ports**: 2 (`PORT_0`, `PORT_1`) — confirms the dual-issue
   VLDI dataflow from the cycle trace.
-- **Issue queues (lower bounds from peak occupancy)**:
-  - LDQ ≥ 2 entries (peak observed at cycle 1590)
-  - SHQ ≥ 22 entries (peak observed at cycle 1612)
-- **Issue-stage block reasons** (842 events total, 9 distinct):
-  248 SRC_NOT_READY_PREG, 193 SRC_NOT_READY_VREG, 143 DST_PORT_LIMIT,
-  103 EXQ_ISSUED_CNT_LIMIT, 52 VALU_GRP_OUTPUT_ACTIVE_MD_AVL,
-  50 MOV_FU_INPUT_CFLT, 35 SHQ_TO_EXQ0_ISSUE_LIMIT,
-  17 SHQ_TO_EXQ1_ISSUE_LIMIT, 1 SEND_BARRIER.
+- **IDU_BLOCK peak occupancies (authoritative — supersedes earlier
+  RECV/ISSUE-delta-based numbers)**:
+  - LDQ ≥ **22**, STQ stayed at 0, SHQ ≥ **55**
+  - PREG ≥ 30 simultaneously allocated (rename pool exhausted 41 times),
+    VREG ≥ 65 simultaneously allocated
+  - Dispatch buffer fullness peak = **6**
+- **IDU_BLOCK reason taxonomy** (161 events): 85 UOP-Split number reached,
+  31 VEC dispatch number reached, 29 OOO no avail phy preg,
+  12 UOP-Split + OOO no avail phy preg, 4 ASU-related, 1 SEND_BARRIER.
+- **ISU stall reasons** (842 events, 9 distinct): 248 SRC_NOT_READY_PREG,
+  193 SRC_NOT_READY_VREG, 143 DST_PORT_LIMIT, 103 EXQ_ISSUED_CNT_LIMIT,
+  52 VALU_GRP_OUTPUT_ACTIVE_MD_AVL, 50 MOV_FU_INPUT_CFLT,
+  35 SHQ_TO_EXQ0_ISSUE_LIMIT, 17 SHQ_TO_EXQ1_ISSUE_LIMIT,
+  1 SEND_BARRIER. Proves SHQ → EXQ caps at 1 op/cyc per EXQ.
+- **Per-pipe retirement** (RETIRE event count by source):
+  ISU 367 (RVECEX, 100 % in-order), LSU 100 (loads/stores, **76 %
+  in-order — 24 % retire OoO**), scalar_issque 60, mte2_issque 10,
+  mte3_issque 1, vec_issque 1.
+- **Surprise**: LSU retires ≈ 24 % out-of-order. Loads with longer
+  `dur` (UB-bank-conflict victims) finish after their younger
+  partners; physical-register renaming makes this safe to consumers.
 
 ## Reproducing on the cann9-test GCE VM
 
