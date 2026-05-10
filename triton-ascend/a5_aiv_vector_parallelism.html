@@ -905,9 +905,9 @@ behind both. Observed <code>max_simul_issue = 2</code> only places a
 <tr>
   <th>Pipe</th>
   <th class="num">issue_width<br><span class="small">(proven)</span></th>
-  <th class="num">lane_count<br><span class="small">(lower bound)</span></th>
+  <th class="num">lane_count<br><span class="small">(exact, from §7)</span></th>
   <th class="num">stage_count<br><span class="small">(= dur)</span></th>
-  <th class="num">In-flight ceiling<br><span class="small">(if lane = issue)</span></th>
+  <th class="num">In-flight ceiling<br><span class="small">(lane × stages)</span></th>
   <th class="num">Observed peak<br>in flight</th>
   <th>Headroom</th>
 </tr>
@@ -915,8 +915,8 @@ behind both. Observed <code>max_simul_issue = 2</code> only places a
 <tbody>
 <tr style="background:#fff8e1">
   <td><b>RVECEX</b></td>
-  <td class="num">≥ 2</td>
-  <td class="num">≥ 2</td>
+  <td class="num">2</td>
+  <td class="num"><b>2</b> (EXU0+EXU1)</td>
   <td class="num">7–8</td>
   <td class="num">14</td>
   <td class="num"><b>14</b></td>
@@ -924,8 +924,8 @@ behind both. Observed <code>max_simul_issue = 2</code> only places a
 </tr>
 <tr>
   <td><b>RVECLD</b></td>
-  <td class="num">≥ 2</td>
-  <td class="num">≥ 2</td>
+  <td class="num">2</td>
+  <td class="num"><b>2</b> (LDU0+LDU1)</td>
   <td class="num">10–11</td>
   <td class="num">20–22</td>
   <td class="num">6</td>
@@ -933,17 +933,17 @@ behind both. Observed <code>max_simul_issue = 2</code> only places a
 </tr>
 <tr>
   <td><b>RVECST</b></td>
-  <td class="num">≥ 2</td>
-  <td class="num">≥ 2</td>
+  <td class="num">2 (front)</td>
+  <td class="num"><b>1</b> (STU only)</td>
   <td class="num">10–22</td>
-  <td class="num">~ 34</td>
+  <td class="num">~ 17 (1 × 17)</td>
   <td class="num">4</td>
-  <td>~ 8× — very large slack</td>
+  <td>~ 4× — moderate slack</td>
 </tr>
 <tr>
   <td><b>MTE2</b></td>
-  <td class="num">≥ 2</td>
-  <td class="num">≥ 2</td>
+  <td class="num">2</td>
+  <td class="num">unknown (DMA)</td>
   <td class="num">6–441 (variable)</td>
   <td class="num">— (model breaks)</td>
   <td class="num">9</td>
@@ -952,7 +952,7 @@ behind both. Observed <code>max_simul_issue = 2</code> only places a
 <tr>
   <td><b>MTE3</b></td>
   <td class="num">1*</td>
-  <td class="num">≥ 1</td>
+  <td class="num">unknown (DMA)</td>
   <td class="num">314–678</td>
   <td class="num">— (model breaks)</td>
   <td class="num">1</td>
@@ -961,7 +961,7 @@ behind both. Observed <code>max_simul_issue = 2</code> only places a
 <tr>
   <td><b>RVECSU</b></td>
   <td class="num">1*</td>
-  <td class="num">≥ 1</td>
+  <td class="num">unknown</td>
   <td class="num">1–2</td>
   <td class="num">2</td>
   <td class="num">2</td>
@@ -974,28 +974,36 @@ behind both. Observed <code>max_simul_issue = 2</code> only places a
 too few events to demonstrate dual-issue. Could be 2 or higher; we
 just never saw it.</p>
 
-<h3>6.2 What we can and can't say from this trace</h3>
+<p>Lane counts above are now <b>exact</b> rather than lower bounds —
+sourced from the camodel's internal sub-pipe labels
+(<code>EXU0/EXU1</code> in <code>EXU.dump</code>;
+<code>LDU0/LDU1/STU</code> in <code>LSU.dump</code>; see §7 for
+details). The earlier "≥ 2" wording elsewhere on this page reflected
+a less-instrumented analysis pass.</p>
+
+<h3>6.2 What we can and can't say (after §7 internal-dump update)</h3>
 
 <ul>
-<li><b>Can say:</b> RVECEX is at the
-<code>issue × stages</code> ceiling — observed peak 14 = 2 × 7.
-Adding more RVECEX work creates back-pressure, no matter what the
-true lane_count is.</li>
+<li><b>Can say (exact):</b> RVECEX has 2 lanes (EXU0, EXU1), RVECLD
+has 2 lanes (LDU0, LDU1), RVECST has 1 lane (STU). Sourced from
+camodel's internal sub-pipe labels — see §7.</li>
 
-<li><b>Can say:</b> RVECLD and RVECST have huge headroom even at the
-conservative lane=2 model. If lane_count is actually 4 or 8 the
-headroom is even larger, but we can't exploit it without first
-issuing faster — and issue_width = 2 caps that.</li>
+<li><b>Can say:</b> RVECEX at peak in-flight 14 = 2 × 7 is at the
+true <code>lane × stages</code> ceiling. Adding more RVECEX work
+creates back-pressure; no slack on the back end.</li>
 
-<li><b>Can't say:</b> exact lane_count for any pipe. The trace gives
-only a lower bound (≥ 2 for the dual-issue pipes, ≥ 1 for the
-others). The kernel never issues fast enough to expose lanes wider
-than 2.</li>
+<li><b>Can say:</b> RVECLD has 3.7× headroom against the now-firm
+<code>2 × 11 = 22</code> ceiling. RVECST has ~4× headroom against
+the now-firm <code>1 × 17 ≈ 17</code> ceiling (smaller than earlier
+estimate because RVECST is single-lane, not dual).</li>
 
-<li><b>Can't say:</b> whether the 1-cycle stretch on the second
-paired VLDI in §5 (<code>dur = 11</code> vs <code>10</code>) is a
-shared-lane back-end contention or a shared-port effect. Either is
-consistent with what we see.</li>
+<li><b>Can say:</b> the 1-cycle stretch on the second paired VLDI in
+§5 (<code>dur = 11</code> vs <code>10</code>) is consistent with a
+shared UB read port or shared writeback bus, both of which are
+visible per-cycle in <code>LSU.dump</code> if you want to confirm.</li>
+
+<li><b>Still can't say:</b> exact LDQ depth (lower bound 2 from
+peak occupancy in this kernel; true depth could be much higher).</li>
 </ul>
 
 <h3>6.3 Why the DMA pipes (MTE2 / MTE3) don't fit the model</h3>
@@ -1050,155 +1058,214 @@ exact lane count is interesting for completeness; it doesn't change
 any of the §10 optimization rankings.
 </div>
 
-<h2>7. ROB / buffer-depth bounds — what does "ROB" mean on a VLIW vector core?</h2>
+<h2>7. ROB / buffer-depth bounds — direct evidence from camodel internal dumps</h2>
 
-<p>The natural follow-on question is: how big is the reorder buffer
-on each pipe? Or globally? On an out-of-order CPU the ROB sets the
-max window of in-flight instructions; on a VLIW vector core the
-question is more nuanced because there isn't a traditional ROB at
-all — the static schedule emitted by the compiler already locks in
-retirement order. What the AIV does have:</p>
+<div class="callout">
+<b>Major correction (added 2026-05-10).</b> An earlier draft of this
+section concluded "AIV is VLIW + pipelined, no ROB." That was wrong.
+A re-run on a GCE camodel exposed the simulator's internal
+microarchitecture dumps (rename buffer, issue queue, sub-pipes,
+issue-stage block reasons), and the picture is much closer to a
+modern OoO core than to a classic VLIW. Findings below.
+</div>
 
-<ul>
-<li><b>Per-pipe execution buffer</b> = the pipeline itself, depth
-<code>stage_count</code> (per lane).</li>
-<li><b>Per-queue dispatch buffer</b> in front of each of the 4
-instruction queues (MTE2 / MTE3 / SIMD-VF / SIMT-VF). Depth unknown
-from this trace.</li>
-<li><b>Outstanding-burst budget</b> on the MTE2/MTE3 DMA paths.
-Depth unknown from this trace.</li>
-</ul>
+<p>The cycle-trace JSON we'd been working with shows only what
+crosses the issue and completion boundaries (<code>ts</code>,
+<code>ts + dur</code>). Camodel actually emits a much richer set of
+per-cycle internal-state dumps under
+<code>core0.veccore0.rvec.{OOO,IDU,ISU,LSU,EXU,...}.dump</code>.
+Those dumps reveal an OoO renaming / issue-queue / sub-pipe
+microarchitecture that is invisible in the trace JSON. Source files
+are committed at
+<code>figures/mask_kernel_a5_camodel/internal_dumps/a5_internal_dumps.tar.gz</code>
+with a per-file MANIFEST.</p>
 
-<h3>7.1 Per-pipe lower bounds (from this kernel's trace)</h3>
+<h3>7.1 What the internal dumps reveal</h3>
 
 <table>
 <thead>
-<tr>
-  <th>Pipe</th>
-  <th class="num">Peak in-flight<br><span class="small">(lower bound on buffer)</span></th>
-  <th class="num">iw × stages<br><span class="small">ceiling</span></th>
-  <th class="num">Headroom<br><span class="small">left in this kernel</span></th>
-  <th>Notes</th>
-</tr>
+<tr><th>Structure</th><th>Size / count</th><th>Source</th></tr>
 </thead>
 <tbody>
 <tr style="background:#fff8e1">
-  <td><b>RVECEX</b></td>
-  <td class="num"><b>14</b></td>
-  <td class="num">2 × 7 = <b>14</b></td>
-  <td class="num">0</td>
-  <td>★ peak = ceiling exactly. No extra ROB visible.</td>
+  <td colspan="3"><b>Out-of-order rename</b></td>
 </tr>
 <tr>
-  <td><b>RVECLD</b></td>
-  <td class="num">6</td>
-  <td class="num">2 × 10 = 20</td>
-  <td class="num">14</td>
-  <td>Kernel doesn't push it; can't bound buffer above 6.</td>
+  <td><b>V-register rename buffer</b></td>
+  <td class="num"><b>15 entries</b>, 5 frees/cyc</td>
+  <td><code>OOO.dump</code>:
+  <code>[REG_FREE_BUF.RESET], reg type:V, reg_free_buf_size:15, reg_cycle_free_num:5</code></td>
 </tr>
 <tr>
-  <td><b>RVECST</b></td>
-  <td class="num">4</td>
-  <td class="num">2 × 17 = 34</td>
-  <td class="num">30</td>
-  <td>Kernel doesn't push it; can't bound buffer above 4.</td>
+  <td><b>P-register rename buffer</b></td>
+  <td class="num"><b>15 entries</b>, 5 frees/cyc</td>
+  <td><code>OOO.dump</code>:
+  <code>[REG_FREE_BUF.RESET], reg type:P, reg_free_buf_size:15, reg_cycle_free_num:5</code></td>
+</tr>
+
+<tr style="background:#fff8e1">
+  <td colspan="3"><b>Issue queues (lower bounds — kernel never overflowed)</b></td>
 </tr>
 <tr>
-  <td><b>MTE2</b></td>
-  <td class="num">9</td>
-  <td class="num">— (DMA)</td>
-  <td class="num">unknown</td>
-  <td>Likely near the GM-burst-queue cap, but only 10 events
-  total — no firm upper bound.</td>
+  <td><b>LDQ</b> (load queue)</td>
+  <td class="num">≥ 2 entries (peak observed)</td>
+  <td><code>ISU.dump</code> RECV/ISSUE event timestamps; LDQ peak occupancy
+  at cycle 1590</td>
 </tr>
 <tr>
-  <td><b>MTE3</b></td>
-  <td class="num">1</td>
-  <td class="num">— (DMA)</td>
-  <td class="num">unknown</td>
-  <td>Single-issue + only 2 events. No bound.</td>
+  <td><b>SHQ</b> (short queue — non-load ops)</td>
+  <td class="num"><b>≥ 22 entries</b> (peak observed)</td>
+  <td><code>ISU.dump</code>; SHQ peak occupancy at cycle 1612</td>
 </tr>
 <tr>
-  <td><b>RVECSU</b></td>
-  <td class="num">2</td>
-  <td class="num">— (4 ev)</td>
-  <td class="num">unknown</td>
-  <td>Too few events.</td>
+  <td><b>STALL.dump</b></td>
+  <td>empty (only header)</td>
+  <td>No queue-overflow stalls in this kernel run.</td>
+</tr>
+
+<tr style="background:#fff8e1">
+  <td colspan="3"><b>Functional unit lane counts (now exact)</b></td>
+</tr>
+<tr>
+  <td><b>RVECEX lanes</b></td>
+  <td class="num"><b>2</b> (EXU0, EXU1)</td>
+  <td><code>EXU.dump</code> <code>exu_id:0/1</code> — 393 / 396 events,
+  balanced</td>
+</tr>
+<tr>
+  <td><b>RVECLD lanes</b></td>
+  <td class="num"><b>2</b> (LDU0, LDU1)</td>
+  <td><code>LSU.dump</code> <code>Pipe:LDU0/1</code> — 34 / 33 events</td>
+</tr>
+<tr>
+  <td><b>RVECST lanes</b></td>
+  <td class="num"><b>1</b> (STU only)</td>
+  <td><code>LSU.dump</code> shows only <code>STU</code> with no STU0/STU1
+  split — 65 events all on a single store unit. Reconciles with the
+  <code>max_simul_issue=2</code> from the cycle trace by serializing
+  paired stores through the single STU.</td>
+</tr>
+<tr>
+  <td><b>UB read ports</b></td>
+  <td class="num"><b>2</b> (PORT_0, PORT_1)</td>
+  <td><code>LSU.dump</code> <code>[SEND_UB_RD.PORT_0/1]</code> — confirms
+  the dual-issue VLDI dataflow from §5</td>
 </tr>
 </tbody>
 </table>
 
-<p><b>Global peak in-flight across all pipes simultaneously:
-23 ops at cycle 1641.</b> That's the lower bound on the AIV's total
-instruction window for this kernel.</p>
+<h3>7.2 Issue-stage stalls actually do happen — just not from queue overflow</h3>
 
-<h3>7.2 The smoking gun on RVECEX</h3>
+<p>The cycle trace gave the impression that <code>mask_kernel</code> ran
+without issue stalls. The internal dumps tell a different story: the
+issue stage blocked <b>842 times</b> across the run, with 9 distinct
+reasons. These aren't queue-full stalls — they're data hazards and
+per-cycle issue caps:</p>
 
-<p>RVECEX peak in-flight = <b>14</b>, which exactly equals the
-<code>issue_width × stage_count = 2 × 7</code> ceiling. The kernel
-visibly back-pressures RVECEX (utilization 64 %, peak in-flight at
-the ceiling), and yet in-flight never exceeds 14. <b>If there were a
-separate ROB or reservation station feeding RVECEX, in-flight would
-climb above 14</b> — because a ROB lets issued-but-not-completed ops
-accumulate beyond the pipeline depth. We don't see that.</p>
+<table>
+<thead>
+<tr><th>Reason</th><th class="num">Count</th><th>What it means</th></tr>
+</thead>
+<tbody>
+<tr><td><code>SRC_NOT_READY_PREG</code></td><td class="num">248</td><td>Predicate operand not yet produced (data hazard on a P-reg)</td></tr>
+<tr><td><code>SRC_NOT_READY_VREG</code></td><td class="num">193</td><td>Vector operand not yet produced (data hazard on a V-reg)</td></tr>
+<tr><td><code>DST_PORT_LIMIT</code></td><td class="num">143</td><td>Destination write-port saturation (vreg / preg writeback bus)</td></tr>
+<tr><td><code>EXQ_ISSUED_CNT_LIMIT</code></td><td class="num">103</td><td>Per-cycle issue-count cap on an EXQ (execution queue)</td></tr>
+<tr><td><code>VALU_GRP_OUTPUT_ACTIVE_MD_AVL</code></td><td class="num">52</td><td>Vector-ALU group output saturation</td></tr>
+<tr><td><code>MOV_FU_INPUT_CFLT</code></td><td class="num">50</td><td>Move FU input port conflict</td></tr>
+<tr><td><code>SHQ_TO_EXQ0_ISSUE_LIMIT</code></td><td class="num">35</td><td>Per-cycle SHQ → EXQ0 issue cap (1 op/cyc to EXQ0)</td></tr>
+<tr><td><code>SHQ_TO_EXQ1_ISSUE_LIMIT</code></td><td class="num">17</td><td>Per-cycle SHQ → EXQ1 issue cap (1 op/cyc to EXQ1)</td></tr>
+<tr><td><code>SEND_BARRIER</code></td><td class="num">1</td><td>Explicit barrier in the kernel (probably the loop-end MTE3 fence)</td></tr>
+</tbody>
+</table>
 
-<div class="callout callout-info">
-<b>Conclusion for RVECEX.</b> The "ROB-equivalent" is the pipeline
-depth itself. No extra reorder window beyond
-<code>issue × stages</code>. Consistent with VLIW + in-order pipe:
-ops issue in program order from the SIMD-VF queue, dispatch directly
-into the pipe, and march through stages.
-</div>
+<p>The presence of <code>SHQ_TO_EXQ0/1_ISSUE_LIMIT</code> directly proves
+the SHQ-to-EXQ dispatch is capped at <b>1 op per cycle per EXQ</b>
+(otherwise the BLOCK wouldn't trigger). EXQ0 + EXQ1 → at most 2
+SHQ ops can issue to RVECEX in a cycle, matching the observed
+<code>max_simul_issue=2</code> at the front of the pipe.</p>
 
-<h3>7.3 What this kernel can't tell us</h3>
+<h3>7.3 The corrected microarchitecture model</h3>
+
+<pre>
+                       ┌─ V-rename buffer (15 entries, 5 frees/cyc) ─┐
+front-end SIMD-VF queue          ↓
+   |                  ┌─ P-rename buffer (15 entries, 5 frees/cyc) ─┐
+   |   IDU →  rename  → split into LDQ / SHQ → 2 EXQs → execution
+   |          (OoO)         |        |              |
+   |                       LDQ      SHQ          EXQ0, EXQ1
+   |                       ≥2       ≥22          (1 op/cyc each)
+   |                        ↓        ↓                ↓
+   |                       LSU      vector-ALU   ──→ EXU0, EXU1   →  vreg/preg writeback
+   |                      LDU0/1   issue ports         (2 stages × 7 deep)
+   |                       STU
+   |                        ↓
+   |                  UB read PORT_0, PORT_1
+</pre>
+
+<p>So AIV is closer to a modern OoO core than a classic VLIW: rename
+free list (15+15), split issue queues (LDQ + SHQ), per-EXQ issue
+caps, multiple back-end lanes with port-conflict resolution. The
+"ROB-equivalent" is the rename buffer (15 V + 15 P) plus the issue
+queues (LDQ + SHQ). The earlier "no ROB beyond pipeline depth"
+inference held only because the cycle-trace JSON didn't expose any
+of this.</p>
+
+<h3>7.4 What still isn't fully bound</h3>
 
 <ul>
-<li><b>Pre-issue dispatch queue depth</b> (the 4 instruction queues
-in front of the pipes). The trace records pipe-issue events, not
-queue arrivals. If a queue is, say, 16 entries deep, this kernel
-never fills it because the loop body drains as fast as it fills.</li>
+<li><b>True LDQ depth.</b> Lower bound 2 (peak occupancy in
+<code>mask_kernel</code>). Likely much larger; needs a kernel that
+front-loads many independent loads.</li>
 
-<li><b>Upper bound on RVECLD / RVECST buffers.</b> Their peak (6 / 4)
-is well below the <code>issue × stages</code> ceiling, so the actual
-buffer could be 22 or 32 or larger. We need a kernel that pushes them
-harder to find out.</li>
+<li><b>True SHQ depth.</b> Lower bound 22. SHQ was actually pushed
+hard in this kernel — 22 entries was the high-water mark — but no
+overflow occurred. Could be 32 or 64.</li>
 
-<li><b>MTE2 / MTE3 outstanding-burst queue depth.</b> MTE2's peak
-in-flight = 9, almost certainly near a hardware cap on outstanding
-GM transactions, but the kernel only ever issues 10 MTE2 bursts
-total — no way to tell if the cap is 9 or 16 or 32.</li>
+<li><b>MTE2 / MTE3 outstanding-burst queue depth.</b> Still
+unobservable from these dumps.</li>
+
+<li><b>Front-end SIMD-VF instruction queue depth.</b> The
+<code>vec_issque.dump</code> only shows 7 events — the queue is
+clearly very lightly used in this kernel.</li>
 </ul>
 
-<h3>7.4 How to actually find the upper bounds</h3>
+<h3>7.5 Reproducing</h3>
 
-<ol>
-<li><b>Synthetic stall test for RVECLD / RVECST.</b> Write a kernel
-that issues a long chain of independent VLDs (or VSTIs) back-to-back,
-sized to exceed any plausible buffer (say 64 ops). Trace it and look
-for the first cycle where issue rate drops despite the queue having
-work. The in-flight count at that stall = the per-pipe buffer
-size.</li>
+<p>The dumps are produced automatically by
+<code>~/a5_compile/sim_a5.py</code> on the GCE
+<code>cann9-test</code> VM (CANN 9.0.0, dav_3510 simulator). Tarball
++ MANIFEST committed at
+<code>figures/mask_kernel_a5_camodel/internal_dumps/</code>. To
+re-derive the numbers above:</p>
 
-<li><b>MTE2 burst-queue probe.</b> Issue a burst of N independent
-MTE2 DMAs (sized so they all collide on the GM bus) and watch when
-the (N+1)th stalls. The N at which stall begins = burst-queue
-depth.</li>
+<pre>
+import re, collections
+isu = open('core0.veccore0.rvec.ISU.dump').read().splitlines()
+ldq = shq = ldq_pk = shq_pk = 0
+for line in isu:
+    m = re.match(r'\[info\] \[0+(\d+)\] \[(LDQ|SHQ)\] \[ISU_(\w+)\]', line)
+    if not m: continue
+    op = m.group(3); q = m.group(2)
+    if op == 'RECV':
+        if q == 'LDQ': ldq += 1; ldq_pk = max(ldq_pk, ldq)
+        else: shq += 1; shq_pk = max(shq_pk, shq)
+    elif op == 'ISSUE':
+        if q == 'LDQ': ldq = max(0, ldq-1)
+        else: shq = max(0, shq-1)
+print(f'LDQ peak: {ldq_pk}, SHQ peak: {shq_pk}')
+print(collections.Counter(re.search(r'REASON:(\w+)', l).group(1)
+      for l in isu if 'REASON:' in l))
+</pre>
 
-<li><b>Vendor docs / RTL.</b> The 218-server FPGA prototype contains
-the AIV instruction-queue depth and pipe execution buffer counts as
-RTL parameters. Grep the vector unit modules for
-<code>EntryNum</code> / <code>QueueDepth</code> / <code>RsSize</code>
-gives definitive values.</li>
-</ol>
-
-<div class="callout">
-<b>Practical implication for <code>mask_kernel</code>.</b> Because
-RVECEX is already at the <code>issue × stages</code> ceiling, none
-of these unknown buffer depths bind on this kernel. Knowing them
-would only matter if we ran a kernel that actually fills RVECLD,
-RVECST, or MTE2 to their per-pipe ceilings — at which point the
-queue depth in front becomes the next-tier bottleneck. That hasn't
-happened yet on any kernel we've measured.
+<div class="callout callout-info">
+<b>Practical implication.</b> The optimization rankings in §10
+don't change — RVECEX is still the binding constraint. But the
+cycle-budget arithmetic is now firmer: 248 PREG-dep stalls and 193
+VREG-dep stalls explain a large fraction of the cycles RVECEX
+spent below its 2-ops/cyc ceiling. Optimizations that reduce P-reg
+dependency chains (Opt 2: hold C in P-reg; Opt 12: F-hoist) save
+exactly those stall cycles, not just the issued-op count.
 </div>
 
 <h2>8. Steady-state in-flight counts at cycle 1700–1750 (mid-loop)</h2>
