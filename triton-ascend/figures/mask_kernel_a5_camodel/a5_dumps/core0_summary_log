@@ -1,0 +1,18 @@
+----------------------------- AiCore Summary Log -----------------------------
+
+==============================================================================
+kernal total ticks : 2016
+system total ticks : 2232
+==============================================================================
+Trace_Name                                    | Total_Num 
+==============================================================================
+mte2_veccore0_su_busy_cycle                 | 456
+mte3_veccore0_su_busy_cycle                 | 313
+rvec_veccore0_busy_cycle                    | 245
+rvec_veccore0_simd_busy_cycle               | 245
+rvec_veccore0_simt_busy_cycle               | 0
+CCU.scalar_veccore0_su_busy_cycle           | 441
+rvec_veccore0_sfu_busy_cycle                | 0
+++++++++++++++++++++++core: 0, subcore: 1, start: 216, tick: 2232, kernelId: 0, blkID: 0, blkDim: 1, rtsqId: 1, streamId: 0, taskId: 0, subtaskId: 0, threadId: 0, done++++++++++++++++++++++.
+
+

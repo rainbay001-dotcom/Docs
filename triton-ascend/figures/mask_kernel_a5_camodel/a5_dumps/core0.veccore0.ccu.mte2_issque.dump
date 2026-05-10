@@ -1,0 +1,32 @@
+[info] 736 [Push Instr] name=MOV_SPR_XN pc=0x10D0D098 id=38
+[info] 737 [pop Instr] name=MOV_SPR_XN pc=0x10D0D098 id=38. queue.size=0
+[info] 742 [RETIRE INSTR] instr.name=MOV_SPR_XN           instr.pc=0x10D0D098 instr.id=38
+[info] 1121 [Push Instr] name=MOV_SRC_TO_DST_ALIGNv2 pc=0x10D0D0A0 id=40
+[info] 1122 [Push Instr] name=MOV_SPR_XN pc=0x10D0D0A8 id=42
+[info] 1122 [Push Instr] name=MOV_SRC_TO_DST_ALIGNv2 pc=0x10D0D0AC id=43
+[info] 1122 [pop Instr] name=MOV_SRC_TO_DST_ALIGNv2 pc=0x10D0D0A0 id=40. queue.size=2
+[info] 1123 [Push Instr] name=MOV_SPR_XN pc=0x10D0D0B4 id=45
+[info] 1123 [pop Instr] name=MOV_SPR_XN pc=0x10D0D0A8 id=42. queue.size=2
+[info] 1124 [Push Instr] name=MOV_SRC_TO_DST_ALIGNv2 pc=0x10D0D0B8 id=46
+[info] 1124 [pop Instr] name=MOV_SRC_TO_DST_ALIGNv2 pc=0x10D0D0AC id=43. queue.size=2
+[info] 1125 [Push Instr] name=MOV_SPR_XN pc=0x10D0D0C0 id=48
+[info] 1125 [Push Instr] name=MOV_SRC_TO_DST_ALIGNv2 pc=0x10D0D0C4 id=49
+[info] 1126 [pop Instr] name=MOV_SPR_XN pc=0x10D0D0B4 id=45. queue.size=3
+[info] 1127 [pop Instr] name=MOV_SRC_TO_DST_ALIGNv2 pc=0x10D0D0B8 id=46. queue.size=2
+[info] 1128 [pop Instr] name=MOV_SPR_XN pc=0x10D0D0C0 id=48. queue.size=1
+[info] 1130 [pop Instr] name=MOV_SRC_TO_DST_ALIGNv2 pc=0x10D0D0C4 id=49. queue.size=0
+[info] 1139 [Push Instr] name=MOV_SPR_XN pc=0x10D0D12C id=75
+[info] 1140 [pop Instr] name=MOV_SPR_XN pc=0x10D0D12C id=75. queue.size=0
+[info] 1386 [RETIRE INSTR] instr.name=MOV_SRC_TO_DST_ALIGNv2 instr.pc=0x10D0D0A0 instr.id=40
+[info] 1388 [RETIRE INSTR] instr.name=MOV_SPR_XN           instr.pc=0x10D0D0A8 instr.id=42
+[info] 1390 [RETIRE INSTR] instr.name=MOV_SRC_TO_DST_ALIGNv2 instr.pc=0x10D0D0AC instr.id=43
+[info] 1392 [RETIRE INSTR] instr.name=MOV_SPR_XN           instr.pc=0x10D0D0B4 instr.id=45
+[info] 1526 [RETIRE INSTR] instr.name=MOV_SRC_TO_DST_ALIGNv2 instr.pc=0x10D0D0B8 instr.id=46
+[info] 1528 [RETIRE INSTR] instr.name=MOV_SPR_XN           instr.pc=0x10D0D0C0 instr.id=48
+[info] 1566 [RETIRE INSTR] instr.name=MOV_SRC_TO_DST_ALIGNv2 instr.pc=0x10D0D0C4 instr.id=49
+[info] 1566 [release set_flag] name=SET_FLAG pc=0x10D0D0C8 id=50
+[info] 1568 [RETIRE INSTR] instr.name=MOV_SPR_XN           instr.pc=0x10D0D12C instr.id=75
+[info] 2132 [Push Instr] name=END_LABEL pc=0x11111111 id=84
+[info] 2133 [pop Instr] name=END_LABEL pc=0x11111111 id=84. queue.size=0
+[info] 2138 [RETIRE INSTR] instr.name=END_LABEL            instr.pc=0x11111111 instr.id=84
+[info] ++++++++++++++++++++++core: 0, subcore: 1, start: 216, tick: 2232, kernelId: 0, blkID: 0, blkDim: 1, rtsqId: 1, streamId: 0, taskId: 0, subtaskId: 0, threadId: 0, done++++++++++++++++++++++.

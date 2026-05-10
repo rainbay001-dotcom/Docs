@@ -1,0 +1,1475 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>bRPC Architecture and Industry Context</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: #f7f8fb;
+      --panel: #ffffff;
+      --ink: #16202a;
+      --muted: #5b6775;
+      --line: #d8dee8;
+      --brand: #1d6f9f;
+      --brand-2: #0f8b6e;
+      --warn: #8a5a00;
+      --code: #f0f4f8;
+    }
+
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--ink);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      line-height: 1.58;
+    }
+
+    header {
+      background: #102033;
+      color: #f7fbff;
+      padding: 48px 28px 36px;
+    }
+
+    header .inner,
+    main {
+      max-width: 1180px;
+      margin: 0 auto;
+    }
+
+    h1 {
+      margin: 0 0 12px;
+      font-size: 38px;
+      line-height: 1.12;
+      letter-spacing: 0;
+    }
+
+    h2 {
+      margin: 42px 0 16px;
+      padding-bottom: 8px;
+      border-bottom: 1px solid var(--line);
+      font-size: 26px;
+      line-height: 1.24;
+      letter-spacing: 0;
+    }
+
+    h3 {
+      margin: 28px 0 10px;
+      font-size: 20px;
+      letter-spacing: 0;
+    }
+
+    p {
+      margin: 10px 0;
+    }
+
+    a {
+      color: #155fb8;
+      text-decoration: none;
+    }
+
+    a:hover {
+      text-decoration: underline;
+    }
+
+    main {
+      padding: 28px;
+    }
+
+    .summary {
+      max-width: 900px;
+      color: #dbe8f5;
+      font-size: 17px;
+    }
+
+    .meta {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      margin-top: 20px;
+      color: #dbe8f5;
+      font-size: 14px;
+    }
+
+    .pill {
+      border: 1px solid rgba(255,255,255,0.28);
+      border-radius: 999px;
+      padding: 5px 10px;
+    }
+
+    .card {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 18px;
+      margin: 16px 0;
+      box-shadow: 0 1px 2px rgba(16, 32, 51, 0.04);
+    }
+
+    .callout {
+      border-left: 4px solid var(--brand);
+      background: #eef6ff;
+      padding: 14px 16px;
+      border-radius: 6px;
+      margin: 18px 0;
+    }
+
+    .warning {
+      border-left-color: var(--warn);
+      background: #fff6df;
+    }
+
+    .grid {
+      display: grid;
+      gap: 14px;
+    }
+
+    .grid.two {
+      grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+    }
+
+    .grid.three {
+      grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+    }
+
+    .arch {
+      display: grid;
+      gap: 10px;
+      margin: 18px 0;
+    }
+
+    .layer {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #fff;
+      padding: 12px;
+    }
+
+    .layer-title {
+      font-weight: 700;
+      color: #0f4e83;
+      margin-bottom: 8px;
+    }
+
+    .chips {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+    }
+
+    .chip {
+      background: #edf3fa;
+      border: 1px solid #d4e1ee;
+      border-radius: 6px;
+      padding: 5px 8px;
+      font-size: 13px;
+      white-space: nowrap;
+    }
+
+    .diagram-card {
+      background: #ffffff;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 16px;
+      margin: 18px 0;
+      overflow-x: auto;
+      box-shadow: 0 1px 2px rgba(16, 32, 51, 0.04);
+    }
+
+    .diagram-card svg {
+      display: block;
+      min-width: 900px;
+      width: 100%;
+      height: auto;
+    }
+
+    .diagram-title {
+      font-weight: 700;
+      margin-bottom: 8px;
+      color: #0f4e83;
+    }
+
+    .diagram-note {
+      color: var(--muted);
+      font-size: 13px;
+      margin-top: 10px;
+    }
+
+    .flow {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+      gap: 10px;
+      margin: 14px 0;
+    }
+
+    .step {
+      background: #ffffff;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 12px;
+      min-height: 96px;
+    }
+
+    .step strong {
+      display: block;
+      margin-bottom: 6px;
+      color: #0f4e83;
+    }
+
+    code,
+    pre {
+      background: var(--code);
+      border-radius: 6px;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+      font-size: 0.95em;
+    }
+
+    code {
+      padding: 2px 4px;
+    }
+
+    pre {
+      overflow: auto;
+      padding: 14px;
+      border: 1px solid var(--line);
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      background: #ffffff;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      overflow: hidden;
+      display: table;
+      margin: 16px 0;
+    }
+
+    th,
+    td {
+      border: 1px solid var(--line);
+      padding: 10px;
+      vertical-align: top;
+      text-align: left;
+    }
+
+    th {
+      background: #eef3f8;
+      font-weight: 700;
+    }
+
+    .small {
+      color: var(--muted);
+      font-size: 14px;
+    }
+
+    .toc {
+      columns: 2 260px;
+    }
+
+    .toc a {
+      display: block;
+      margin: 5px 0;
+    }
+
+    footer {
+      color: var(--muted);
+      font-size: 13px;
+      margin: 42px 0 18px;
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="inner">
+      <h1>bRPC Architecture and Industry Context</h1>
+      <p class="summary">
+        bRPC is Apache's C++ RPC framework that came from Baidu's production infrastructure.
+        It combines a multi-protocol RPC layer, a high-concurrency M:N threading runtime,
+        non-blocking network IO, zero-copy buffers, client-side service governance, and
+        built-in observability.
+      </p>
+      <div class="meta">
+        <span class="pill">Repository: Docs-repo/bRPC</span>
+        <span class="pill">Created: 2026-05-10</span>
+        <span class="pill">Focus: architecture, motivation, use cases, alternatives</span>
+      </div>
+    </div>
+  </header>
+
+  <main>
+    <section class="card">
+      <h2 id="contents">Contents</h2>
+      <nav class="toc">
+        <a href="#architecture">1. Overall Architecture</a>
+        <a href="#what">2. What bRPC Is</a>
+        <a href="#motivation">3. Why bRPC Was Created</a>
+        <a href="#runtime">4. Runtime Internals</a>
+        <a href="#flows">5. Send and Receive Flow</a>
+        <a href="#iobuf">6. IOBuf Role</a>
+        <a href="#governance">7. Service Governance</a>
+        <a href="#observability">8. Observability</a>
+        <a href="#scenarios">9. Use Scenarios</a>
+        <a href="#alternatives">10. Industry Alternatives</a>
+        <a href="#tradeoffs">11. Tradeoffs</a>
+        <a href="#references">12. References</a>
+      </nav>
+    </section>
+
+    <section>
+      <h2 id="architecture">1. Overall Architecture</h2>
+      <p>
+        bRPC should be read as a complete service communication stack, not just a protobuf
+        stub generator. The public API exposes <code>brpc::Server</code>, <code>brpc::Channel</code>,
+        <code>brpc::Controller</code>, protobuf services, HTTP handlers, and protocol-specific
+        adapters. Under that API, bRPC owns connection management, protocol detection, message
+        parsing, request scheduling, output queuing, load balancing, retry/timeout behavior,
+        statistics, and built-in debugging pages.
+      </p>
+
+      <div class="diagram-card">
+        <div class="diagram-title">Typical bRPC request architecture, derived from the official IO "full picture"</div>
+        <svg viewBox="0 0 1180 650" role="img" aria-labelledby="brpc-arch-title brpc-arch-desc">
+          <title id="brpc-arch-title">Typical bRPC architecture</title>
+          <desc id="brpc-arch-desc">Client Channel, naming service, load balancer, Socket, IOBuf, EventDispatcher, protocol parsing, service method, bthread runtime, and built-in observability.</desc>
+          <defs>
+            <marker id="arrow-blue" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+              <path d="M 0 0 L 10 5 L 0 10 z" fill="#1d6f9f"></path>
+            </marker>
+            <marker id="arrow-green" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+              <path d="M 0 0 L 10 5 L 0 10 z" fill="#0f8b6e"></path>
+            </marker>
+            <marker id="arrow-gray" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+              <path d="M 0 0 L 10 5 L 0 10 z" fill="#596878"></path>
+            </marker>
+            <style>
+              .zone { fill: #f8fbff; stroke: #c6d4e4; stroke-width: 1.4; }
+              .zone2 { fill: #f8fffb; stroke: #c4ddcf; stroke-width: 1.4; }
+              .box { fill: #ffffff; stroke: #31465c; stroke-width: 1.2; rx: 8; }
+              .box-blue { fill: #eaf4ff; stroke: #1d6f9f; stroke-width: 1.2; rx: 8; }
+              .box-green { fill: #ebf8f4; stroke: #0f8b6e; stroke-width: 1.2; rx: 8; }
+              .box-orange { fill: #fff4e1; stroke: #b46d00; stroke-width: 1.2; rx: 8; }
+              .box-purple { fill: #f1ecff; stroke: #6856a6; stroke-width: 1.2; rx: 8; }
+              .box-gray { fill: #f4f6f8; stroke: #596878; stroke-width: 1.2; rx: 8; }
+              .text { font: 14px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #16202a; }
+              .smalltext { font: 12px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #4c5967; }
+              .label { font: 700 18px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #102033; }
+              .subhead { font: 700 13px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #0f4e83; }
+              .arrow { fill: none; stroke: #1d6f9f; stroke-width: 2; marker-end: url(#arrow-blue); }
+              .arrow-green { fill: none; stroke: #0f8b6e; stroke-width: 2; marker-end: url(#arrow-green); }
+              .arrow-gray { fill: none; stroke: #596878; stroke-width: 1.8; marker-end: url(#arrow-gray); }
+              .dash { stroke-dasharray: 6 5; }
+            </style>
+          </defs>
+
+          <rect x="24" y="36" width="532" height="462" class="zone"></rect>
+          <rect x="624" y="36" width="532" height="462" class="zone2"></rect>
+          <rect x="24" y="526" width="1132" height="94" class="box-gray"></rect>
+
+          <text x="44" y="68" class="label">Client process</text>
+          <text x="644" y="68" class="label">Server process</text>
+          <text x="44" y="552" class="label">Shared runtime and diagnostics</text>
+
+          <rect x="52" y="112" width="118" height="58" class="box-blue"></rect>
+          <text x="78" y="136" class="text">User stub</text>
+          <text x="73" y="154" class="smalltext">or CallMethod</text>
+
+          <rect x="216" y="96" width="122" height="46" class="box"></rect>
+          <text x="239" y="124" class="text">Channel</text>
+          <rect x="216" y="162" width="122" height="46" class="box"></rect>
+          <text x="224" y="190" class="text">Controller</text>
+
+          <rect x="386" y="80" width="132" height="48" class="box-green"></rect>
+          <text x="410" y="108" class="text">NamingService</text>
+          <rect x="386" y="148" width="132" height="48" class="box-green"></rect>
+          <text x="421" y="176" class="text">LoadBalancer</text>
+
+          <rect x="210" y="268" width="150" height="58" class="box-orange"></rect>
+          <text x="232" y="292" class="text">Protocol pack</text>
+          <text x="235" y="310" class="smalltext">metadata + body</text>
+
+          <rect x="402" y="258" width="112" height="78" class="box-blue"></rect>
+          <text x="437" y="287" class="text">Socket</text>
+          <text x="427" y="306" class="smalltext">SocketId</text>
+
+          <rect x="406" y="380" width="108" height="58" class="box-purple"></rect>
+          <text x="432" y="404" class="text">Parse</text>
+          <text x="425" y="422" class="smalltext">response</text>
+
+          <rect x="58" y="380" width="134" height="58" class="box-purple"></rect>
+          <text x="77" y="404" class="text">Callback</text>
+          <text x="70" y="422" class="smalltext">or wake caller</text>
+
+          <rect x="652" y="104" width="104" height="50" class="box"></rect>
+          <text x="680" y="134" class="text">Acceptor</text>
+
+          <rect x="814" y="112" width="112" height="78" class="box-blue"></rect>
+          <text x="849" y="141" class="text">Socket</text>
+          <text x="840" y="160" class="smalltext">fd state</text>
+
+          <rect x="656" y="244" width="132" height="78" class="box-green"></rect>
+          <text x="681" y="273" class="text">Event</text>
+          <text x="674" y="292" class="text">Dispatcher</text>
+
+          <rect x="828" y="248" width="132" height="74" class="box-orange"></rect>
+          <text x="849" y="275" class="text">InputMessenger</text>
+          <text x="848" y="294" class="smalltext">cut messages</text>
+
+          <rect x="988" y="228" width="124" height="48" class="box-orange"></rect>
+          <text x="1011" y="258" class="text">Parse</text>
+          <rect x="988" y="300" width="124" height="48" class="box-orange"></rect>
+          <text x="997" y="330" class="text">Process request</text>
+
+          <rect x="826" y="390" width="150" height="58" class="box-purple"></rect>
+          <text x="858" y="414" class="text">Service method</text>
+          <text x="858" y="432" class="smalltext">user logic</text>
+
+          <rect x="642" y="390" width="132" height="58" class="box-blue"></rect>
+          <text x="667" y="414" class="text">Pack response</text>
+          <text x="667" y="432" class="smalltext">protobuf/HTTP</text>
+
+          <rect x="542" y="260" width="64" height="64" class="box-gray"></rect>
+          <text x="557" y="286" class="text">TCP</text>
+          <text x="553" y="304" class="smalltext">fd</text>
+
+          <rect x="78" y="566" width="156" height="34" class="box-gray"></rect>
+          <text x="101" y="588" class="text">bthread scheduler</text>
+          <rect x="270" y="566" width="144" height="34" class="box-gray"></rect>
+          <text x="296" y="588" class="text">pthread workers</text>
+          <rect x="450" y="566" width="152" height="34" class="box-gray"></rect>
+          <text x="475" y="588" class="text">IOBuf blocks</text>
+          <rect x="638" y="566" width="158" height="34" class="box-gray"></rect>
+          <text x="663" y="588" class="text">write queue</text>
+          <rect x="832" y="566" width="136" height="34" class="box-gray"></rect>
+          <text x="860" y="588" class="text">bvar/rpcz</text>
+          <rect x="1004" y="566" width="116" height="34" class="box-gray"></rect>
+          <text x="1023" y="588" class="text">profilers</text>
+
+          <path d="M 170 141 L 216 119" class="arrow"></path>
+          <path d="M 338 119 L 386 104" class="arrow-green"></path>
+          <path d="M 338 119 C 368 124, 364 162, 386 172" class="arrow-green"></path>
+          <path d="M 452 196 L 458 258" class="arrow"></path>
+          <path d="M 277 208 L 283 268" class="arrow"></path>
+          <path d="M 360 297 L 402 297" class="arrow"></path>
+          <path d="M 514 297 L 542 292" class="arrow"></path>
+          <path d="M 606 292 L 814 151" class="arrow"></path>
+
+          <path d="M 704 154 L 814 132" class="arrow-gray"></path>
+          <path d="M 870 190 L 722 244" class="arrow-green"></path>
+          <path d="M 788 283 L 828 285" class="arrow-green"></path>
+          <path d="M 960 285 L 988 252" class="arrow-green"></path>
+          <path d="M 1050 276 L 1050 300" class="arrow-green"></path>
+          <path d="M 988 324 L 976 418" class="arrow-green"></path>
+          <path d="M 826 419 L 774 419" class="arrow"></path>
+          <path d="M 642 419 C 594 418, 582 362, 606 310" class="arrow"></path>
+          <path d="M 542 304 L 514 297" class="arrow"></path>
+
+          <path d="M 402 410 C 326 410, 272 410, 192 410" class="arrow-green"></path>
+          <path d="M 542 308 C 496 362, 462 370, 458 380" class="arrow-green"></path>
+
+          <path d="M 152 566 C 150 516, 136 462, 125 438" class="arrow-gray dash"></path>
+          <path d="M 342 566 C 378 514, 420 464, 458 438" class="arrow-gray dash"></path>
+          <path d="M 526 566 C 524 506, 494 402, 458 336" class="arrow-gray dash"></path>
+          <path d="M 716 566 C 688 502, 658 454, 642 419" class="arrow-gray dash"></path>
+          <path d="M 900 566 C 894 502, 895 462, 901 448" class="arrow-gray dash"></path>
+
+          <text x="46" y="94" class="subhead">client API and routing</text>
+          <text x="650" y="94" class="subhead">server accept, parse, dispatch</text>
+          <text x="230" y="250" class="subhead">outbound request</text>
+          <text x="74" y="362" class="subhead">inbound response</text>
+          <text x="970" y="210" class="subhead">protocol callbacks</text>
+          <text x="840" y="374" class="subhead">application service</text>
+        </svg>
+        <p class="diagram-note">
+          Source basis: Apache bRPC's official IO page shows the same main nodes:
+          Channel, NS, LB, Socket, KeepWrite, EventDispatcher, Parse, Process Request,
+          Service, and response processing. This redrawing is simplified for explanation;
+          it is not copied from the original image.
+        </p>
+      </div>
+
+      <p>
+        I did not find a bRPC-specific academic paper that publishes a canonical architecture
+        diagram. The closest canonical architecture source is the official bRPC IO document's
+        "full picture" image. Academic papers are still useful for context: "The Tail at Scale"
+        explains why long-tail isolation matters in fan-out services, and "Dapper" explains why
+        RPC libraries are a natural instrumentation point for distributed tracing.
+      </p>
+
+      <div class="diagram-card">
+        <div class="diagram-title">How bRPC connects to TCP sockets or RDMA</div>
+        <svg viewBox="0 0 1180 720" role="img" aria-labelledby="brpc-transport-title brpc-transport-desc">
+          <title id="brpc-transport-title">bRPC TCP and RDMA transport architecture</title>
+          <desc id="brpc-transport-desc">The common bRPC API, protocol, Socket, IOBuf, EventDispatcher and InputMessenger layers split into either TCP file descriptor IO or RDMA RdmaEndpoint using QP, CQ and verbs.</desc>
+          <defs>
+            <marker id="arrow-tcp" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+              <path d="M 0 0 L 10 5 L 0 10 z" fill="#1d6f9f"></path>
+            </marker>
+            <marker id="arrow-rdma" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+              <path d="M 0 0 L 10 5 L 0 10 z" fill="#0f8b6e"></path>
+            </marker>
+            <marker id="arrow-ctrl" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+              <path d="M 0 0 L 10 5 L 0 10 z" fill="#8a5a00"></path>
+            </marker>
+            <style>
+              .transport-zone { fill: #f8fbff; stroke: #c6d4e4; stroke-width: 1.4; }
+              .tcp-zone { fill: #eef6ff; stroke: #1d6f9f; stroke-width: 1.4; }
+              .rdma-zone { fill: #effaf5; stroke: #0f8b6e; stroke-width: 1.4; }
+              .shared-zone { fill: #f7f8fb; stroke: #c6ced8; stroke-width: 1.4; }
+              .transport-box { fill: #ffffff; stroke: #31465c; stroke-width: 1.2; rx: 8; }
+              .transport-box-blue { fill: #e9f3ff; stroke: #1d6f9f; stroke-width: 1.2; rx: 8; }
+              .transport-box-green { fill: #e9f8f1; stroke: #0f8b6e; stroke-width: 1.2; rx: 8; }
+              .transport-box-yellow { fill: #fff6df; stroke: #8a5a00; stroke-width: 1.2; rx: 8; }
+              .transport-box-gray { fill: #f3f5f7; stroke: #596878; stroke-width: 1.2; rx: 8; }
+              .transport-text { font: 14px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #16202a; }
+              .transport-small { font: 12px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #4c5967; }
+              .transport-label { font: 700 18px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #102033; }
+              .transport-subhead { font: 700 13px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #0f4e83; }
+              .transport-arrow-tcp { fill: none; stroke: #1d6f9f; stroke-width: 2; marker-end: url(#arrow-tcp); }
+              .transport-arrow-rdma { fill: none; stroke: #0f8b6e; stroke-width: 2; marker-end: url(#arrow-rdma); }
+              .transport-arrow-ctrl { fill: none; stroke: #8a5a00; stroke-width: 1.8; marker-end: url(#arrow-ctrl); stroke-dasharray: 7 5; }
+            </style>
+          </defs>
+
+          <rect x="28" y="32" width="1124" height="170" class="transport-zone"></rect>
+          <rect x="28" y="238" width="535" height="400" class="tcp-zone"></rect>
+          <rect x="617" y="238" width="535" height="400" class="rdma-zone"></rect>
+          <rect x="28" y="660" width="1124" height="42" class="shared-zone"></rect>
+
+          <text x="52" y="64" class="transport-label">Common bRPC layer</text>
+          <text x="52" y="270" class="transport-label">TCP backend</text>
+          <text x="642" y="270" class="transport-label">RDMA backend</text>
+          <text x="52" y="686" class="transport-small">Both paths keep the same RPC/protocol abstraction above brpc::Socket. The transport backend changes below Socket.</text>
+
+          <rect x="70" y="92" width="160" height="54" class="transport-box"></rect>
+          <text x="94" y="116" class="transport-text">Application</text>
+          <text x="92" y="134" class="transport-small">stub / service</text>
+
+          <rect x="280" y="92" width="160" height="54" class="transport-box"></rect>
+          <text x="301" y="116" class="transport-text">Channel / Server</text>
+          <text x="310" y="134" class="transport-small">routing / accept</text>
+
+          <rect x="490" y="92" width="160" height="54" class="transport-box"></rect>
+          <text x="521" y="116" class="transport-text">Protocol layer</text>
+          <text x="514" y="134" class="transport-small">pack, parse, process</text>
+
+          <rect x="700" y="92" width="160" height="54" class="transport-box-blue"></rect>
+          <text x="737" y="116" class="transport-text">IOBuf</text>
+          <text x="719" y="134" class="transport-small">block refs / slices</text>
+
+          <rect x="910" y="92" width="160" height="54" class="transport-box-yellow"></rect>
+          <text x="946" y="116" class="transport-text">brpc::Socket</text>
+          <text x="943" y="134" class="transport-small">shared abstraction</text>
+
+          <path d="M 230 119 L 280 119" class="transport-arrow-tcp"></path>
+          <path d="M 440 119 L 490 119" class="transport-arrow-tcp"></path>
+          <path d="M 650 119 L 700 119" class="transport-arrow-tcp"></path>
+          <path d="M 860 119 L 910 119" class="transport-arrow-tcp"></path>
+
+          <path d="M 990 146 C 990 205, 292 206, 292 302" class="transport-arrow-tcp"></path>
+          <path d="M 990 146 C 990 205, 882 206, 882 302" class="transport-arrow-rdma"></path>
+
+          <rect x="72" y="304" width="164" height="58" class="transport-box-blue"></rect>
+          <text x="104" y="328" class="transport-text">Socket owns fd</text>
+          <text x="96" y="346" class="transport-small">non-blocking TCP</text>
+
+          <rect x="280" y="304" width="170" height="58" class="transport-box-blue"></rect>
+          <text x="314" y="328" class="transport-text">write queue</text>
+          <text x="301" y="346" class="transport-small">MPSC + KeepWrite</text>
+
+          <rect x="72" y="416" width="164" height="58" class="transport-box-blue"></rect>
+          <text x="103" y="440" class="transport-text">write/writev</text>
+          <text x="95" y="458" class="transport-small">IOBuf to iovec</text>
+
+          <rect x="280" y="416" width="170" height="58" class="transport-box-blue"></rect>
+          <text x="310" y="440" class="transport-text">kernel TCP</text>
+          <text x="318" y="458" class="transport-small">socket buffers</text>
+
+          <rect x="142" y="536" width="214" height="58" class="transport-box-gray"></rect>
+          <text x="176" y="560" class="transport-text">EventDispatcher</text>
+          <text x="169" y="578" class="transport-small">epoll readiness on fd</text>
+
+          <rect x="648" y="304" width="180" height="58" class="transport-box-yellow"></rect>
+          <text x="674" y="328" class="transport-text">TCP handshake fd</text>
+          <text x="666" y="346" class="transport-small">exchange GID / QPN</text>
+
+          <rect x="868" y="304" width="180" height="58" class="transport-box-green"></rect>
+          <text x="901" y="328" class="transport-text">RdmaEndpoint</text>
+          <text x="900" y="346" class="transport-small">inside Socket</text>
+
+          <rect x="648" y="416" width="180" height="58" class="transport-box-green"></rect>
+          <text x="678" y="440" class="transport-text">RDMA memory pool</text>
+          <text x="667" y="458" class="transport-small">registered IOBuf blocks</text>
+
+          <rect x="868" y="416" width="180" height="58" class="transport-box-green"></rect>
+          <text x="908" y="440" class="transport-text">verbs API</text>
+          <text x="902" y="458" class="transport-small">post send / recv</text>
+
+          <rect x="648" y="536" width="180" height="58" class="transport-box-green"></rect>
+          <text x="692" y="560" class="transport-text">QP per endpoint</text>
+          <text x="690" y="578" class="transport-small">RC transport</text>
+
+          <rect x="868" y="536" width="180" height="58" class="transport-box-green"></rect>
+          <text x="908" y="560" class="transport-text">CQ events</text>
+          <text x="884" y="578" class="transport-small">PollCq, event fd</text>
+
+          <rect x="448" y="536" width="164" height="58" class="transport-box-gray"></rect>
+          <text x="479" y="560" class="transport-text">InputMessenger</text>
+          <text x="476" y="578" class="transport-small">cut RPC messages</text>
+
+          <path d="M 236 333 L 280 333" class="transport-arrow-tcp"></path>
+          <path d="M 365 362 L 154 416" class="transport-arrow-tcp"></path>
+          <path d="M 236 445 L 280 445" class="transport-arrow-tcp"></path>
+          <path d="M 365 474 C 378 523, 340 565, 356 565" class="transport-arrow-tcp"></path>
+          <path d="M 356 565 L 448 565" class="transport-arrow-tcp"></path>
+
+          <path d="M 828 333 L 868 333" class="transport-arrow-ctrl"></path>
+          <path d="M 958 362 L 958 416" class="transport-arrow-rdma"></path>
+          <path d="M 868 445 L 828 445" class="transport-arrow-rdma"></path>
+          <path d="M 738 474 L 738 536" class="transport-arrow-rdma"></path>
+          <path d="M 828 565 L 868 565" class="transport-arrow-rdma"></path>
+          <path d="M 868 565 C 758 633, 592 631, 530 594" class="transport-arrow-rdma"></path>
+
+          <text x="88" y="292" class="transport-subhead">payload path</text>
+          <text x="662" y="292" class="transport-subhead">control path for setup</text>
+          <text x="872" y="292" class="transport-subhead">payload path after setup</text>
+          <text x="74" y="504" class="transport-small">Payload bytes go through normal kernel TCP.</text>
+          <text x="650" y="504" class="transport-small">Payload bytes use registered memory and RDMA work requests.</text>
+          <text x="650" y="620" class="transport-small">Completion events are fed back into bRPC parsing through EventDispatcher/PollCq.</text>
+        </svg>
+        <p class="diagram-note">
+          TCP mode uses a native non-blocking fd under <code>brpc::Socket</code>. RDMA mode
+          still uses <code>brpc::Socket</code>, but attaches <code>RdmaEndpoint</code>; payload transfer
+          is posted to RDMA QPs through verbs. A TCP connection is still used for RDMA
+          handshake and liveness, but not for payload after RDMA setup.
+        </p>
+      </div>
+
+      <div class="diagram-card">
+        <div class="diagram-title">How bRPC uses epoll on Linux</div>
+        <svg viewBox="0 0 1180 720" role="img" aria-labelledby="brpc-epoll-title brpc-epoll-desc">
+          <title id="brpc-epoll-title">bRPC epoll architecture</title>
+          <desc id="brpc-epoll-desc">bRPC registers SocketId-bearing file descriptors in EventDispatcher epoll instances. epoll_wait returns readiness, then input events call Socket::StartInputEvent and output events call Socket::HandleEpollOut.</desc>
+          <defs>
+            <marker id="arrow-epoll-blue" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+              <path d="M 0 0 L 10 5 L 0 10 z" fill="#1d6f9f"></path>
+            </marker>
+            <marker id="arrow-epoll-green" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+              <path d="M 0 0 L 10 5 L 0 10 z" fill="#0f8b6e"></path>
+            </marker>
+            <marker id="arrow-epoll-gray" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+              <path d="M 0 0 L 10 5 L 0 10 z" fill="#596878"></path>
+            </marker>
+            <style>
+              .ep-zone { fill: #f8fbff; stroke: #c6d4e4; stroke-width: 1.4; }
+              .ep-kernel { fill: #fff7e7; stroke: #b46d00; stroke-width: 1.4; }
+              .ep-runtime { fill: #f0f9f5; stroke: #0f8b6e; stroke-width: 1.4; }
+              .ep-box { fill: #ffffff; stroke: #31465c; stroke-width: 1.2; rx: 8; }
+              .ep-blue { fill: #e9f3ff; stroke: #1d6f9f; stroke-width: 1.2; rx: 8; }
+              .ep-green { fill: #e9f8f1; stroke: #0f8b6e; stroke-width: 1.2; rx: 8; }
+              .ep-yellow { fill: #fff6df; stroke: #8a5a00; stroke-width: 1.2; rx: 8; }
+              .ep-gray { fill: #f3f5f7; stroke: #596878; stroke-width: 1.2; rx: 8; }
+              .ep-text { font: 14px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #16202a; }
+              .ep-small { font: 12px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #4c5967; }
+              .ep-label { font: 700 18px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #102033; }
+              .ep-subhead { font: 700 13px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #0f4e83; }
+              .ep-arrow-blue { fill: none; stroke: #1d6f9f; stroke-width: 2; marker-end: url(#arrow-epoll-blue); }
+              .ep-arrow-green { fill: none; stroke: #0f8b6e; stroke-width: 2; marker-end: url(#arrow-epoll-green); }
+              .ep-arrow-gray { fill: none; stroke: #596878; stroke-width: 1.8; marker-end: url(#arrow-epoll-gray); }
+              .ep-dash { stroke-dasharray: 7 5; }
+            </style>
+          </defs>
+
+          <rect x="26" y="34" width="1128" height="132" class="ep-zone"></rect>
+          <rect x="26" y="204" width="332" height="396" class="ep-kernel"></rect>
+          <rect x="420" y="204" width="342" height="396" class="ep-zone"></rect>
+          <rect x="824" y="204" width="330" height="396" class="ep-runtime"></rect>
+          <rect x="26" y="628" width="1128" height="58" class="ep-gray"></rect>
+
+          <text x="48" y="66" class="ep-label">Socket registration</text>
+          <text x="48" y="236" class="ep-label">Linux kernel</text>
+          <text x="442" y="236" class="ep-label">EventDispatcher</text>
+          <text x="846" y="236" class="ep-label">bRPC consumers</text>
+
+          <rect x="68" y="96" width="156" height="46" class="ep-blue"></rect>
+          <text x="102" y="124" class="ep-text">brpc::Socket</text>
+
+          <rect x="278" y="88" width="190" height="62" class="ep-blue"></rect>
+          <text x="306" y="112" class="ep-text">SocketId in event</text>
+          <text x="307" y="132" class="ep-small">evt.data.u64 = socket_id</text>
+
+          <rect x="522" y="88" width="190" height="62" class="ep-green"></rect>
+          <text x="552" y="112" class="ep-text">GetGlobalEventDispatcher</text>
+          <text x="572" y="132" class="ep-small">hash fd if many</text>
+
+          <rect x="766" y="88" width="170" height="62" class="ep-green"></rect>
+          <text x="796" y="112" class="ep-text">AddConsumer</text>
+          <text x="791" y="132" class="ep-small">EPOLLIN | EPOLLET</text>
+
+          <rect x="978" y="88" width="148" height="62" class="ep-yellow"></rect>
+          <text x="1008" y="112" class="ep-text">AddEpollOut</text>
+          <text x="998" y="132" class="ep-small">EPOLLOUT | EPOLLET</text>
+
+          <path d="M 224 119 L 278 119" class="ep-arrow-blue"></path>
+          <path d="M 468 119 L 522 119" class="ep-arrow-green"></path>
+          <path d="M 712 119 L 766 119" class="ep-arrow-green"></path>
+          <path d="M 936 119 L 978 119" class="ep-arrow-gray ep-dash"></path>
+
+          <rect x="74" y="278" width="222" height="76" class="ep-yellow"></rect>
+          <text x="122" y="308" class="ep-text">epoll instance</text>
+          <text x="96" y="328" class="ep-small">created by epoll_create</text>
+          <text x="98" y="346" class="ep-small">one or more dispatchers</text>
+
+          <rect x="74" y="414" width="222" height="76" class="ep-yellow"></rect>
+          <text x="128" y="444" class="ep-text">epoll_wait</text>
+          <text x="98" y="464" class="ep-small">returns readiness array</text>
+          <text x="112" y="482" class="ep-small">batch size is 32 events</text>
+
+          <rect x="466" y="278" width="244" height="76" class="ep-green"></rect>
+          <text x="518" y="308" class="ep-text">Run loop bthread</text>
+          <text x="500" y="328" class="ep-small">EventDispatcher::Run</text>
+          <text x="506" y="346" class="ep-small">not a classic IO thread</text>
+
+          <rect x="466" y="414" width="244" height="76" class="ep-green"></rect>
+          <text x="506" y="444" class="ep-text">Readiness dispatch</text>
+          <text x="492" y="464" class="ep-small">input pass before output pass</text>
+          <text x="502" y="482" class="ep-small">uses SocketId, not raw ptr</text>
+
+          <rect x="858" y="254" width="244" height="70" class="ep-blue"></rect>
+          <text x="908" y="282" class="ep-text">StartInputEvent</text>
+          <text x="886" y="302" class="ep-small">EPOLLIN, ERR, HUP, RDHUP</text>
+
+          <rect x="858" y="352" width="244" height="70" class="ep-blue"></rect>
+          <text x="900" y="380" class="ep-text">per-fd atomic gate</text>
+          <text x="884" y="400" class="ep-small">start bthread only when needed</text>
+
+          <rect x="858" y="450" width="244" height="70" class="ep-blue"></rect>
+          <text x="912" y="478" class="ep-text">InputMessenger</text>
+          <text x="884" y="498" class="ep-small">read bytes, cut RPC messages</text>
+
+          <rect x="858" y="548" width="244" height="36" class="ep-blue"></rect>
+          <text x="910" y="571" class="ep-text">Parse / Process callbacks</text>
+
+          <rect x="466" y="528" width="244" height="54" class="ep-yellow"></rect>
+          <text x="512" y="550" class="ep-text">HandleEpollOut</text>
+          <text x="504" y="568" class="ep-small">EPOLLOUT, ERR, HUP</text>
+
+          <rect x="90" y="528" width="190" height="54" class="ep-yellow"></rect>
+          <text x="124" y="550" class="ep-text">fd writeable</text>
+          <text x="104" y="568" class="ep-small">drain Socket write queue</text>
+
+          <path d="M 618 150 C 618 196, 184 204, 184 278" class="ep-arrow-green"></path>
+          <path d="M 852 150 C 852 190, 230 202, 184 278" class="ep-arrow-green"></path>
+          <path d="M 1052 150 C 1052 188, 272 206, 184 278" class="ep-arrow-gray ep-dash"></path>
+          <path d="M 296 316 L 466 316" class="ep-arrow-green"></path>
+          <path d="M 588 354 C 588 388, 588 394, 588 414" class="ep-arrow-green"></path>
+          <path d="M 296 452 L 466 452" class="ep-arrow-green"></path>
+          <path d="M 710 452 C 766 436, 810 310, 858 289" class="ep-arrow-blue"></path>
+          <path d="M 980 324 L 980 352" class="ep-arrow-blue"></path>
+          <path d="M 980 422 L 980 450" class="ep-arrow-blue"></path>
+          <path d="M 980 520 L 980 548" class="ep-arrow-blue"></path>
+          <path d="M 710 452 C 760 482, 746 548, 710 555" class="ep-arrow-gray"></path>
+          <path d="M 466 555 L 280 555" class="ep-arrow-gray"></path>
+
+          <text x="48" y="656" class="ep-small">
+            RDMA integration: the RDMA CQ event fd can also be registered with EventDispatcher; readiness leads to RdmaEndpoint::PollCq, then completed receive buffers are fed to InputMessenger.
+          </text>
+          <text x="48" y="675" class="ep-small">
+            macOS uses kqueue instead of epoll. This diagram is the Linux path documented by bRPC and implemented in src/brpc/event_dispatcher.cpp.
+          </text>
+        </svg>
+        <p class="diagram-note">
+          bRPC uses epoll as a readiness notification layer, not as a place to run all IO.
+          On Linux, <code>EventDispatcher</code> registers fds with edge-triggered events
+          (<code>EPOLLIN | EPOLLET</code> and, when needed, <code>EPOLLOUT | EPOLLET</code>).
+          <code>epoll_wait</code> returns <code>SocketId</code>s, input events call
+          <code>Socket::StartInputEvent</code>, and output events call
+          <code>Socket::HandleEpollOut</code>. The actual read, message cutting, protocol
+          parsing, and service execution happen in bthreads and <code>InputMessenger</code>.
+        </p>
+      </div>
+
+      <div class="arch">
+        <div class="layer">
+          <div class="layer-title">Application and service API</div>
+          <div class="chips">
+            <span class="chip">protobuf service</span>
+            <span class="chip">Server::AddService</span>
+            <span class="chip">Channel::CallMethod</span>
+            <span class="chip">Controller</span>
+            <span class="chip">request/response attachments</span>
+            <span class="chip">sync, async, semi-sync calls</span>
+          </div>
+        </div>
+        <div class="layer">
+          <div class="layer-title">Service governance</div>
+          <div class="chips">
+            <span class="chip">NamingService</span>
+            <span class="chip">health checking</span>
+            <span class="chip">load balancing</span>
+            <span class="chip">retry</span>
+            <span class="chip">timeout</span>
+            <span class="chip">backup request</span>
+            <span class="chip">circuit breaker</span>
+          </div>
+        </div>
+        <div class="layer">
+          <div class="layer-title">Protocol layer</div>
+          <div class="chips">
+            <span class="chip">baidu_std</span>
+            <span class="chip">streaming_rpc</span>
+            <span class="chip">HTTP/1.x</span>
+            <span class="chip">HTTP/2 and gRPC</span>
+            <span class="chip">Thrift</span>
+            <span class="chip">Redis</span>
+            <span class="chip">Memcached</span>
+            <span class="chip">RTMP</span>
+            <span class="chip">nshead-family protocols</span>
+            <span class="chip">custom protocol callbacks</span>
+          </div>
+        </div>
+        <div class="layer">
+          <div class="layer-title">Message and buffer layer</div>
+          <div class="chips">
+            <span class="chip">Parse callback</span>
+            <span class="chip">Process callback</span>
+            <span class="chip">pack_request</span>
+            <span class="chip">serialize_request</span>
+            <span class="chip">protobuf zero-copy streams</span>
+            <span class="chip">IOBuf</span>
+            <span class="chip">compression</span>
+          </div>
+        </div>
+        <div class="layer">
+          <div class="layer-title">Runtime and network core</div>
+          <div class="chips">
+            <span class="chip">Socket and SocketId</span>
+            <span class="chip">EventDispatcher</span>
+            <span class="chip">InputMessenger</span>
+            <span class="chip">wait-free MPSC write list</span>
+            <span class="chip">KeepWrite bthread</span>
+            <span class="chip">bthread M:N scheduler</span>
+            <span class="chip">butex</span>
+            <span class="chip">ResourcePool/ObjectPool</span>
+          </div>
+        </div>
+        <div class="layer">
+          <div class="layer-title">OS and libraries</div>
+          <div class="chips">
+            <span class="chip">non-blocking fd</span>
+            <span class="chip">epoll on Linux</span>
+            <span class="chip">writev-style scatter/gather IO</span>
+            <span class="chip">OpenSSL</span>
+            <span class="chip">protobuf</span>
+            <span class="chip">gflags</span>
+            <span class="chip">bvar</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="callout">
+        <strong>Architectural thesis:</strong> bRPC trades a larger C++ runtime for lower
+        per-request overhead, protocol compatibility, and operational visibility in
+        high-QPS internal services. It is closest to an infrastructure runtime plus RPC
+        framework, while gRPC and Thrift are usually introduced as RPC/interface frameworks.
+      </div>
+    </section>
+
+    <section>
+      <h2 id="what">2. What bRPC Is</h2>
+      <p>
+        The official bRPC documentation describes bRPC as an industrial-grade C++ RPC
+        framework used in high-performance systems such as search, storage, machine
+        learning, advertising, and recommendation. The GitHub README also says that
+        "bRPC" means "better RPC" and that the framework was known inside Baidu as
+        "baidu-rpc".
+      </p>
+      <p>
+        Its central idea is practical unification. Instead of forcing all services to
+        migrate to one wire protocol, bRPC can host and call multiple protocols while
+        keeping one common runtime, observability model, client API, timeout/retry logic,
+        and load-balancing machinery. This is why bRPC can be used as a native RPC
+        framework, an HTTP/gRPC server, a client for Redis/Memcached-like protocols,
+        and a compatibility bridge for older Baidu protocols.
+      </p>
+
+      <div class="grid three">
+        <div class="card">
+          <h3>Server side</h3>
+          <p>
+            A <code>brpc::Server</code> owns services, listens on a port, detects the incoming
+            protocol automatically, dispatches each bounded message to protocol-specific
+            parsing and processing callbacks, and runs user service logic in bthreads.
+          </p>
+        </div>
+        <div class="card">
+          <h3>Client side</h3>
+          <p>
+            A <code>brpc::Channel</code> is the client abstraction. It is thread-safe after
+            initialization and can represent a direct server, a discovered cluster, or a
+            composition of channels used for sharded or parallel access.
+          </p>
+        </div>
+        <div class="card">
+          <h3>Operational side</h3>
+          <p>
+            bRPC exposes built-in services for status, metrics, connections, flags, rpcz,
+            CPU profiling, heap profiling, and lock contention profiling. This was a major
+            design goal, not an add-on.
+          </p>
+        </div>
+      </div>
+    </section>
+
+    <section>
+      <h2 id="motivation">3. Why bRPC Was Created</h2>
+      <p>
+        bRPC was created because Baidu had a large C++ service fleet with multiple old RPC
+        frameworks and protocols. The official benchmark page discusses UB, hulu-pbrpc,
+        sofa-pbrpc, nova_pbrpc, public_pbrpc, Thrift, and gRPC as comparison points, and
+        states that bRPC was developed by Baidu's infrastructure team around the end of
+        2014 to unify major distributed systems and business lines.
+      </p>
+
+      <h3>Problems the project was trying to solve</h3>
+      <table>
+        <thead>
+          <tr>
+            <th>Problem</th>
+            <th>Why it mattered</th>
+            <th>bRPC response</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>Many wire protocols in production</td>
+            <td>Large companies accumulate old protocols. Rewriting every service at once is unrealistic.</td>
+            <td>Multi-protocol server and client support, with a documented path for adding new protocol callbacks.</td>
+          </tr>
+          <tr>
+            <td>Poor observability in older frameworks</td>
+            <td>When RPC internals are a black box, teams debug with logs and framework maintainers become bottlenecks.</td>
+            <td>Built-in HTTP debug pages, bvar metrics, rpcz, profiling, connection views, runtime flags.</td>
+          </tr>
+          <tr>
+            <td>Tail latency in fan-out services</td>
+            <td>Search, recommendation, ads, and storage frontends often call many downstream services. Small slowdowns amplify into user-visible tail latency.</td>
+            <td>Concurrent message processing, bthreads, low-contention Socket design, backup requests, load balancers, and per-call timeout/retry controls.</td>
+          </tr>
+          <tr>
+            <td>Event-loop maintainability</td>
+            <td>Pure callback/event-loop code is fast when handlers are tiny, but complex service code often blocks or fans out to downstream RPCs.</td>
+            <td>M:N bthread model lets service code look synchronous while still mapping many logical tasks onto fewer pthread workers.</td>
+          </tr>
+          <tr>
+            <td>Payload-copy overhead</td>
+            <td>RPC attachments, HTTP bodies, and serialized protobuf messages can be large enough that flattening buffers becomes visible.</td>
+            <td>IOBuf stores non-contiguous block references, supports zero-copy append/cut, and writes through scatter/gather IO when possible.</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <p>
+        This motivation aligns with broader distributed-systems literature. Dean and
+        Barroso's "The Tail at Scale" explains why large fan-out services must actively
+        reduce and tolerate latency variability. Google's Dapper paper explains why RPC
+        libraries are a natural place to put low-overhead tracing and observability, because
+        RPC calls connect the causal path across services. Thrift's Facebook white paper
+        shows the older industry pressure for language-neutral IDL and code generation.
+        bRPC accepts those pressures, but focuses more specifically on C++ infrastructure
+        performance, protocol coexistence, and production operability.
+      </p>
+    </section>
+
+    <section>
+      <h2 id="runtime">4. Runtime Internals</h2>
+
+      <h3>bthread</h3>
+      <p>
+        bthread is bRPC's M:N user-level threading library. Many bthreads map onto fewer
+        pthread workers. The goal is to preserve a synchronous programming style while
+        increasing concurrency and keeping better cache locality than a design that creates
+        many OS threads. The official bthread documentation emphasizes work stealing and
+        butex as key mechanisms: work stealing moves runnable bthreads across workers, and
+        butex lets bthreads and pthreads wait/wake each other.
+      </p>
+
+      <h3>EventDispatcher and InputMessenger</h3>
+      <p>
+        The IO documentation distinguishes bRPC from ordinary "IO thread reads and parses"
+        designs. bRPC's EventDispatcher waits for fd events, but the dispatcher itself is not
+        supposed to do all reading and writing. On input readiness, bRPC starts a bthread to
+        read from the fd. <code>InputMessenger</code> cuts bounded messages from bytes, uses the
+        protocol's <code>Parse</code> callback, and then runs <code>Process</code> callbacks. When several
+        messages are read from the same fd, bRPC can process them concurrently instead of
+        letting a large or slow message block following messages.
+      </p>
+
+      <h3>Socket and SocketId</h3>
+      <p>
+        <code>Socket</code> is the central object around a file descriptor and related resources.
+        bRPC uses a 64-bit <code>SocketId</code> to address sockets safely in a concurrent environment.
+        The IO documentation compares this design loosely to strong and weak references:
+        <code>Socket::Address</code> obtains a strong handle when the socket is still valid, while
+        <code>SetFailed</code> prevents future addressing and lets references drain.
+      </p>
+
+      <h3>Memory pools</h3>
+      <p>
+        The memory-management documentation describes <code>ResourcePool</code> and
+        <code>ObjectPool</code> as specialized allocators for same-sized internal objects. These reduce
+        global allocation contention in frequently allocated framework structures. The docs
+        also warn that this pattern is not a general-purpose recommendation for application
+        code, because isolated pools can waste memory if overused.
+      </p>
+    </section>
+
+    <section>
+      <h2 id="flows">5. Send and Receive Flow</h2>
+
+      <h3>Client send path</h3>
+      <div class="flow">
+        <div class="step">
+          <strong>1. User call</strong>
+          Application invokes generated protobuf stub or <code>Channel::CallMethod</code> with a
+          <code>Controller</code>, request, response, and optional callback.
+        </div>
+        <div class="step">
+          <strong>2. Select endpoint</strong>
+          Channel consults naming service, health status, and load balancer, then chooses
+          a socket or connection policy.
+        </div>
+        <div class="step">
+          <strong>3. Pack protocol</strong>
+          Protocol code serializes metadata and body. Attachments and protobuf streams are
+          represented as <code>IOBuf</code> where possible.
+        </div>
+        <div class="step">
+          <strong>4. Queue write</strong>
+          <code>Socket::Write</code> puts a write request into a wait-free MPSC list. The first
+          contender writes in-place; later contenders link requests.
+        </div>
+        <div class="step">
+          <strong>5. Flush to fd</strong>
+          bRPC batches pending buffers and writes them with scatter/gather IO when possible.
+          Partial writes keep the remaining <code>IOBuf</code> slices queued.
+        </div>
+        <div class="step">
+          <strong>6. Complete RPC</strong>
+          Response parsing finds the outstanding RPC context, fills response/controller
+          state, and runs the user's callback or wakes the waiting caller.
+        </div>
+      </div>
+
+      <h3>Server receive path</h3>
+      <div class="flow">
+        <div class="step">
+          <strong>1. fd event</strong>
+          EventDispatcher receives readiness from epoll and schedules input handling.
+        </div>
+        <div class="step">
+          <strong>2. Read bytes</strong>
+          A bthread reads from the socket into IOBuf-backed input storage.
+        </div>
+        <div class="step">
+          <strong>3. Detect protocol</strong>
+          The server tries protocol parsers. Once a connection's protocol is known, the
+          remembered protocol is tried first.
+        </div>
+        <div class="step">
+          <strong>4. Cut messages</strong>
+          <code>InputMessenger</code> cuts complete bounded messages from the byte stream.
+        </div>
+        <div class="step">
+          <strong>5. Run service</strong>
+          Protocol <code>Process</code> code parses higher-level message state and calls the user's
+          service method, usually in a bthread.
+        </div>
+        <div class="step">
+          <strong>6. Send response</strong>
+          Server-side <code>done->Run()</code> causes the framework to pack and write the response
+          through the same Socket/IOBuf write path.
+        </div>
+      </div>
+
+      <div class="callout">
+        In older designs, a single IO thread often owns an fd's read, parse, process, and
+        sometimes write path. bRPC intentionally splits event notification, message cutting,
+        user processing, and output flushing so that slow user work does not unnecessarily
+        block unrelated fd work or later messages on the same fd.
+      </div>
+    </section>
+
+    <section>
+      <h2 id="iobuf">6. IOBuf Role</h2>
+      <p>
+        <code>butil::IOBuf</code> is bRPC's non-contiguous, reference-counted byte buffer. It is used
+        for attachments in several protocols and for HTTP bodies. Internally, an IOBuf is a
+        sequence of references to block slices rather than a single flat <code>std::string</code>.
+      </p>
+
+      <pre><code>Logical payload:
+  [RPC header][protobuf body][attachment bytes]
+
+Physical IOBuf:
+  BlockRef(offset, len) -> 8 KB block
+  BlockRef(offset, len) -> 8 KB block
+  BlockRef(offset, len) -> user/protobuf/attachment data</code></pre>
+
+      <table>
+        <thead>
+          <tr>
+            <th>Operation</th>
+            <th>IOBuf behavior</th>
+            <th>Why it matters in bRPC</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>Append another IOBuf</td>
+            <td>Copies buffer references, not payload bytes.</td>
+            <td>Request or response attachments can be joined with protocol headers cheaply.</td>
+          </tr>
+          <tr>
+            <td>Cut from front</td>
+            <td>Adjusts offsets and moves refs.</td>
+            <td>Protocol parsers can remove headers/bodies without memmove.</td>
+          </tr>
+          <tr>
+            <td>Protobuf serialize/parse</td>
+            <td>Uses zero-copy stream wrappers.</td>
+            <td>Large protobuf messages avoid temporary flat buffers.</td>
+          </tr>
+          <tr>
+            <td>Socket write</td>
+            <td>Builds iovec-like slices and writes multiple blocks.</td>
+            <td>Output does not need to be flattened before kernel IO.</td>
+          </tr>
+          <tr>
+            <td>Partial write</td>
+            <td>Sent bytes are popped from the front.</td>
+            <td>Remaining unsent data stays as slice refs for the next flush.</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <p>
+        The official IOBuf documentation warns that IOBuf is not a universal long-lived string
+        replacement. A small retained slice may keep an 8 KB backing block alive. That tradeoff
+        is acceptable for short-lived RPC buffers, but can waste memory if application code stores
+        tiny slices for a long time.
+      </p>
+    </section>
+
+    <section>
+      <h2 id="governance">7. Service Governance</h2>
+      <p>
+        bRPC puts several service-governance features in the C++ client stack instead of
+        expecting a separate sidecar or proxy layer.
+      </p>
+
+      <div class="grid two">
+        <div class="card">
+          <h3>Naming service</h3>
+          <p>
+            A Channel can be initialized from schemes such as <code>list://</code>, <code>file://</code>,
+            <code>http://</code>, <code>https://</code>, <code>bns://</code>, and <code>consul://</code>. The naming-service
+            abstraction publishes server changes into the framework, which updates watched
+            server lists.
+          </p>
+        </div>
+        <div class="card">
+          <h3>Load balancing</h3>
+          <p>
+            The client can use round-robin, weighted round-robin, random, weighted random,
+            locality-aware, and consistent-hash strategies. Health checking and isolation
+            remove bad nodes and probe them for recovery.
+          </p>
+        </div>
+        <div class="card">
+          <h3>Reliability controls</h3>
+          <p>
+            Controller and Channel options cover timeout, retry, backup request, cancellation,
+            connection type, compression, SSL, authentication, and message-size limits.
+          </p>
+        </div>
+        <div class="card">
+          <h3>Protocol coexistence</h3>
+          <p>
+            Server-side protocol auto-detection allows several protocols on the same port.
+            Client side knows the requested protocol, so response parsing avoids server-side
+            protocol probing overhead.
+          </p>
+        </div>
+      </div>
+    </section>
+
+    <section>
+      <h2 id="observability">8. Observability</h2>
+      <p>
+        bRPC's observability model is one of its strongest differentiators. The framework
+        exposes operational data over built-in HTTP services. This is important because RPC
+        frameworks sit on the causal path of nearly every distributed request.
+      </p>
+
+      <table>
+        <thead>
+          <tr>
+            <th>Feature</th>
+            <th>Purpose</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>/vars</code> and <code>/brpc_metrics</code></td>
+            <td>bvar metrics for framework and application counters, including Prometheus export.</td>
+          </tr>
+          <tr>
+            <td><code>/status</code></td>
+            <td>Service-level status and version information.</td>
+          </tr>
+          <tr>
+            <td><code>/connections</code></td>
+            <td>Connection inspection, including SSL information when enabled.</td>
+          </tr>
+          <tr>
+            <td><code>/flags</code></td>
+            <td>Runtime inspection and modification of gflags where supported.</td>
+          </tr>
+          <tr>
+            <td><code>/rpcz</code></td>
+            <td>RPC-level tracing/debugging similar in spirit to putting low-overhead instrumentation inside the RPC library.</td>
+          </tr>
+          <tr>
+            <td>CPU, heap, contention profilers</td>
+            <td>On-demand diagnosis of hot functions, allocations, and lock contention in live services.</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <p>
+        The design philosophy is close to the Dapper paper's central lesson: in large
+        service graphs, tracing and diagnostics become much more effective when they are
+        integrated into common RPC and threading libraries rather than manually recreated
+        by every service team.
+      </p>
+    </section>
+
+    <section>
+      <h2 id="scenarios">9. Use Scenarios</h2>
+
+      <h3>Strong fits</h3>
+      <ul>
+        <li>
+          Large C++ service fleets that need high QPS, low latency, and robust tail behavior.
+        </li>
+        <li>
+          Search, recommendation, advertising, storage, machine-learning serving, and other
+          fan-out systems where one request may issue many downstream RPCs.
+        </li>
+        <li>
+          Organizations with multiple existing protocols that need a unifying runtime and
+          a migration bridge rather than a clean-slate protocol migration.
+        </li>
+        <li>
+          Systems that need built-in operational debugging on every process without deploying
+          a separate observability agent first.
+        </li>
+        <li>
+          Internal APIs that need protobuf RPC, HTTP/JSON access, gRPC/h2 compatibility,
+          or protocol-specific clients such as Redis/Memcached/Thrift under one API style.
+        </li>
+        <li>
+          Distributed storage and consensus systems using braft or C++ infrastructure where
+          RPC overhead and diagnostic clarity are important.
+        </li>
+      </ul>
+
+      <h3>Weaker fits</h3>
+      <ul>
+        <li>
+          A polyglot public API where standard gRPC ecosystem support across many languages
+          matters more than C++ runtime performance.
+        </li>
+        <li>
+          A Java-centered enterprise microservice platform already standardized on Dubbo,
+          Spring Cloud, or service-mesh governance.
+        </li>
+        <li>
+          Small CRUD services where ordinary REST plus HTTP server/client libraries are
+          sufficient and operational complexity should stay minimal.
+        </li>
+        <li>
+          Browser-facing APIs that need direct browser support. bRPC can serve HTTP, but
+          the full RPC value is mostly for service-to-service traffic.
+        </li>
+      </ul>
+    </section>
+
+    <section>
+      <h2 id="alternatives">10. Industry Alternatives</h2>
+      <table>
+        <thead>
+          <tr>
+            <th>Framework</th>
+            <th>Primary identity</th>
+            <th>Strengths</th>
+            <th>Compared with bRPC</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>bRPC</td>
+            <td>C++ production RPC runtime and multi-protocol framework.</td>
+            <td>High-performance C++ runtime, bthread, IOBuf, multi-protocol server/client, built-in diagnostics, Baidu protocol compatibility.</td>
+            <td>Best when C++ service performance and protocol coexistence matter.</td>
+          </tr>
+          <tr>
+            <td>gRPC</td>
+            <td>HTTP/2 + protobuf RPC framework from Google, now common across cloud-native stacks.</td>
+            <td>Broad language support, standard service definition, streaming, authentication, load-balancing and tracing hooks, strong ecosystem.</td>
+            <td>bRPC can speak gRPC/h2, but gRPC is usually the safer default for public, polyglot APIs.</td>
+          </tr>
+          <tr>
+            <td>Apache Thrift</td>
+            <td>IDL, serialization, and RPC framework originally from Facebook.</td>
+            <td>Cross-language code generation, multiple transports/protocols, compact binary encodings, mature IDL model.</td>
+            <td>bRPC can access/serve Thrift protocol while adding its own thread-safe client API, load balancing, timeout/retry, and diagnostics.</td>
+          </tr>
+          <tr>
+            <td>Apache Dubbo</td>
+            <td>Microservice RPC and governance framework, historically strong in Java/Alibaba ecosystems.</td>
+            <td>Service discovery, traffic governance, Java/Spring integration, Dubbo2 TCP protocol, Triple protocol compatible with gRPC.</td>
+            <td>Dubbo is more of an application-level microservice governance framework; bRPC is a C++ infrastructure runtime with deep IO/threading control.</td>
+          </tr>
+          <tr>
+            <td>Twitter Finagle</td>
+            <td>Scala/JVM protocol-agnostic RPC system.</td>
+            <td>Composable filters, futures, client-side load balancing, protocol abstraction, high-concurrency JVM services.</td>
+            <td>Similar protocol-agnostic ambition, but in the JVM/Scala ecosystem rather than C++ with bthread/IOBuf.</td>
+          </tr>
+          <tr>
+            <td>REST over HTTP libraries</td>
+            <td>Resource-oriented web APIs using HTTP/JSON or similar formats.</td>
+            <td>Universal interoperability, browser/tool support, easy debugging, simple deployment.</td>
+            <td>REST is simpler and more public-facing. bRPC is better for internal high-QPS service calls, binary payloads, and controlled service fleets.</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <div class="warning callout">
+        The bRPC benchmark page contains direct comparisons against older versions of UB,
+        hulu-pbrpc, sofa-pbrpc, Thrift, and gRPC. Treat those numbers as historical evidence
+        for bRPC's design motivation rather than as current universal benchmark results.
+        Modern gRPC, Dubbo, Netty, Linux kernels, NICs, and compilers have changed substantially.
+      </div>
+    </section>
+
+    <section>
+      <h2 id="tradeoffs">11. Tradeoffs</h2>
+      <table>
+        <thead>
+          <tr>
+            <th>Design choice</th>
+            <th>Benefit</th>
+            <th>Cost or risk</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>M:N bthread model</td>
+            <td>Synchronous-looking code with high concurrency and better scheduling control than many blocking pthreads.</td>
+            <td>Framework-specific runtime semantics; blocking pthread/system calls can still exhaust workers if overused.</td>
+          </tr>
+          <tr>
+            <td>Multi-protocol support</td>
+            <td>Migration bridge and compatibility with heterogeneous production fleets.</td>
+            <td>More complex protocol detection, testing matrix, and operational surface.</td>
+          </tr>
+          <tr>
+            <td>IOBuf non-contiguous buffers</td>
+            <td>Low-copy attachment/body handling and efficient partial writes.</td>
+            <td>Not a generic string. Long-lived slices can retain full 8 KB blocks.</td>
+          </tr>
+          <tr>
+            <td>Built-in debug services</td>
+            <td>Fast field diagnosis and low-friction observability.</td>
+            <td>Must be protected in production. Public exposure can leak internal state.</td>
+          </tr>
+          <tr>
+            <td>C++ focus</td>
+            <td>Deep performance control and integration with existing C++ infrastructure.</td>
+            <td>Less natural than gRPC/Thrift/Dubbo for broad multi-language product APIs.</td>
+          </tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section>
+      <h2 id="references">12. References</h2>
+      <ol>
+        <li>
+          Apache bRPC, <a href="https://brpc.apache.org/docs/overview/">bRPC overview</a>.
+        </li>
+        <li>
+          Apache bRPC, <a href="https://github.com/apache/brpc">apache/brpc GitHub repository and README</a>.
+        </li>
+        <li>
+          Apache bRPC, <a href="https://brpc.apache.org/docs/rpc-in-depth/io/">RPC in depth: IO</a>.
+        </li>
+        <li>
+          Apache bRPC source, <a href="https://github.com/apache/brpc/blob/master/src/brpc/event_dispatcher.cpp">src/brpc/event_dispatcher.cpp</a>.
+        </li>
+        <li>
+          Apache bRPC, <a href="https://brpc.apache.org/docs/bthread/bthread/">bthread documentation</a>.
+        </li>
+        <li>
+          Apache bRPC, <a href="https://brpc.apache.org/docs/c%2B%2B-base/iobuf/">IOBuf documentation</a>.
+        </li>
+        <li>
+          Apache bRPC, <a href="https://raw.githubusercontent.com/apache/brpc/master/docs/en/rdma.md">RDMA documentation</a>.
+        </li>
+        <li>
+          Apache bRPC, <a href="https://brpc.apache.org/docs/rpc-in-depth/new-protocol/">New Protocol documentation</a>.
+        </li>
+        <li>
+          Apache bRPC, <a href="https://brpc.apache.org/docs/server/basics/">Server basics</a> and <a href="https://brpc.apache.org/docs/client/basics/">Client basics</a>.
+        </li>
+        <li>
+          Apache bRPC, <a href="https://brpc.apache.org/docs/rpc-in-depth/load-balancing/">Load Balancing</a>.
+        </li>
+        <li>
+          Apache bRPC, <a href="https://brpc.apache.org/docs/builtin-services/vars/">bvar and vars built-in service</a>.
+        </li>
+        <li>
+          Apache bRPC, <a href="https://brpc.apache.org/docs/benchmark/">Performance benchmark</a>.
+        </li>
+        <li>
+          gRPC, <a href="https://grpc.io/docs/what-is-grpc/introduction/">Introduction to gRPC</a> and <a href="https://grpc.io/about/">About gRPC</a>.
+        </li>
+        <li>
+          Mark Slee, Aditya Agarwal, Marc Kwiatkowski, <a href="https://thrift.apache.org/static/files/thrift-20070401.pdf">Thrift: Scalable Cross-Language Services Implementation</a>, Facebook white paper, 2007.
+        </li>
+        <li>
+          Apache Dubbo, <a href="https://dubbo.apache.org/en/overview/what/">Introduction to Dubbo</a> and <a href="https://dubbo.apache.org/en/overview/mannual/java-sdk/reference-manual/protocol/overview/">Protocol Overview</a>.
+        </li>
+        <li>
+          Twitter Finagle, <a href="https://twitter.github.io/finagle/">Finagle project overview</a>.
+        </li>
+        <li>
+          Jeffrey Dean and Luiz Andre Barroso, <a href="https://cacm.acm.org/research/the-tail-at-scale/">The Tail at Scale</a>, Communications of the ACM, 2013.
+        </li>
+        <li>
+          Benjamin H. Sigelman et al., <a href="https://research.google/pubs/dapper-a-large-scale-distributed-systems-tracing-infrastructure/">Dapper, a Large-Scale Distributed Systems Tracing Infrastructure</a>, Google technical report, 2010.
+        </li>
+      </ol>
+    </section>
+
+    <footer>
+      This document summarizes publicly available bRPC documentation and related industry/academic
+      references. It intentionally separates bRPC's own claims from broader industry context.
+    </footer>
+  </main>
+</body>
+</html>

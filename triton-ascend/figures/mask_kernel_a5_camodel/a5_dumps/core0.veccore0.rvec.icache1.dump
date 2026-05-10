@@ -1,0 +1,45 @@
+[info] 1139 Icache create a req, pc:0x10d0d200, Id:1, warpId:0, setIdx:4, tagAddr:0x10d0d, type:3, vfId:70
+[info] 1141 prefetch MISS req send to misq, pc:0x10d0d200,id:1, setIdx:4, allocate:1
+[info] 1142 Update missInfoBuf, pc:0x10d0d200, misqEntry:0, id:1
+[info] 1142 Allocate new Misq entry, pc:0x10d0d200, entryId:0, id:1, send to tagArb:1
+[info] 1143 Icache InvalidHitInfoBuf, req_addr:0x10d0d200, hitInfoAddr:0x0, tag_addr:0x0, setIdx:4, wayId:0
+[info] 1143 linefill update tagRam, pc:0x10d0d200, setIdx:4, wayId:0, pending:1, instrId:1, vfId:70
+[info] 1143 send Read biu Req, addr:0x10d0d200, misqId:0, gid: 520
+[info] 1545 recv Read biu Rsp, addr:0x10d0d200, misqId:0, gid: 520
+[info] 1545 flush missInfoBuf, pc:0x10d0d200
+[info] 1545 rsp send to dataArb:1, req pc:0x10d0d200,type:1
+[info] 1546 finish linefill, req pc:0x10d0d200, setIdx:4, wayId:0, pend:0, misqId:0
+[info] 1582 Icache create a req, pc:0x10d0d200, Id:2, warpId:0, setIdx:4, tagAddr:0x10d0d, type:2, vfId:0
+[info] 1583 Icache create a req, pc:0x10d0d220, Id:3, warpId:0, setIdx:4, tagAddr:0x10d0d, type:2, vfId:0
+[info] 1584 instr req lookup tag HIT, req pc:0x10d0d200, id:2, setIdx:4, wayId:0, vfId:0
+[info] 1584 update hit info buffer, pc:0x10d0d200, setIdx:4, wayId:0
+[info] 1584 match hit info buffer, id:4, pc:0x10d0d240, wayIdx:0
+[info] 1584 Icache create a req, pc:0x10d0d240, Id:4, warpId:0, setIdx:4, tagAddr:0x10d0d, type:2, vfId:0
+[info] 1585 instr req lookup tag HIT, req pc:0x10d0d220, id:3, setIdx:4, wayId:0, vfId:0
+[info] 1585 update hit info buffer, pc:0x10d0d220, setIdx:4, wayId:0
+[info] 1585 match hit info buffer, id:5, pc:0x10d0d260, wayIdx:0
+[info] 1585 Icache create a req, pc:0x10d0d260, Id:5, warpId:0, setIdx:4, tagAddr:0x10d0d, type:2, vfId:0
+[info] 1585 send req back to ifu, pc:0x10d0d200, id:2.
+[info] 1586 instr req HIT hitInfoBuffer, req pc:0x10d0d240, id:4, setIdx:4, wayId:0, vfId:0
+[info] 1586 send req back to ifu, pc:0x10d0d220, id:3.
+[info] 1587 instr req HIT hitInfoBuffer, req pc:0x10d0d260, id:5, setIdx:4, wayId:0, vfId:0
+[info] 1587 send req back to ifu, pc:0x10d0d240, id:4.
+[info] 1588 send req back to ifu, pc:0x10d0d260, id:5.
+[info] 1594 match hit info buffer, id:6, pc:0x10d0d260, wayIdx:0
+[info] 1594 Icache create a req, pc:0x10d0d260, Id:6, warpId:0, setIdx:4, tagAddr:0x10d0d, type:2, vfId:0
+[info] 1595 Icache create a req, pc:0x10d0d280, Id:7, warpId:0, setIdx:5, tagAddr:0x10d0d, type:2, vfId:0
+[info] 1596 instr req HIT hitInfoBuffer, req pc:0x10d0d260, id:6, setIdx:4, wayId:0, vfId:0
+[info] 1597 instr req lookup tag MISS, req pc:0x10d0d280, id:7, setIdx:5, allocate:1
+[info] 1597 lock new req, pc:0x10d0d280, id:7, addr:0x21a1a5
+[info] 1597 send req back to ifu, pc:0x10d0d260, id:6.
+[info] 1598 Update missInfoBuf, pc:0x10d0d280, misqEntry:0, id:7
+[info] 1598 Allocate new Misq entry, pc:0x10d0d280, entryId:0, id:7, send to tagArb:1
+[info] 1599 linefill update tagRam, pc:0x10d0d280, setIdx:5, wayId:0, pending:1, instrId:7, vfId:0
+[info] 1599 send Read biu Req, addr:0x10d0d280, misqId:0, gid: 522
+[info] 1763 clear tagRam pendingBit!
+[info] 2011 recv Read biu Rsp, addr:0x10d0d280, misqId:0, gid: 522
+[info] 2011 flush missInfoBuf, pc:0x10d0d280
+[info] 2011 rsp send to dataArb:1, req pc:0x10d0d280,type:0
+[info] 2012 finish linefill, req pc:0x10d0d280, setIdx:5, wayId:0, pend:0, misqId:0
+[info] 2012 unLock req, pc:0x10d0d280, id:7, addr:0x21a1a5
+[info] ++++++++++++++++++++++core: 0, subcore: 1, start: 216, tick: 2232, kernelId: 0, blkID: 0, blkDim: 1, rtsqId: 1, streamId: 0, taskId: 0, subtaskId: 0, threadId: 0, done++++++++++++++++++++++.

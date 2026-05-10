@@ -1,0 +1,7 @@
+[info] 1127 [Push Instr] name=WAIT_FLAG pc=0x10D0D0CC id=51
+[info] 1136 [Push Instr] name=VF pc=0x10D0D114 id=70
+[info] 1567 [release wait_flag] instr.name=WAIT_FLAG            instr.pc=0x10D0D0CC instr.id=51
+[info] 1568 [pop Instr] name=VF pc=0x10D0D114 id=70. queue.size=0
+[info] 1815 [RETIRE INSTR] instr.name=VF                   instr.pc=0x10D0D114 instr.id=70
+[info] 1815 [release set_flag] name=SET_FLAG pc=0x10D0D11C id=71
+[info] ++++++++++++++++++++++core: 0, subcore: 1, start: 216, tick: 2232, kernelId: 0, blkID: 0, blkDim: 1, rtsqId: 1, streamId: 0, taskId: 0, subtaskId: 0, threadId: 0, done++++++++++++++++++++++.

@@ -1,0 +1,26 @@
+[info] [1822]: recv_mte_wr_cmd, port: mte1, addr: 0x0, size:512, gid: 523, cmdIdx:0, stbIdx:1, atomicStore:0
+[info] [1823]: send_aw_cmd, port: mte1, align_addr 0x0, wr_len 512, addr: 0x0, gid:523, cmdIdx: 0, stbIdx:1, atomicLoad: 0, atomicStore: 0, retire_set: 0, axi_port: 0
+[info] [1823]: recv_mte_wr_cmd, port: mte1, addr: 0x200, size:512, gid: 524, cmdIdx:1, stbIdx:3, atomicStore:0
+[info] [1824]: send_aw_cmd, port: mte1, align_addr 0x200, wr_len 512, addr: 0x200, gid:524, cmdIdx: 1, stbIdx:3, atomicLoad: 0, atomicStore: 0, retire_set: 1, axi_port: 0
+[info] [1824]: send_wr_cmd_rsp, port: mte1, addr: 0x0, gid: 523, stbIdx:1
+[info] [1825]: send_wr_cmd_rsp, port: mte1, addr: 0x200, gid: 524, stbIdx:3
+[info] 1826: bdwt_acculator, tnx_id: 0, size: 512
+[info] 1827: bdwt_acculator, tnx_id: 0, size: 512
+[info] [1848]: recv_wr_data, port: mte1, addr: 0x0, size: 512 gid: 523, stbidx: 1, retire_set: 0
+[info] [1852]: recv_wr_data, port: mte1, addr: 0x200, size: 512 gid: 524, stbidx: 3, retire_set: 1
+[info] [1852]:write_store_buf, port:mte1, addr:0x0, gid: 523, stbIdx:1, cycleCnt:4
+[info] [1856]:write_store_buf, port:mte1, addr:0x200, gid: 524, stbIdx:3, cycleCnt:4
+[info] [2066]: recv_wack, port: mte1, addr: 0x0, gid: 523, atomicLoad: 0, cbusy: 0
+[info] [2067]: push biu_tag_pool, gid: 523, stbIdx:1,cmdIdx:0
+[info] [2067]: push biu_tag_pool, gid: 523, idx:2
+[info] [2067]: ict_wr_data_ready, addr: 0x0, gid: 523, stbidx: 0
+[info] [2067]: recv_wack, port: mte1, addr: 0x200, gid: 524, atomicLoad: 0, cbusy: 0
+[info] [2068]: push biu_tag_pool, gid: 524, stbIdx:3,cmdIdx:1
+[info] [2068]: push biu_tag_pool, gid: 524, idx:4
+[info] [2068]: ict_wr_data_ready, addr: 0x200, gid: 524, stbidx: 2
+[info] [2074]: send_wr_data, port: mte1, addr: 0x0, size: 512,gid: 523, stbidx: 1
+[info] [2078]: send_wr_data, port: mte1, addr: 0x200, size: 512,gid: 524, stbidx: 3
+[info] [2103]: recv_brsp, port: mte1, addr: 0x200, gid: 524, cmdIdx: 1, instr_id: 10
+[info] [2112]: recv_brsp, port: mte1, addr: 0x0, gid: 523, cmdIdx: 0, instr_id: 10
+[info] [2118]: send_data_rsp, port: mte1, addr: 0x200, gid: 524
+[info] [2127]: send_data_rsp, port: mte1, addr: 0x0, gid: 523

@@ -1,0 +1,749 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>SMAP 集成路线图：可吸收的内核特性</title>
+<style>
+:root {
+    --bg: #0d1117;
+    --card: #161b22;
+    --border: #30363d;
+    --text: #c9d1d9;
+    --heading: #e6edf3;
+    --accent: #58a6ff;
+    --accent2: #7ee787;
+    --accent3: #d2a8ff;
+    --accent4: #ff7b72;
+    --accent5: #ffa657;
+    --code-bg: #0d1117;
+    --link: #58a6ff;
+}
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    line-height: 1.7;
+    padding: 2rem;
+    max-width: 1200px;
+    margin: 0 auto;
+}
+h1 { color: var(--heading); font-size: 2.2rem; margin-bottom: 0.5rem; border-bottom: 1px solid var(--border); padding-bottom: 1rem; }
+h2 { color: var(--accent); font-size: 1.6rem; margin-top: 2.5rem; margin-bottom: 1rem; border-bottom: 1px solid var(--border); padding-bottom: 0.5rem; }
+h3 { color: var(--accent2); font-size: 1.25rem; margin-top: 1.8rem; margin-bottom: 0.8rem; }
+h4 { color: var(--accent3); font-size: 1.05rem; margin-top: 1.2rem; margin-bottom: 0.5rem; }
+p { margin-bottom: 1rem; }
+a { color: var(--link); text-decoration: none; }
+a:hover { text-decoration: underline; }
+code {
+    font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
+    background: var(--code-bg);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 0.15em 0.4em;
+    font-size: 0.88em;
+    color: var(--accent5);
+}
+pre {
+    background: var(--code-bg);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 1.2rem;
+    overflow-x: auto;
+    margin-bottom: 1.2rem;
+    font-size: 0.85rem;
+    line-height: 1.5;
+}
+pre code { border: none; padding: 0; background: none; color: var(--text); }
+.card {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 1.5rem;
+    margin-bottom: 1.5rem;
+}
+.svg-container {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 1rem;
+    margin: 1.5rem 0;
+    overflow-x: auto;
+    text-align: center;
+}
+.svg-container svg { max-width: 100%; height: auto; }
+table { width: 100%; border-collapse: collapse; margin-bottom: 1.5rem; }
+th, td { padding: 0.6rem 0.8rem; border: 1px solid var(--border); text-align: left; font-size: 0.9rem; vertical-align: top; }
+th { background: #1c2128; color: var(--accent); font-weight: 600; }
+td { background: var(--card); }
+ul, ol { margin: 0.5rem 0 1rem 1.5rem; }
+li { margin-bottom: 0.3rem; }
+.tag {
+    display: inline-block;
+    padding: 0.1em 0.5em;
+    border-radius: 12px;
+    font-size: 0.78em;
+    font-weight: 600;
+    margin-right: 0.3em;
+}
+.tag-signal  { background: #58a6ff20; color: #58a6ff; border: 1px solid #58a6ff40; }
+.tag-action  { background: #7ee78720; color: #7ee787; border: 1px solid #7ee78740; }
+.tag-framework { background: #d2a8ff20; color: #d2a8ff; border: 1px solid #d2a8ff40; }
+.tag-research { background: #ffa65720; color: #ffa657; border: 1px solid #ffa65740; }
+.tag-low  { background: #3fb95020; color: #3fb950; border: 1px solid #3fb95040; }
+.tag-med  { background: #ffa65720; color: #ffa657; border: 1px solid #ffa65740; }
+.tag-high { background: #ff7b7220; color: #ff7b72; border: 1px solid #ff7b7240; }
+.subtitle { color: #8b949e; font-size: 1.1rem; margin-bottom: 2rem; }
+.toc { background: var(--card); border: 1px solid var(--border); border-radius: 8px; padding: 1.5rem; margin: 1.5rem 0; }
+.toc h3 { margin-top: 0; color: var(--heading); }
+.toc ol { margin-bottom: 0; }
+.toc li { margin-bottom: 0.4rem; }
+.toc a { color: var(--accent); }
+.file-ref { color: #8b949e; font-size: 0.85em; font-style: italic; }
+.highlight { color: var(--accent5); font-weight: 600; }
+.direction { border-left: 3px solid var(--accent); padding-left: 1rem; margin: 2rem 0; }
+.direction h3 { margin-top: 0; }
+.meta-table td { font-size: 0.88rem; }
+.meta-table td:first-child { background: #1c2128; color: var(--accent3); font-weight: 600; width: 130px; }
+blockquote { border-left: 3px solid var(--accent5); padding: 0.5rem 1rem; margin: 1rem 0; background: var(--card); color: #8b949e; font-style: italic; }
+</style>
+</head>
+<body>
+
+<h1>SMAP 集成路线图</h1>
+<p class="subtitle">现代 Linux 内存管理特性盘点——按价值、工作量与战略契合度排序</p>
+
+<p>SMAP 目前是一个以物理地址为驱动的分层守护进程：ACTC + AF-bit 访问跟踪、按进程的策略引擎、通过 <code>migrate_pages()</code> 实现基于 NUMA 节点的 L1/L2 迁移，以及（截至 2026-04-17）通过 <code>reclaim_pages()</code> 实现的 NVMe 换出。这覆盖了三层放置的<strong>基本</strong>工作。但自 SMAP 设计以来，Linux 内存子系统已经有了长足的发展；若干内核特性可以让 SMAP 更智能、更具响应性、更少定制。</p>
+
+<p>本文档梳理了<strong>十五个集成方向</strong>，说明每个方向填补的差距，勾勒具体的集成方案，并提出分阶段的路线图。这是一份盘点，不是承诺——目的是把各种权衡摊开讲清楚，以便我们做出正确的选择。</p>
+
+<div class="toc">
+<h3>目录</h3>
+<ol>
+<li><a href="#framing">问题框架：SMAP 当前看得到与看不到的</a></li>
+<li><a href="#current">当前架构快照</a></li>
+<li><a href="#directions">十五个方向</a>
+    <ol>
+        <li><a href="#d-psi">PSI —— 压力停顿信息</a></li>
+        <li><a href="#d-mglru">MGLRU —— 多代 LRU</a></li>
+        <li><a href="#d-hmat">HMAT / CDAT —— 层拓扑发现</a></li>
+        <li><a href="#d-spe">SPE / PMU —— 硬件访问采样</a></li>
+        <li><a href="#d-cxlctr">CXL.mem 硬件计数器</a></li>
+        <li><a href="#d-zswap">zswap / zram —— 内存内压缩层</a></li>
+        <li><a href="#d-memreclaim">cgroup memory.reclaim —— 作用域回收</a></li>
+        <li><a href="#d-swapthrottle">cgroup memory.swap —— 按容器限流</a></li>
+        <li><a href="#d-iouring">io_uring —— 异步 swap I/O</a></li>
+        <li><a href="#d-uffd">userfaultfd —— 用户态缺页处理</a></li>
+        <li><a href="#d-damon">DAMON 操作集 —— 框架重构</a></li>
+        <li><a href="#d-bpf-intro">eBPF —— 内省</a></li>
+        <li><a href="#d-bpf-policy">eBPF —— 可加载策略</a></li>
+        <li><a href="#d-rl">强化学习自动调优</a></li>
+        <li><a href="#d-rdma">RDMA —— 跨节点迁移</a></li>
+    </ol>
+</li>
+<li><a href="#matrix">优先级矩阵</a></li>
+<li><a href="#roadmap">分阶段路线图</a></li>
+<li><a href="#references">参考资料</a></li>
+</ol>
+</div>
+
+<!-- ============================================================ -->
+<h2 id="framing">1. 问题框架：SMAP 当前看得到与看不到的</h2>
+
+<p>在盘点特性之前，先给各类<strong>差距</strong>命名会有帮助。下面每一项集成方向都落在以下某个类别中：</p>
+
+<h3>缺失的信号（输入）</h3>
+<ul>
+<li><span class="tag tag-signal">压力</span> 当前工作负载<em>实际</em>承受了多少痛苦。SMAP 看得到内存水平（供给侧），但看不到停顿（需求侧）。→ PSI。</li>
+<li><span class="tag tag-signal">代</span> 在内核自身视角下每一页有多老/多冷。SMAP 的 AF-bit 扫描器重复了内核已经在做的工作。→ MGLRU。</li>
+<li><span class="tag tag-signal">拓扑</span> 哪些 NUMA 节点是 DRAM、哪些是 CXL、哪些是 PMEM，以及它们的相对速度。SMAP 将其硬编码。→ HMAT / CDAT。</li>
+<li><span class="tag tag-signal">模式</span> 实际被访问的地址，以及延迟。AF-bit 是二值的；SPE 采样是连续的。→ ARM SPE / x86 IBS。</li>
+<li><span class="tag tag-signal">设备</span> 由硬件暴露的按 CXL 设备计的访问次数。→ CXL 3.0 DPA 计数器。</li>
+</ul>
+
+<h3>缺失的手段（输出）</h3>
+<ul>
+<li><span class="tag tag-action">压缩层</span> 在落盘之前先走内存内的压缩存储。→ zswap / zram。</li>
+<li><span class="tag tag-action">作用域</span> 按 cgroup 回收，而不是按进程或全局回收。→ cgroup memory.reclaim。</li>
+<li><span class="tag tag-action">限流</span> 防止单一租户失控消耗 swap。→ memory.swap.{max,high}。</li>
+<li><span class="tag tag-action">异步 I/O</span> 对 swap 设备 I/O 管线的显式控制。→ io_uring。</li>
+<li><span class="tag tag-action">缺页时刻</span> 在缺页时刻做放置决策，而非事后处理。→ userfaultfd。</li>
+</ul>
+
+<h3>缺失的框架集成</h3>
+<ul>
+<li><span class="tag tag-framework">框架</span> 基于 kprobe 的自定义符号查找在跨内核版本时很脆弱。→ eBPF 内省。</li>
+<li><span class="tag tag-framework">框架</span> 策略是编译进去的 C 代码；难以做实验。→ eBPF 可加载策略。</li>
+<li><span class="tag tag-framework">框架</span> SMAP 重新实现了访问跟踪、过滤、配额——DAMON 已经全都具备。→ DAMON 操作集。</li>
+</ul>
+
+<h3>研究 / 长期</h3>
+<ul>
+<li><span class="tag tag-research">研究</span> 静态阈值对大多数工作负载都是错误的。→ 强化学习自动调优。</li>
+<li><span class="tag tag-research">研究</span> 通过 CXL 互联或 RDMA 在多台机器间共享内存池。→ RDMA 跨节点。</li>
+</ul>
+
+<!-- ============================================================ -->
+<h2 id="current">2. 当前架构快照</h2>
+
+<div class="svg-container">
+<svg viewBox="0 0 920 420" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <marker id="arr" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#58a6ff"/>
+    </marker>
+  </defs>
+  <rect width="920" height="420" fill="#0d1117"/>
+
+  <!-- 用户态守护进程 -->
+  <rect x="20" y="40" width="420" height="150" fill="#161b22" stroke="#58a6ff" rx="8"/>
+  <text x="230" y="65" text-anchor="middle" fill="#58a6ff" font-size="15" font-weight="bold">用户态守护进程</text>
+  <rect x="40" y="80" width="180" height="40" fill="#0d1117" stroke="#30363d" rx="4"/>
+  <text x="130" y="105" text-anchor="middle" fill="#7ee787" font-size="12">场景分类器</text>
+  <rect x="240" y="80" width="180" height="40" fill="#0d1117" stroke="#30363d" rx="4"/>
+  <text x="330" y="105" text-anchor="middle" fill="#7ee787" font-size="12">策略引擎</text>
+  <rect x="40" y="130" width="180" height="40" fill="#0d1117" stroke="#30363d" rx="4"/>
+  <text x="130" y="155" text-anchor="middle" fill="#7ee787" font-size="12">冷窗口跟踪器</text>
+  <rect x="240" y="130" width="180" height="40" fill="#0d1117" stroke="#30363d" rx="4"/>
+  <text x="330" y="155" text-anchor="middle" fill="#7ee787" font-size="12">IPC / SDK（17 个 API）</text>
+
+  <!-- 内核模块 -->
+  <rect x="480" y="40" width="420" height="150" fill="#161b22" stroke="#d2a8ff" rx="8"/>
+  <text x="690" y="65" text-anchor="middle" fill="#d2a8ff" font-size="15" font-weight="bold">内核模块（SMAP）</text>
+  <rect x="500" y="80" width="180" height="40" fill="#0d1117" stroke="#30363d" rx="4"/>
+  <text x="590" y="105" text-anchor="middle" fill="#ffa657" font-size="12">ACTC 驱动</text>
+  <rect x="700" y="80" width="180" height="40" fill="#0d1117" stroke="#30363d" rx="4"/>
+  <text x="790" y="105" text-anchor="middle" fill="#ffa657" font-size="12">AF-bit 扫描器</text>
+  <rect x="500" y="130" width="180" height="40" fill="#0d1117" stroke="#30363d" rx="4"/>
+  <text x="590" y="155" text-anchor="middle" fill="#ffa657" font-size="12">do_migrate (ioctl)</text>
+  <rect x="700" y="130" width="180" height="40" fill="#0d1117" stroke="#30363d" rx="4"/>
+  <text x="790" y="155" text-anchor="middle" fill="#ffa657" font-size="12">do_swap_out (ioctl)</text>
+
+  <!-- Ioctl 箭头 -->
+  <line x1="440" y1="115" x2="480" y2="115" stroke="#58a6ff" stroke-width="2" marker-end="url(#arr)"/>
+  <text x="460" y="108" text-anchor="middle" fill="#8b949e" font-size="10">ioctl</text>
+
+  <!-- 各层 -->
+  <rect x="60" y="230" width="220" height="140" fill="#161b22" stroke="#3fb950" rx="8"/>
+  <text x="170" y="255" text-anchor="middle" fill="#3fb950" font-size="14" font-weight="bold">L1：本地 DRAM</text>
+  <text x="170" y="285" text-anchor="middle" fill="#c9d1d9" font-size="11">NUMA 0-3</text>
+  <text x="170" y="310" text-anchor="middle" fill="#8b949e" font-size="11">热工作集</text>
+
+  <rect x="320" y="230" width="220" height="140" fill="#161b22" stroke="#58a6ff" rx="8"/>
+  <text x="430" y="255" text-anchor="middle" fill="#58a6ff" font-size="14" font-weight="bold">L2：CXL / PMEM</text>
+  <text x="430" y="285" text-anchor="middle" fill="#c9d1d9" font-size="11">NUMA 4（远端）</text>
+  <text x="430" y="310" text-anchor="middle" fill="#8b949e" font-size="11">温 / 慢衰减</text>
+
+  <rect x="580" y="230" width="260" height="140" fill="#161b22" stroke="#ff7b72" rx="8"/>
+  <text x="710" y="255" text-anchor="middle" fill="#ff7b72" font-size="14" font-weight="bold">L3：NVMe swap</text>
+  <text x="710" y="285" text-anchor="middle" fill="#c9d1d9" font-size="11">冷 —— reclaim_pages()</text>
+  <text x="710" y="310" text-anchor="middle" fill="#8b949e" font-size="11">新增，commit 39eb533 之后</text>
+
+  <!-- 层之间箭头 -->
+  <line x1="280" y1="290" x2="320" y2="290" stroke="#58a6ff" stroke-width="2" marker-end="url(#arr)"/>
+  <line x1="320" y1="320" x2="280" y2="320" stroke="#58a6ff" stroke-width="2" marker-end="url(#arr)"/>
+  <line x1="540" y1="290" x2="580" y2="290" stroke="#ff7b72" stroke-width="2" marker-end="url(#arr)"/>
+
+  <text x="880" y="400" text-anchor="end" fill="#8b949e" font-size="10" font-style="italic">当前 SMAP（截至 2026-04-18）</text>
+</svg>
+</div>
+
+<p>SMAP 今天据以行动的信号：ACTC 计数器、AF-bit 扫描、L2 水位线、按进程的冷窗口计数。手段：<code>migrate_pages()</code>、<code>reclaim_pages()</code>。下文所有其他内容都是对这两个集合的潜在扩展。</p>
+
+<!-- ============================================================ -->
+<h2 id="directions">3. 十五个方向</h2>
+
+<p>每个方向以统一模板呈现：<strong>填补的差距</strong>、<strong>具体集成方案</strong>、<strong>工作量</strong>、<strong>风险 / 依赖</strong>。工作量按单个工程师估算：<span class="tag tag-low">天</span>、<span class="tag tag-med">周</span>、<span class="tag tag-high">月</span>。</p>
+
+<!-- ----- 1. PSI ----- -->
+<div class="direction">
+<h3 id="d-psi">3.1 <span class="tag tag-signal">信号</span> PSI —— 压力停顿信息 <span class="tag tag-low">天</span></h3>
+
+<p><strong>差距：</strong> SMAP 看得到内存水平（空闲、已用、水位线），但看不到<em>停顿</em>。一个系统可能空闲内存充足却仍在抖动；也可能空闲内存很低但系统空闲。PSI 上报任务因内存、IO 或 CPU 阻塞所占的墙钟时间比例——这才是实际的"痛苦信号"。</p>
+
+<p><strong>openEuler 可用性：</strong> 已确认。<code>kernel/sched/psi.c</code> + <code>CONFIG_PSI</code>，以及 openEuler 扩展 <code>CONFIG_PSI_FINE_GRAINED</code>（按原因细分）与 <code>CONFIG_PSI_CGROUP_V1</code>（v1 层级）。</p>
+
+<p><strong>文件 / API：</strong></p>
+<ul>
+<li><code>/proc/pressure/{cpu,memory,io,irq}</code> —— 标准的 2 行格式（some/full × avg10/60/300/total）。</li>
+<li><code>/proc/pressure/stat</code> —— openEuler 细粒度：<code>global_memory_reclaim</code>、<code>cgroup_memory_reclaim</code>、<code>swap</code>、<code>compact</code>、<code>cgroup_async_memory_reclaim</code>、<code>cpu_cfs_bandwidth</code>、<code>cpu_qos</code>。</li>
+<li><code>/sys/fs/cgroup/&lt;path&gt;/memory.pressure</code> + <code>pressure.stat</code> —— 同样的文件，按 cgroup 提供。</li>
+<li><strong>触发通道：</strong> 向文件写入 <code>"some 150000 1000000"</code>，然后 <code>poll(fd, POLLPRI)</code>——内核会在阈值触发（任意 1 秒窗口内停顿达到 150 ms）时唤醒你。</li>
+</ul>
+
+<p><strong>集成：</strong></p>
+<ol>
+<li>新增模块 <code>plugins/smap/src/user/sense/psi_monitor.{h,c}</code>——每个 tick 读取全局及按 cgroup 的 PSI，外加可选的触发 fd。</li>
+<li>扩展 <code>SceneContext</code>，增加 <code>PSIMetrics</code>。场景分类器优先使用 PSI，再回退到当前的启发式。</li>
+<li>策略调优：HEAVY（some_avg10 &gt; 10%）→ 降低冷阈值、增大批大小。UNSTABLE（剧烈导数）→ 本轮跳过换出。</li>
+<li>闭环（拓展目标）：在换出前后采样 PSI 变化量，验证驱逐是否真的缓解了痛苦。</li>
+</ol>
+
+<p><strong>风险：</strong> PSI 必须在构建时启用（<code>CONFIG_PSI=y</code>，可选 <code>psi=1</code> 命令行参数）。细粒度文件仅在 <code>CONFIG_PSI_FINE_GRAINED=y</code> 下存在。需要优雅回退。另外：cgroup PSI 需要 v2（或 v1 + 扩展）。</p>
+
+<p><strong>为何特别适合 SMAP：</strong> 差异化卖点。<span class="highlight">DAMON 和 damon_reclaim 目前都不使用 PSI</span>——它们是水位线驱动的。SMAP + PSI = 可度量地比现成工具更聪明。</p>
+</div>
+
+<!-- ----- 2. MGLRU ----- -->
+<div class="direction">
+<h3 id="d-mglru">3.2 <span class="tag tag-signal">信号</span> MGLRU —— 多代 LRU <span class="tag tag-med">周</span></h3>
+
+<p><strong>差距：</strong> SMAP 的冷窗口跟踪器重复了 MGLRU 已经在做的工作。MGLRU 通过调度器集成的采样将页面按代（gen 0 = 最新，gen N = 最老）老化；这是内核关于"这一页有多老"的权威答案。并行运行两个老化器既浪费 CPU，又可能得出矛盾结论。</p>
+
+<p><strong>openEuler 可用性：</strong> MGLRU 于 6.1 合并到上游；OLK-6.6 应已包含。检查 <code>/sys/kernel/mm/lru_gen/enabled</code>。</p>
+
+<p><strong>文件 / API：</strong></p>
+<ul>
+<li><code>/sys/kernel/mm/lru_gen/enabled</code> —— 开关。</li>
+<li><code>/sys/kernel/mm/lru_gen/admin</code> —— 查询按 memcg 的代统计。</li>
+<li><code>/sys/kernel/debug/lru_gen</code> —— 读：按 memcg/node/zone 的各代计数表。写：强制老化命令。</li>
+<li>tracepoint：<code>trace_mglru_*</code>，位于 <code>tracefs/events/mglru/</code>。</li>
+<li>内核内部：<code>struct lru_gen_folio</code>、<code>folio_lru_gen(folio)</code>。</li>
+</ul>
+
+<p><strong>集成：</strong></p>
+<ol>
+<li>用户态：读取目标 memcg 的 <code>/sys/kernel/debug/lru_gen</code>，从 gen N（最老）页面中筛选换出候选。跳过 SMAP 自身的扫描。</li>
+<li>内核侧（进阶）：在 <code>do_swap_out</code> 的隔离检查期间读取 <code>folio_lru_gen(folio)</code>——仅当代 ≥ 阈值时才驱逐。便宜的内联过滤器。</li>
+<li>对齐：SMAP 的 Scene 模型可以参考代分布——如果大多数页面都集中在最新的 2 代，就没什么可驱逐的。</li>
+</ol>
+
+<p><strong>风险：</strong> MGLRU 的内部 ABI 不稳定；读取 debug 文件虽受认可，但解析脆弱。内核侧使用意味着要通过 kallsyms 查找 <code>folio_lru_gen</code> 相邻符号。</p>
+
+<p><strong>收益：</strong> 有可能<em>彻底移除</em>冷窗口跟踪器，或至少以更低频率运行。长期回报是降低 SMAP 的每 tick CPU 开销。</p>
+</div>
+
+<!-- ----- 3. HMAT / CDAT ----- -->
+<div class="direction">
+<h3 id="d-hmat">3.3 <span class="tag tag-signal">信号</span> HMAT / CDAT —— 层拓扑发现 <span class="tag tag-med">周</span></h3>
+
+<p><strong>差距：</strong> SMAP 硬编码 <code>NUMA0-3 = 本地 DRAM</code>、<code>NUMA4 = 远端 CXL</code>。移植时不成立：不同的板子有不同的拓扑。ACPI HMAT（Heterogeneous Memory Attribute Table）及其后继 CDAT（Coherent Device Attribute Table）直接暴露每个节点的性能特征。</p>
+
+<p><strong>文件 / API：</strong></p>
+<ul>
+<li><code>/sys/devices/system/node/nodeN/access0/initiators/</code> —— 哪些 CPU 与此内存"相近"。</li>
+<li><code>/sys/devices/system/node/nodeN/access0/{read,write}_{latency,bandwidth}</code> —— 定量性能指标。</li>
+<li><code>/sys/bus/cxl/devices/*/</code> —— CXL 设备清单。</li>
+<li>内核：<code>include/linux/node.h</code> —— 内核内访问等级查询。</li>
+</ul>
+
+<p><strong>集成：</strong></p>
+<ol>
+<li>新增模块 <code>plugins/smap/src/user/topology/tier_discovery.{h,c}</code>——启动时遍历 sysfs，按延迟/带宽的四分位把节点归入各层。</li>
+<li>用拓扑驱动的谓词替换硬编码的 <code>GetNrLocalNuma()</code>、<code>is_numa_remote()</code>、<code>NotInAttrL2()</code>。</li>
+<li>加入 3 层及以上模式：如果 HMAT 显示 L1 DRAM → L2 CXL → L3 CXL（更远/更慢），SMAP 应规划多跳降级。</li>
+</ol>
+
+<p><strong>风险：</strong> 较老的平台可能不填充 HMAT。sysfs 返回空时需要回退到现有硬编码布局。CXL 设备发现随内核版本而异。</p>
+
+<p><strong>下游收益：</strong> 此工作的整洁性同时为 #5（CXL.mem 计数器）奠基——二者都依赖可靠的 CXL 设备枚举。</p>
+</div>
+
+<!-- ----- 4. SPE / PMU ----- -->
+<div class="direction">
+<h3 id="d-spe">3.4 <span class="tag tag-signal">信号</span> SPE / PMU —— 硬件访问采样 <span class="tag tag-high">月</span></h3>
+
+<p><strong>差距：</strong> AF-bit 扫描是二值的（在某个窗口内是否访问），且需要完整的 PTE 遍历。ARM Statistical Profiling Extension（SPE）连续采样 load/store 指令，附带物理和虚拟地址、延迟及目标层——在更低 CPU 开销下提供更丰富的信号。</p>
+
+<p><strong>平台：</strong> ARMv8.2+ / Neoverse 带 SPE。Kunpeng 920 具备（检查：<code>/sys/bus/event_source/devices/arm_spe_0</code>）。x86 类似物：IBS（AMD）或 PEBS+PRECDIST（Intel）。</p>
+
+<p><strong>文件 / API：</strong></p>
+<ul>
+<li><code>perf_event_open(2)</code>，配合 <code>PERF_TYPE_RAW</code>、<code>arm_spe_0</code> PMU 类型——安装 SPE 采样。</li>
+<li>采样记录包含 PA（<code>PHYS_ADDR</code>）、VA（<code>DATA_SRC</code>）、延迟、目标内存层级。</li>
+<li>集成先例：HeMem（OSDI '21）、Memtis（SOSP '23）。</li>
+</ul>
+
+<p><strong>集成：</strong></p>
+<ol>
+<li>新增内核侧采样模块 <code>plugins/smap/src/kernel/spe_sampler.c</code>——配置 SPE、环形缓冲区消费者，在 ACTC 之外维护一个按 PA 的访问计数表。</li>
+<li>用户态融合：ACTC（硬件计数器、按页、稀疏）+ SPE（统计的、高粒度、跨节点）→ 更丰富的热度分数。</li>
+<li>延迟感知的层决策：如果 SPE 显示某页的 load 有 90 ns 延迟（L2 CXL），但访问率足以放到 DRAM——执行升级。</li>
+</ol>
+
+<p><strong>风险：</strong> SPE 输出量大；需要高效过滤。仅部分芯片具备。采样率过高会带来开销。aarch64 专属。</p>
+
+<p><strong>研究角度：</strong> SMAP + SPE + PSI 是一个可发表的组合——三路独立信号融合用于分层决策。</p>
+</div>
+
+<!-- ----- 5. CXL.mem counters ----- -->
+<div class="direction">
+<h3 id="d-cxlctr">3.5 <span class="tag tag-signal">信号</span> CXL.mem 硬件计数器 <span class="tag tag-med">周</span></h3>
+
+<p><strong>差距：</strong> CXL 3.0 设备暴露设备物理地址（DPA）访问计数器——CXL 硬件直接告诉你<em>设备上</em>哪些页面正被访问，无需软件采样开销。与 ACTC（在 CPU 侧计数）形成互补。</p>
+
+<p><strong>文件 / API：</strong></p>
+<ul>
+<li><code>/sys/bus/cxl/devices/memX/</code> —— 设备句柄。</li>
+<li><code>/dev/cxl/memX</code> —— 通过 <code>CXL_MEM_QUERY_COMMANDS</code> / <code>CXL_MEM_SEND_COMMAND</code> 发送 mailbox 命令。</li>
+<li>感兴趣的命令：<code>GET_POISON_LIST</code>，以及厂商特定的 DPA 热度图（依设备而异）。</li>
+<li>内核：<code>drivers/cxl/</code> 子系统。</li>
+</ul>
+
+<p><strong>集成：</strong></p>
+<ol>
+<li>按 SMAP 的扫描间隔轮询 DPA 计数器；通过 CXL 区域映射把 DPA → 主机 PA。</li>
+<li>与 ACTC 一起送入现有按 PA 的热度表。</li>
+<li>特殊情形：CXL 上热但 CPU 从未访问的页面——仅加速器访问；保持在 CXL。</li>
+</ol>
+
+<p><strong>风险：</strong> 高度硬件相关。仅在特定 CXL 3.0+ 厂商上可用。需要厂商特定的 mailbox 命令——在不同 CXL 设备间不可移植。</p>
+</div>
+
+<!-- ----- 6. zswap / zram ----- -->
+<div class="direction">
+<h3 id="d-zswap">3.6 <span class="tag tag-action">动作</span> zswap / zram —— 内存内压缩层 <span class="tag tag-low">天</span></h3>
+
+<p><strong>差距：</strong> 今天的层级结构是 DRAM → CXL → NVMe。CXL 与 NVMe 之间存在约 100× 的延迟鸿沟。zswap（对后备 swap 的写回缓存）或 zram（纯压缩 RAM 块设备）能填补这个鸿沟：2–4× 压缩比、微秒级延迟。是落盘前的一份廉价保险。</p>
+
+<p><strong>openEuler 可用性：</strong> 内置。<code>CONFIG_ZSWAP</code>、<code>CONFIG_ZRAM</code> 是标配。</p>
+
+<p><strong>集成：</strong></p>
+<ol>
+<li>部署期：<code>modprobe zram; echo $SIZE &gt; /sys/block/zram0/disksize; swapon -p 10 /dev/zram0</code>，并将 zswap 配置为 NVMe swap 的前端缓存（<code>echo 1 &gt; /sys/module/zswap/parameters/enabled</code>）。</li>
+<li>SMAP 代码：无需改动——<code>reclaim_pages()</code> 会写入优先级最高的 swap 设备，也就是 zram。NVMe 成为溢出。</li>
+<li>可选：通过 SDK 暴露 zswap 命中率以便观察。</li>
+</ol>
+
+<p><strong>风险：</strong> 很小。zram 占用 RAM，因此过于激进的驱逐反而可能加剧内存压力（压缩页仍消耗 RAM）。要谨慎地调整 zram 大小（典型为 RAM 的 10–20%）。</p>
+
+<p><strong>为何尽早：</strong> 最容易的收益。无需改动代码。立即改善 swap 延迟曲线。</p>
+</div>
+
+<!-- ----- 7. memory.reclaim ----- -->
+<div class="direction">
+<h3 id="d-memreclaim">3.7 <span class="tag tag-action">动作</span> cgroup memory.reclaim —— 作用域回收 <span class="tag tag-low">天</span></h3>
+
+<p><strong>差距：</strong> SMAP 基于 ioctl 的 <code>do_swap_out</code> 以进程为单位回收。但生产工作负载以 cgroup 组织。Kernel 6.0+ 暴露了 <code>memory.reclaim</code>：写入 <code>"1G"</code>，内核便同步从该 cgroup 回收至多 1 GB。</p>
+
+<p><strong>文件 / API：</strong></p>
+<ul>
+<li><code>/sys/fs/cgroup/&lt;path&gt;/memory.reclaim</code>（cgroup v2）。</li>
+<li>输入格式：<code>"1G"</code>、<code>"100M"</code>、<code>"1G type=anon"</code>、<code>"1G type=file"</code>。</li>
+<li>同步：返回值 = 实际回收字节数。</li>
+</ul>
+
+<p><strong>集成：</strong></p>
+<ol>
+<li>新增策略变体 <code>reclaim_by_cgroup</code>：不走 ioctl，而是写 cgroup memory.reclaim。</li>
+<li>驱动大部分回收，无需改动任何内核模块。保留自定义 do_swap_out 以应对需要按页控制的情形。</li>
+<li>与 PSI 配合：当 memcg 的 PSI 飙升时，对该 memcg 写入 memory.reclaim。</li>
+</ol>
+
+<p><strong>风险：</strong> 由内核挑选要回收哪些页——失去了 SMAP 冷跟踪器的选择性。这条路径比自定义 ioctl 粗糙，但零维护成本。</p>
+
+<p><strong>架构备注：</strong> 这是一个<em>回退手段</em>，不是替代。两条路径都保留；这条用于批量回收，ioctl 用于外科手术式回收。</p>
+</div>
+
+<!-- ----- 8. memory.swap throttling ----- -->
+<div class="direction">
+<h3 id="d-swapthrottle">3.8 <span class="tag tag-action">动作</span> cgroup memory.swap —— 按容器限流 <span class="tag tag-low">天</span></h3>
+
+<p><strong>差距：</strong> 没有机制防止单一租户消耗全部 swap 带宽。<code>memory.swap.max</code> 与 <code>memory.swap.high</code> 限制按 cgroup 的 swap 使用，并对越过 high 阈值之后的写入进行限流。</p>
+
+<p><strong>文件 / API：</strong></p>
+<ul>
+<li><code>/sys/fs/cgroup/&lt;path&gt;/memory.swap.max</code> —— 硬上限。</li>
+<li><code>/sys/fs/cgroup/&lt;path&gt;/memory.swap.high</code> —— 软上限，越过后触发限流。</li>
+<li><code>/sys/fs/cgroup/&lt;path&gt;/memory.swap.events</code> —— 事件计数器（max、fail、high）。</li>
+</ul>
+
+<p><strong>集成：</strong></p>
+<ol>
+<li>通过 SMAP SDK 暴露：<code>smap_set_swap_limit(pid, high_bytes, max_bytes)</code>。</li>
+<li>管理员配置文件把场景映射到限额：LIGHT → RAM 的 50%，HEAVY → 200%，以此类推。</li>
+<li>监控 <code>memory.swap.events</code> 中的限流事件——作为输入反馈给场景分类器。</li>
+</ol>
+
+<p><strong>风险：</strong> 无实质风险。纯粹是对既有内核特性的配置。</p>
+</div>
+
+<!-- ----- 9. io_uring ----- -->
+<div class="direction">
+<h3 id="d-iouring">3.9 <span class="tag tag-action">动作</span> io_uring —— 异步 swap I/O <span class="tag tag-high">月</span></h3>
+
+<p><strong>差距：</strong> <code>reclaim_pages()</code> 通过内核的通用 swap 路径提交 I/O，该路径近似同步且不透明。对于高吞吐换出（数百 MB/s），带完成转发的显式异步 I/O 在已发表的结果中比默认路径快 2–5×（Option A 设计文档引用过此点）。</p>
+
+<p><strong>文件 / API：</strong></p>
+<ul>
+<li><code>io_uring_setup/submit/wait</code> —— 用户态提交 NVMe I/O。</li>
+<li><code>IORING_OP_WRITE</code> / <code>IORING_OP_READ</code>，配合固定缓冲区。</li>
+<li>需要 custom-swap（Option A）路径：SMAP 内核模块分配 swap 槽并提交 bio，用户态通过 ring 进行调度。</li>
+</ul>
+
+<p><strong>集成：</strong></p>
+<ol>
+<li>重启 <code>feat/nvme-swap-kernel</code>（Option A）：内核模块拥有槽分配器 + bio 引擎。在用户态加一层 io_uring shim 按批喂给它。</li>
+<li>用户守护进程与内核之间的环形缓冲接口：用户通过 ring 提交"把这些 PA[] 换出"，内核执行零拷贝 bio。</li>
+<li>完成环返回已完成/失败列表。</li>
+</ol>
+
+<p><strong>风险：</strong> 工作量大。重复了内核的 swap 路径。仅当 profiling 显示当前 swap I/O 是瓶颈时才值得做。</p>
+
+<p><strong>决策门槛：</strong> 仅在第 1–2 阶段交付且有吞吐量数据后再考虑。若 NVMe 未饱和，io_uring 帮不上忙。</p>
+</div>
+
+<!-- ----- 10. userfaultfd ----- -->
+<div class="direction">
+<h3 id="d-uffd">3.10 <span class="tag tag-action">动作</span> userfaultfd —— 用户态缺页处理 <span class="tag tag-high">月</span></h3>
+
+<p><strong>差距：</strong> SMAP 的所有决策都是事后决策：观测访问 → 决策 → 迁移。对于<em>可预测</em>的工作负载（已知访问模式），在缺页时刻做决策更高效——在页首次缺页被装入时就决定放置层。</p>
+
+<p><strong>文件 / API：</strong></p>
+<ul>
+<li><code>userfaultfd(2)</code> 系统调用——获取代表给定地址范围内缺页的 fd。</li>
+<li><code>UFFDIO_REGISTER</code>，配合 <code>UFFDIO_REGISTER_MODE_MISSING</code>（缺页）或 <code>_WP</code>（写保护）。</li>
+<li><code>UFFDIO_COPY</code> / <code>UFFDIO_ZEROPAGE</code> / <code>UFFDIO_CONTINUE</code> 解决缺页。</li>
+</ul>
+
+<p><strong>集成：</strong></p>
+<ol>
+<li>SMAP 守护进程提供"opt-in"模式：进程注册地址范围；SMAP 安装 uffd。</li>
+<li>遇到缺页：守护进程基于访问历史，从 NVMe / CXL / 计算端在正确的层上物化该页。</li>
+<li>遇到写保护缺页（被跟踪的冷区域）：记录为脏，重置冷计数器。</li>
+</ol>
+
+<p><strong>风险：</strong> 缺页驱动路径必须足够快（微秒级）。带系统调用开销的用户态守护进程很边缘。只有在能让 SMAP 提前参与决策的细分工作负载上才有真实收益。</p>
+
+<p><strong>结论：</strong> 除非有特定租户要求，否则跳过。工作量大，适用面窄。</p>
+</div>
+
+<!-- ----- 11. DAMON ops set ----- -->
+<div class="direction">
+<h3 id="d-damon">3.11 <span class="tag tag-framework">框架</span> DAMON 操作集 —— 面向上游的重构 <span class="tag tag-high">月</span></h3>
+
+<p><strong>差距：</strong> SMAP 重新实现了：访问跟踪、冷度评分、过滤器框架、配额、水位线、动作分发。DAMON 已经具备全部这些。架构上正确的答案是<strong>让 SMAP 成为 DAMON 的一个操作集</strong>——<code>DAMON_OPS_ACTC</code>——从 ACTC 获取访问数据，其余交给 DAMOS scheme 处理。</p>
+
+<p><strong>文件 / API：</strong></p>
+<ul>
+<li><code>struct damon_operations</code> —— <code>init</code> / <code>update</code> / <code>prepare_access_checks</code> / <code>check_accesses</code> / <code>apply_scheme</code> / <code>cleanup</code>。</li>
+<li><code>damon_register_ops()</code> —— 注册新的操作集。</li>
+<li>参考中的现有操作集：<code>DAMON_OPS_VADDR</code>、<code>DAMON_OPS_PADDR</code>、<code>DAMON_OPS_FVADDR</code>。</li>
+</ul>
+
+<p><strong>集成：</strong></p>
+<ol>
+<li>实现 <code>struct damon_operations smap_ops</code>。<code>check_accesses</code> 读取 ACTC 热度计数器；其余复用 DAMON 核心。</li>
+<li>删除：冷窗口跟踪器（由 DAMOS 的 <code>min_age</code> 替代）、自定义策略引擎（由 DAMOS scheme 替代）、自定义 ioctl（由 <code>DAMOS_PAGEOUT</code> + <code>DAMOS_DEMOTION</code> 替代）。</li>
+<li>保留：ACTC 驱动、进程管理、场景模型（作为自定义的 DAMOS 配额/水位线插件）。</li>
+<li>上游候选：<code>DAMON_OPS_ACTC</code> 模块可提交到 linux-mm。</li>
+</ol>
+
+<p><strong>风险：</strong> 大型重构。会破坏 SDK 的 API 表面（SMAP 的 IPC 变为 DAMON sysfs）。场景分类逻辑需要新的归宿。openEuler 特有的 <code>DAMOS_DEMOTION</code> 动作非上游——可能并非在所有 DAMON 版本中存在。</p>
+
+<p><strong>回报：</strong> 删除<em>数千行</em>重复的胶水代码。免费获得 DAMON 的过滤器框架、配额、水位线与上游 bug 修复。这是长期可维护性的最强理由。</p>
+</div>
+
+<!-- ----- 12. eBPF introspection ----- -->
+<div class="direction">
+<h3 id="d-bpf-intro">3.12 <span class="tag tag-framework">框架</span> eBPF —— 内省替换 <span class="tag tag-med">周</span></h3>
+
+<p><strong>差距：</strong> SMAP 通过 <code>kallsyms_lookup_name()</code> + kprobe 解析未导出符号（<code>migrate_pages</code>、<code>folio_isolate_lru</code>、<code>reclaim_pages</code>）。这在跨内核版本、KABI 破坏以及 CONFIG 差异下都很脆弱。eBPF 迭代器与 kfunc 为大多数相同需求提供了更稳定的 API。</p>
+
+<p><strong>API：</strong></p>
+<ul>
+<li><code>bpf_iter_task_vma</code>、<code>bpf_iter_folio_lru</code>、<code>bpf_iter_pfn</code> —— 安全枚举。</li>
+<li>内存 kfunc：<code>bpf_folio_*</code>、<code>bpf_migrate_*</code>（集合在扩充中）。</li>
+<li>BTF 驱动访问内核结构体——可在结构体布局变更下存活。</li>
+</ul>
+
+<p><strong>集成：</strong></p>
+<ol>
+<li>新增组件 <code>plugins/smap/src/bpf/*.bpf.c</code> —— 用于访问扫描与 folio 枚举的 eBPF 程序。</li>
+<li>通过 libbpf 在守护进程启动时加载。</li>
+<li>在存在 kfunc 的地方，逐步用 BPF 调用替换 kprobe 查找。</li>
+</ol>
+
+<p><strong>风险：</strong> kfunc 覆盖尚不完整——SMAP 的一些操作（例如直接调用 <code>migrate_pages</code>）还没有 kfunc 等价物。需要混合方案。</p>
+
+<p><strong>收益：</strong> 可移植性。一份 SMAP 构建能跨若干内核版本工作，而不必为每个版本维护符号表。</p>
+</div>
+
+<!-- ----- 13. eBPF policy ----- -->
+<div class="direction">
+<h3 id="d-bpf-policy">3.13 <span class="tag tag-framework">框架</span> eBPF —— 可加载策略 <span class="tag tag-high">月</span></h3>
+
+<p><strong>差距：</strong> <code>separate_strategy.c</code> 是编译进来的 C 代码，常量是硬写死的。改策略需要重新构建 + 重新部署。BPF 可加载策略允许管理员在运行时加载 <code>.bpf.o</code>——不用重建即可实验。</p>
+
+<p><strong>集成：</strong></p>
+<ol>
+<li>把策略接口定义为 BPF struct_ops：<code>classify_scene(metrics) → scene</code>、<code>pick_threshold(scene, age_dist) → threshold</code>、<code>decide_action(folio, context) → action</code>。</li>
+<li>硬编码的 C 策略保留作为默认；BPF 覆盖可选。</li>
+<li>与 BCC/libbpf 工具链打通：<code>smapctl load-policy my_policy.bpf.o</code>。</li>
+</ol>
+
+<p><strong>风险：</strong> BPF verifier 的约束限制表达力。需要精心设计 API，让运维人员可以写出有意义的策略而不触碰 verifier 上限。</p>
+
+<p><strong>结论：</strong> 只有在我们期望第三方调策略时才值得做。对单一内部产品，保留 C 即可。</p>
+</div>
+
+<!-- ----- 14. RL auto-tuning ----- -->
+<div class="direction">
+<h3 id="d-rl">3.14 <span class="tag tag-research">研究</span> 基于 RL 的自动调优 <span class="tag tag-high">月</span></h3>
+
+<p><strong>差距：</strong> SMAP 中的每个常量（冷窗口阈值、批大小、扫描间隔、场景切换迟滞）目前都是手工调的。已发表的工作（Pond、Memtis、HeMem）表明，对某一工作负载有效的阈值在其他负载上会相差 &gt;2×。学习型控制器优于静态调参。</p>
+
+<p><strong>方法：</strong></p>
+<ul>
+<li>状态：PSI 指标、访问密度直方图、swap 延迟分布、各层占用、场景。</li>
+<li>动作：阈值、批大小、扫描间隔（离散化）。</li>
+<li>奖励：<code>-alpha * p95_latency - beta * swap_write_bw + gamma * free_dram</code>。</li>
+<li>算法：PPO 或上下文 bandit；基于离线 trace 训练，在线微调。</li>
+</ul>
+
+<p><strong>集成：</strong></p>
+<ol>
+<li>遥测路径：把 state/action/reward 元组转储到文件或 sqlite。</li>
+<li>离线训练：Python + PyTorch / RLlib。</li>
+<li>推理：导出为 onnx 小模型，在 SMAP 守护进程每个 tick 运行（亚毫秒级）。</li>
+</ol>
+
+<p><strong>风险：</strong> 训练数据需要多样的工作负载。运维人员很少信任黑盒控制器——需要可解释性（为什么提高了阈值？）。</p>
+
+<p><strong>可发表性：</strong> 是，只要能证明胜过静态调参。与 SPE 信号（#4）结合效果最好。</p>
+</div>
+
+<!-- ----- 15. RDMA cross-node ----- -->
+<div class="direction">
+<h3 id="d-rdma">3.15 <span class="tag tag-research">研究</span> RDMA 跨节点迁移 <span class="tag tag-high">月</span></h3>
+
+<p><strong>差距：</strong> SMAP 在单台主机内管理。在 CXL 互联集群或 RDMA 联网的数据中心中，冷页可以迁移到<em>另一台机器</em>的空闲 RAM，而不是本地 swap。吞吐量远高于 NVMe。</p>
+
+<p><strong>集成：</strong></p>
+<ol>
+<li>新增层 L2.5（通过 RDMA 接入的远端 RAM）。需要集群级内存分配器（例如基于 Carbink、AIFM）。</li>
+<li>换出路径：对于冷到足以进入 NVMe、但又热到不愿接受 100 µs 延迟的页 → 通过 RDMA 发送到远端对等节点。</li>
+<li>换入路径：低延迟缺页处理发起 RDMA 读。</li>
+</ol>
+
+<p><strong>风险：</strong> 需要集群基础设施。一致性（主机 A 的冷页被主机 B 的内存压力驱逐）。失败模式大量增加。</p>
+
+<p><strong>结论：</strong> 远期研究方向。不是近期 SMAP 特性。</p>
+</div>
+
+<!-- ============================================================ -->
+<h2 id="matrix">4. 优先级矩阵</h2>
+
+<table>
+<tr>
+<th>方向</th>
+<th>类别</th>
+<th>工作量</th>
+<th>价值</th>
+<th>openEuler？</th>
+<th>SMAP 独有？</th>
+</tr>
+<tr><td>1. PSI</td><td>信号</td><td><span class="tag tag-low">天</span></td><td>高</td><td>&check;</td><td>&check;（DAMON 缺）</td></tr>
+<tr><td>2. MGLRU</td><td>信号</td><td><span class="tag tag-med">周</span></td><td>高</td><td>&check;</td><td>部分（可去掉冷跟踪器）</td></tr>
+<tr><td>3. HMAT/CDAT</td><td>信号</td><td><span class="tag tag-med">周</span></td><td>中</td><td>&check;</td><td>可移植性</td></tr>
+<tr><td>4. SPE/PMU</td><td>信号</td><td><span class="tag tag-high">月</span></td><td>高</td><td>依硬件</td><td>&check; 研究级</td></tr>
+<tr><td>5. CXL.mem 计数器</td><td>信号</td><td><span class="tag tag-med">周</span></td><td>中</td><td>依硬件</td><td>&check;</td></tr>
+<tr><td>6. zswap/zram</td><td>动作</td><td><span class="tag tag-low">天</span></td><td>高</td><td>&check;</td><td>&ndash;（仅配置）</td></tr>
+<tr><td>7. memory.reclaim</td><td>动作</td><td><span class="tag tag-low">天</span></td><td>高</td><td>&check;</td><td>&ndash;</td></tr>
+<tr><td>8. memory.swap 限流</td><td>动作</td><td><span class="tag tag-low">天</span></td><td>低-中</td><td>&check;</td><td>&ndash;</td></tr>
+<tr><td>9. io_uring</td><td>动作</td><td><span class="tag tag-high">月</span></td><td>中（瓶颈情况下）</td><td>&check;</td><td>&check;</td></tr>
+<tr><td>10. userfaultfd</td><td>动作</td><td><span class="tag tag-high">月</span></td><td>低（小众）</td><td>&check;</td><td>依工作负载</td></tr>
+<tr><td>11. DAMON 操作集</td><td>框架</td><td><span class="tag tag-high">月</span></td><td>高（重构）</td><td>&check;</td><td>利于上游</td></tr>
+<tr><td>12. eBPF 内省</td><td>框架</td><td><span class="tag tag-med">周</span></td><td>中</td><td>&check;</td><td>可移植性</td></tr>
+<tr><td>13. eBPF 策略</td><td>框架</td><td><span class="tag tag-high">月</span></td><td>低（若单一产品）</td><td>&check;</td><td>&check;</td></tr>
+<tr><td>14. RL 自动调优</td><td>研究</td><td><span class="tag tag-high">月</span></td><td>中-高</td><td>软件</td><td>&check; 可发表</td></tr>
+<tr><td>15. RDMA 跨节点</td><td>研究</td><td><span class="tag tag-high">月</span></td><td>存推测性</td><td>软件</td><td>&check; 长期</td></tr>
+</table>
+
+<!-- ============================================================ -->
+<h2 id="roadmap">5. 分阶段路线图</h2>
+
+<h3>第 1 阶段 —— 轻松收益（2026 Q2，约 3 周）</h3>
+<ul>
+<li><strong>#6 zswap/zram</strong> —— 部署期配置；SMAP 零代码改动。</li>
+<li><strong>#7 memory.reclaim</strong> —— 作为策略中的替代回收路径加入。</li>
+<li><strong>#8 memory.swap 限流</strong> —— SDK 表面；管理员配置。</li>
+<li><strong>#1 PSI（Level 1 &amp; 2）</strong> —— 感知 + 触发模式，驱动场景分类器。</li>
+</ul>
+<p>结果：SMAP 用上了现代 cgroup/swap/压力 基础设施；立即可以测量到延迟与租户隔离的改善。</p>
+
+<h3>第 2 阶段 —— 信号丰富化（2026 Q3，约 6 周）</h3>
+<ul>
+<li><strong>#2 MGLRU 集成</strong> —— 替换或补充冷窗口跟踪器。</li>
+<li><strong>#3 HMAT/CDAT 拓扑发现</strong> —— 移除硬编码的 NUMA 布局。</li>
+<li><strong>#12 eBPF 内省</strong> —— 在可能之处替换基于 kprobe 的查找。</li>
+<li><strong>#5 CXL.mem 计数器</strong>（若硬件可用）。</li>
+</ul>
+<p>结果：每 tick 开销更低、在不同板子上可移植、信号融合更好。</p>
+
+<h3>第 3 阶段 —— 框架成熟化（2026 Q4，约 10 周）</h3>
+<ul>
+<li><strong>#9 io_uring</strong>（仅当第 1–2 阶段的 profile 显示 swap I/O 是瓶颈时）。</li>
+<li><strong>#11 DAMON 操作集重构</strong> —— 大规模清理；为 SMAP 开辟上游贡献路径。</li>
+</ul>
+<p>结果：架构清爽。维护成本下降。上游贡献路径打开。</p>
+
+<h3>第 4 阶段 —— 研究（2027+）</h3>
+<ul>
+<li><strong>#4 基于 SPE 的访问采样</strong> —— 与 RL 结合可成为论文级工作。</li>
+<li><strong>#14 RL 自动调优</strong> —— 基于第 1–3 阶段的遥测训练。</li>
+<li><strong>#13 eBPF 策略</strong> —— 仅当有产品化路径要求时。</li>
+<li><strong>#15 RDMA / #10 userfaultfd</strong> —— 仅在有具体工作负载需求时评估。</li>
+</ul>
+
+<h3>明确的非目标</h3>
+<p>看起来诱人，但我建议<em>不要</em>追求的条目，除非出现具体的驱动力：</p>
+<ul>
+<li><strong>#10 userfaultfd</strong> —— 用例窄、工作量大，用户态缺页路径慢。</li>
+<li><strong>#13 eBPF 策略</strong> —— 增加表面积但没有明确的客户。</li>
+<li><strong>#15 RDMA 跨节点</strong> —— 集群级问题，不是主机级特性。</li>
+</ul>
+
+<!-- ============================================================ -->
+<h2 id="references">6. 参考资料</h2>
+
+<h3>内核源码（本仓库：<code>/Users/ray/Documents/Repo/kernel</code>，分支 OLK-6.6）</h3>
+<ul>
+<li>PSI：<code>kernel/sched/psi.c</code>、<code>include/linux/psi_types.h</code>、<code>Documentation/accounting/psi.rst</code></li>
+<li>MGLRU：<code>mm/vmscan.c</code>（搜索 <code>lru_gen_</code>）、<code>include/linux/mmzone.h</code></li>
+<li>DAMON：<code>mm/damon/{core,vaddr,paddr,reclaim,lru_sort}.c</code>、<code>include/linux/damon.h</code></li>
+<li>cgroup memory.reclaim：<code>mm/memcontrol.c</code>（<code>memcg_reclaim_write</code>）</li>
+<li>HMAT：<code>drivers/acpi/numa/hmat.c</code>、<code>include/linux/acpi.h</code></li>
+<li>CXL：<code>drivers/cxl/</code>、<code>include/linux/cxl.h</code></li>
+<li>userfaultfd：<code>fs/userfaultfd.c</code>、<code>include/uapi/linux/userfaultfd.h</code></li>
+<li>io_uring：<code>io_uring/</code>、<code>include/linux/io_uring.h</code></li>
+</ul>
+
+<h3>SMAP 当前状态</h3>
+<ul>
+<li>核心：<code>/Users/ray/Documents/Repo/ubturbo/plugins/smap/</code></li>
+<li>分支：<code>feat/nvme-swap</code>（Option B v2，ioctl + reclaim_pages）、<code>feat/nvme-swap-kernel</code>（Option A，自定义内核 swap）</li>
+<li>架构文档：<code>smap_architecture.html</code></li>
+<li>NVMe swap 设计：<code>smap_nvme_swap_design.html</code>、<code>smap_nvme_swap_option_a.html</code>、<code>smap_nvme_swap_option_b_v2.html</code></li>
+</ul>
+
+<h3>学术 / 工业先例</h3>
+<ul>
+<li><strong>HeMem</strong>（OSDI '21）—— 基于 SPE 采样的分层内存。验证 #4。</li>
+<li><strong>Memtis</strong>（SOSP '23）—— SPE 驱动的、可控粒度的分层。扩展 #4。</li>
+<li><strong>Pond</strong>（ASPLOS '23）—— 微软的 CXL 池管理；压力驱动的放置。验证 #1。</li>
+<li><strong>TPP</strong>（ASPLOS '23）—— Meta 在生产环境的透明页面放置。使用 MGLRU；验证 #2。</li>
+<li><strong>Nimble</strong>（ASPLOS '19）—— 页迁移吞吐量上界。#9 的背景。</li>
+<li><strong>Carbink</strong>（OSDI '22）—— 经由 RDMA 的容错远端内存。#15 的背景。</li>
+</ul>
+
+<h3>上游讨论</h3>
+<ul>
+<li>linux-mm 邮件列表归档：<a href="https://lore.kernel.org/linux-mm/">https://lore.kernel.org/linux-mm/</a></li>
+<li>DAMON PSI 集成讨论串（搜索 "damon psi"）—— 已被提议但未合入。</li>
+<li>多层内存 RFC：在 lore.kernel.org 上搜索 "memory tiering"。</li>
+</ul>
+
+<h3>openEuler 专属内容</h3>
+<ul>
+<li><code>CONFIG_PSI_FINE_GRAINED</code>、<code>CONFIG_PSI_CGROUP_V1</code> —— 自定义 Kconfig，参见 <code>init/Kconfig</code>。</li>
+<li><code>DAMOS_DEMOTION</code> 动作 —— openEuler 专属，参见 <code>include/linux/damon.h:114</code>。</li>
+</ul>
+
+<blockquote>
+本路线图是一份提议，不是承诺。请根据实际工作负载的需要逐条挑选。在每个阶段边界处重新排定优先级——第 1 阶段的结果很可能重塑第 2 阶段的优先级。
+</blockquote>
+
+</body>
+</html>

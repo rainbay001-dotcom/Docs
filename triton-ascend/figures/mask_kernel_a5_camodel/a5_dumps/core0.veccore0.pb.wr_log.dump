@@ -1,0 +1,4 @@
+[info] [0000001133] slot_id: 0
+[info] Address 00000000 = [0000001e]	Address 00000004 = [00200000]	Address 00000008 = [00000001]	Address 0000000c = [00000080]	
+       Address 00000010 = [00000180]	Address 00000014 = [00000000]	Address 00000018 = [00000180]	Address 0000001c = [00000000]	
+[info] ++++++++++++++++++++++core: 0, subcore: 1, start: 216, tick: 2232, kernelId: 0, blkID: 0, blkDim: 1, rtsqId: 1, streamId: 0, taskId: 0, subtaskId: 0, threadId: 0, done++++++++++++++++++++++.

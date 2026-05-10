@@ -1,0 +1,14 @@
+[info] CheckBitMask[0]: wp_exec_work
+[info] CheckBitMask[1]: vthreadID_calculate
+[info] CheckBitMask[2]: stall_cyc_zero
+[info] CheckBitMask[3]: scb_zero_ind
+[info] CheckBitMask[4]: scb_otsd_overflow
+[info] CheckBitMask[5]: MRF_rd_no_conflict
+[info] CheckBitMask[6]: PRF_rd_no_conflict
+[info] CheckBitMask[7]: MRF_wr_no_conflict
+[info] CheckBitMask[8]: PRF_wr_no_conflict
+[info] CheckBitMask[9]: resource_no_conflict
+[info] CheckBitMask[10]: stack_not_sleep
+[info] CheckBitMask[11]: membar_not_sleep
+[info] CheckBitMask[12]: dcache_entry_full
+[info] CheckBitMask[13]: rd_split_entry_full

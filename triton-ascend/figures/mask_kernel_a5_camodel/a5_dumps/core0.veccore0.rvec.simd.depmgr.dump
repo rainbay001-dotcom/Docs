@@ -1,0 +1,1846 @@
+[info] @1587 [RECORD INSTR]: instr.name=RV_VLDI instr.pc=0x10d0d200 instr.idd=84 #of of-instrs=1
+[info] @1587 [RECORD INSTR]: instr.name=RV_VLDI instr.pc=0x10d0d204 instr.idd=85 #of of-instrs=1
+[info] @1587 [RECORD INSTR]: instr.name=RV_PSET instr.pc=0x10d0d208 instr.idd=86 #of of-instrs=1
+[info] @1587 [RECORD INSTR]: instr.name=RV_VDUPS instr.pc=0x10d0d20c instr.idd=87 #of of-instrs=1
+[info] @1587 [RECORD INSTR]: instr.name=RV_PSET instr.pc=0x10d0d210 instr.idd=88 #of of-instrs=1
+[info] @1587 [RECORD INSTR]: instr.name=RV_PSET instr.pc=0x10d0d214 instr.idd=89 #of of-instrs=1
+[info] @1588 [IFU_SREG_SCB]: name=RV_SMOV pc=0x10d0d218 id=90, reg_idx=65
+[info] @1588 [RECORD INSTR]: instr.name=RV_SMOV instr.pc=0x10d0d218 instr.idd=90 #of of-instrs=1
+[info] @1588 [RECORD INSTR]: instr.name=RV_VDUPS instr.pc=0x10d0d21c instr.idd=91 #of of-instrs=1
+[info] @1588 [IFU_SREG_SCB]: name=RV_SMOVI pc=0x10d0d220 id=92, reg_idx=66
+[info] @1588 [RECORD INSTR]: instr.name=RV_SMOVI instr.pc=0x10d0d220 instr.idd=92 #of of-instrs=1
+[info] @1588 [IFU_SREG_SCB]: name=RV_SMOVI pc=0x10d0d224 id=93, reg_idx=67
+[info] @1588 [RECORD INSTR]: instr.name=RV_SMOVI instr.pc=0x10d0d224 instr.idd=93 #of of-instrs=1
+[info] @1588 [RECORD INSTR]: instr.name=RV_VCMP_EQ instr.pc=0x10d0d228 instr.idd=94 #of of-instrs=1
+[info] @1588 [RECORD INSTR]: instr.name=RV_PXOR instr.pc=0x10d0d22c instr.idd=95 #of of-instrs=1
+[info] @1589 [IDU_SREG_SCB]: name=RV_SMOV pc=0x10d0d218 id=90, reg_idx=65, latency= 2, valid_time=1591
+[info] @1590 [RECORD INSTR]: instr.name=RV_VLOOPv2 instr.pc=0x10d0d230 instr.idd=96 #of of-instrs=1
+[info] @1591 [IFU_SREG_SCB]: name=RV_VLDI pc=0x10d0d234 id=97, reg_idx=67
+[info] @1591 [RECORD INSTR]: instr.name=RV_VLDI instr.pc=0x10d0d234 instr.idd=97 #of of-instrs=1
+[info] @1591 [IFU_SREG_SCB]: name=RV_VLDI pc=0x10d0d238 id=98, reg_idx=65
+[info] @1591 [RECORD INSTR]: instr.name=RV_VLDI instr.pc=0x10d0d238 instr.idd=98 #of of-instrs=1
+[info] @1591 [RECORD INSTR]: instr.name=RV_VCMP_EQ instr.pc=0x10d0d23c instr.idd=99 #of of-instrs=1
+[info] @1591 [RECORD INSTR]: instr.name=RV_POR instr.pc=0x10d0d240 instr.idd=100 #of of-instrs=1
+[info] @1591 [RECORD INSTR]: instr.name=RV_VCMP_LE instr.pc=0x10d0d244 instr.idd=101 #of of-instrs=1
+[info] @1591 [RECORD INSTR]: instr.name=RV_VCMP_EQ instr.pc=0x10d0d248 instr.idd=102 #of of-instrs=1
+[info] @1591 [RETIRE INSTR]: instr.name=RV_SMOVI instr.pc=0x10d0d220 instr.id=92 #of of-instrs=17
+[info] @1591 [IDU_SREG_SCB]: name=RV_SMOVI pc=0x10d0d220 id=92, reg_idx=66, latency= 1, valid_time=1592
+[info] @1591 [RETIRE INSTR]: instr.name=RV_SMOV instr.pc=0x10d0d218 instr.id=90 #of of-instrs=16
+[info] [0000001591] [LDU] record_unit_instr, name RV_VLDI, id 84
+[info] [0000001591] [LDU] record_unit_instr, name RV_VLDI, id 85
+[info] @1592 [RECORD INSTR]: instr.name=RV_PAND instr.pc=0x10d0d24c instr.idd=103 #of of-instrs=1
+[info] @1592 [RECORD INSTR]: instr.name=RV_POR instr.pc=0x10d0d250 instr.idd=104 #of of-instrs=1
+[info] @1592 [RECORD INSTR]: instr.name=RV_VSEL instr.pc=0x10d0d254 instr.idd=105 #of of-instrs=1
+[info] @1592 [RETIRE INSTR]: instr.name=RV_SMOVI instr.pc=0x10d0d224 instr.id=93 #of of-instrs=18
+[info] @1592 [IDU_SREG_SCB]: name=RV_SMOVI pc=0x10d0d224 id=93, reg_idx=67, latency= 1, valid_time=1593
+[info] [0000001592] [EXU1] record_unit_instr, name RV_PSET, id 86
+[info] [0000001592] [LDU] retire_unit_instr, name RV_VLDI, id 84
+[info] [0000001592] [LDU] retire_unit_instr, name RV_VLDI, id 85
+[info] @1593 [RECORD INSTR]: instr.name=RV_VCVT_I2I instr.pc=0x10d0d258 instr.idd=107 #of of-instrs=1
+[info] @1593 [IFU_SREG_SCB]: name=RV_VSTI pc=0x10d0d25c id=108, reg_idx=66
+[info] @1593 [RECORD INSTR]: instr.name=RV_VSTI instr.pc=0x10d0d25c instr.idd=108 #of of-instrs=1
+[info] @1593 [IDU_SREG_SCB]: name=RV_VLDI pc=0x10d0d234 id=97, reg_idx=67, latency= 3, valid_time=1596
+[info] @1593 [IDU_SREG_SCB]: name=RV_VLDI pc=0x10d0d238 id=98, reg_idx=65, latency= 3, valid_time=1596
+[info] [0000001593] [EXU0] record_unit_instr, name RV_PSET, id 89
+[info] [0000001593] [EXU1] record_unit_instr, name RV_PSET, id 88
+[info] @1594 [IFU_SREG_SCB]: name=RV_VLDI pc=0x10d0d234 id=109, reg_idx=67
+[info] @1594 [RECORD INSTR]: instr.name=RV_VLDI instr.pc=0x10d0d234 instr.idd=109 #of of-instrs=1
+[info] @1594 [IFU_SREG_SCB]: name=RV_VLDI pc=0x10d0d238 id=110, reg_idx=65
+[info] @1594 [RECORD INSTR]: instr.name=RV_VLDI instr.pc=0x10d0d238 instr.idd=110 #of of-instrs=1
+[info] @1594 [RECORD INSTR]: instr.name=RV_VCMP_EQ instr.pc=0x10d0d23c instr.idd=111 #of of-instrs=1
+[info] @1594 [RECORD INSTR]: instr.name=RV_POR instr.pc=0x10d0d240 instr.idd=112 #of of-instrs=1
+[info] @1594 [RECORD INSTR]: instr.name=RV_VCMP_LE instr.pc=0x10d0d244 instr.idd=113 #of of-instrs=1
+[info] [0000001594] [EXU0] record_unit_instr, name RV_VDUPS, id 87
+[info] [0000001594] [EXU1] record_unit_instr, name RV_VDUPS, id 91
+[info] @1595 [RECORD INSTR]: instr.name=RV_VCMP_EQ instr.pc=0x10d0d248 instr.idd=115 #of of-instrs=1
+[info] @1595 [RECORD INSTR]: instr.name=RV_PAND instr.pc=0x10d0d24c instr.idd=116 #of of-instrs=1
+[info] @1595 [RECORD INSTR]: instr.name=RV_POR instr.pc=0x10d0d250 instr.idd=117 #of of-instrs=1
+[info] @1596 [RECORD INSTR]: instr.name=RV_VSEL instr.pc=0x10d0d254 instr.idd=119 #of of-instrs=1
+[info] @1596 [IDU_SREG_SCB]: name=RV_VSTI pc=0x10d0d25c id=108, reg_idx=66, latency= 3, valid_time=1599
+[info] @1596 [IDU_SREG_SCB]: name=RV_VLDI pc=0x10d0d234 id=109, reg_idx=67, latency= 3, valid_time=1599
+[info] @1596 [IDU_SREG_SCB]: name=RV_VLDI pc=0x10d0d238 id=110, reg_idx=65, latency= 3, valid_time=1599
+[info] [0000001596] [LDU] record_unit_instr, name RV_VLDI, id 97
+[info] @1597 [RETIRE INSTR]: instr.name=RV_PSET instr.pc=0x10d0d208 instr.id=86 #of of-instrs=28
+[info] [0000001597] [EXU1] retire_unit_instr, name RV_PSET, id 86
+[info] @1597 [RECORD INSTR]: instr.name=RV_VCVT_I2I instr.pc=0x10d0d258 instr.idd=121 #of of-instrs=1
+[info] @1597 [IFU_SREG_SCB]: name=RV_VSTI pc=0x10d0d25c id=122, reg_idx=66
+[info] @1597 [RECORD INSTR]: instr.name=RV_VSTI instr.pc=0x10d0d25c instr.idd=122 #of of-instrs=1
+[info] @1597 [IFU_SREG_SCB]: name=RV_VLDI pc=0x10d0d234 id=123, reg_idx=67
+[info] @1597 [RECORD INSTR]: instr.name=RV_VLDI instr.pc=0x10d0d234 instr.idd=123 #of of-instrs=1
+[info] @1597 [IFU_SREG_SCB]: name=RV_VLDI pc=0x10d0d238 id=124, reg_idx=65
+[info] @1597 [RECORD INSTR]: instr.name=RV_VLDI instr.pc=0x10d0d238 instr.idd=124 #of of-instrs=1
+[info] @1597 [RECORD INSTR]: instr.name=RV_VCMP_EQ instr.pc=0x10d0d23c instr.idd=125 #of of-instrs=1
+[info] [0000001597] [EXU1] record_unit_instr, name RV_VCMP_EQ, id 94
+[info] [0000001597] [LDU] retire_unit_instr, name RV_VLDI, id 97
+[info] [0000001597] [LDU] record_unit_instr, name RV_VLDI, id 98
+[info] @1598 [RETIRE INSTR]: instr.name=RV_PSET instr.pc=0x10d0d214 instr.id=89 #of of-instrs=32
+[info] @1598 [RETIRE INSTR]: instr.name=RV_PSET instr.pc=0x10d0d210 instr.id=88 #of of-instrs=31
+[info] [0000001598] [EXU0] retire_unit_instr, name RV_PSET, id 89
+[info] [0000001598] [EXU1] retire_unit_instr, name RV_PSET, id 88
+[info] @1598 [RECORD INSTR]: instr.name=RV_POR instr.pc=0x10d0d240 instr.idd=127 #of of-instrs=1
+[info] @1598 [RECORD INSTR]: instr.name=RV_VCMP_LE instr.pc=0x10d0d244 instr.idd=128 #of of-instrs=1
+[info] [0000001598] [LDU] retire_unit_instr, name RV_VLDI, id 98
+[info] @1599 [RETIRE INSTR]: instr.name=RV_VLDI instr.pc=0x10d0d200 instr.id=84 #of of-instrs=32
+[info] @1599 [RETIRE INSTR]: instr.name=RV_VLDI instr.pc=0x10d0d204 instr.id=85 #of of-instrs=31
+[info] @1599 [RETIRE INSTR]: instr.name=RV_VDUPS instr.pc=0x10d0d20c instr.id=87 #of of-instrs=30
+[info] @1599 [RETIRE INSTR]: instr.name=RV_VDUPS instr.pc=0x10d0d21c instr.id=91 #of of-instrs=29
+[info] @1599 [RECORD INSTR]: instr.name=RV_VCMP_EQ instr.pc=0x10d0d248 instr.idd=130 #of of-instrs=1
+[info] @1599 [RECORD INSTR]: instr.name=RV_PAND instr.pc=0x10d0d24c instr.idd=131 #of of-instrs=1
+[info] @1599 [RECORD INSTR]: instr.name=RV_POR instr.pc=0x10d0d250 instr.idd=132 #of of-instrs=1
+[info] [0000001599] [EXU0] record_unit_instr, name RV_PXOR, id 95
+[info] [0000001599] [LDU] record_unit_instr, name RV_VLDI, id 109
+[info] [0000001599] [EXU0] retire_unit_instr, name RV_VDUPS, id 87
+[info] [0000001599] [EXU1] retire_unit_instr, name RV_VDUPS, id 91
+[info] @1600 [RECORD INSTR]: instr.name=RV_VSEL instr.pc=0x10d0d254 instr.idd=134 #of of-instrs=1
+[info] @1600 [IDU_SREG_SCB]: name=RV_VSTI pc=0x10d0d25c id=122, reg_idx=66, latency= 3, valid_time=1603
+[info] @1600 [IDU_SREG_SCB]: name=RV_VLDI pc=0x10d0d234 id=123, reg_idx=67, latency= 3, valid_time=1603
+[info] @1600 [IDU_SREG_SCB]: name=RV_VLDI pc=0x10d0d238 id=124, reg_idx=65, latency= 3, valid_time=1603
+[info] [0000001600] [LDU] retire_unit_instr, name RV_VLDI, id 109
+[info] [0000001600] [LDU] record_unit_instr, name RV_VLDI, id 110
+[info] @1601 [RECORD INSTR]: instr.name=RV_VCVT_I2I instr.pc=0x10d0d258 instr.idd=136 #of of-instrs=1
+[info] @1601 [IFU_SREG_SCB]: name=RV_VSTI pc=0x10d0d25c id=137, reg_idx=66
+[info] @1601 [RECORD INSTR]: instr.name=RV_VSTI instr.pc=0x10d0d25c instr.idd=137 #of of-instrs=1
+[info] @1601 [IFU_SREG_SCB]: name=RV_VLDI pc=0x10d0d234 id=138, reg_idx=67
+[info] @1601 [RECORD INSTR]: instr.name=RV_VLDI instr.pc=0x10d0d234 instr.idd=138 #of of-instrs=1
+[info] @1601 [IFU_SREG_SCB]: name=RV_VLDI pc=0x10d0d238 id=139, reg_idx=65
+[info] @1601 [RECORD INSTR]: instr.name=RV_VLDI instr.pc=0x10d0d238 instr.idd=139 #of of-instrs=1
+[info] @1601 [RECORD INSTR]: instr.name=RV_VCMP_EQ instr.pc=0x10d0d23c instr.idd=140 #of of-instrs=1
+[info] [0000001601] [LDU] retire_unit_instr, name RV_VLDI, id 110
+[info] @1602 [RETIRE INSTR]: instr.name=RV_VCMP_EQ instr.pc=0x10d0d228 instr.id=94 #of of-instrs=37
+[info] [0000001602] [EXU1] retire_unit_instr, name RV_VCMP_EQ, id 94
+[info] @1602 [RECORD INSTR]: instr.name=RV_POR instr.pc=0x10d0d240 instr.idd=142 #of of-instrs=1
+[info] @1602 [RECORD INSTR]: instr.name=RV_VCMP_LE instr.pc=0x10d0d244 instr.idd=143 #of of-instrs=1
+[info] [0000001602] [EXU0] record_unit_instr, name RV_VCMP_EQ, id 99
+[info] @1603 [RECORD INSTR]: instr.name=RV_VCMP_EQ instr.pc=0x10d0d248 instr.idd=145 #of of-instrs=1
+[info] @1603 [RECORD INSTR]: instr.name=RV_PAND instr.pc=0x10d0d24c instr.idd=146 #of of-instrs=1
+[info] @1603 [RECORD INSTR]: instr.name=RV_POR instr.pc=0x10d0d250 instr.idd=147 #of of-instrs=1
+[info] [0000001603] [EXU0] record_unit_instr, name RV_VCMP_EQ, id 102
+[info] [0000001603] [EXU1] record_unit_instr, name RV_VCMP_LE, id 101
+[info] [0000001603] [LDU] record_unit_instr, name RV_VLDI, id 123
+[info] @1604 [RETIRE INSTR]: instr.name=RV_VLDI instr.pc=0x10d0d234 instr.id=97 #of of-instrs=41
+[info] @1604 [RECORD INSTR]: instr.name=RV_VSEL instr.pc=0x10d0d254 instr.idd=149 #of of-instrs=1
+[info] @1604 [IDU_SREG_SCB]: name=RV_VSTI pc=0x10d0d25c id=137, reg_idx=66, latency= 3, valid_time=1607
+[info] @1604 [IDU_SREG_SCB]: name=RV_VLDI pc=0x10d0d234 id=138, reg_idx=67, latency= 3, valid_time=1607
+[info] @1604 [IDU_SREG_SCB]: name=RV_VLDI pc=0x10d0d238 id=139, reg_idx=65, latency= 3, valid_time=1607
+[info] [0000001604] [EXU1] record_unit_instr, name RV_POR, id 100
+[info] [0000001604] [LDU] retire_unit_instr, name RV_VLDI, id 123
+[info] [0000001604] [LDU] record_unit_instr, name RV_VLDI, id 124
+[info] @1605 [RETIRE INSTR]: instr.name=RV_VLDI instr.pc=0x10d0d238 instr.id=98 #of of-instrs=41
+[info] @1605 [RETIRE INSTR]: instr.name=RV_PXOR instr.pc=0x10d0d22c instr.id=95 #of of-instrs=40
+[info] [0000001605] [EXU0] retire_unit_instr, name RV_PXOR, id 95
+[info] @1605 [RECORD INSTR]: instr.name=RV_VCVT_I2I instr.pc=0x10d0d258 instr.idd=151 #of of-instrs=1
+[info] @1605 [IFU_SREG_SCB]: name=RV_VSTI pc=0x10d0d25c id=152, reg_idx=66
+[info] @1605 [RECORD INSTR]: instr.name=RV_VSTI instr.pc=0x10d0d25c instr.idd=152 #of of-instrs=1
+[info] @1605 [IFU_SREG_SCB]: name=RV_VLDI pc=0x10d0d234 id=153, reg_idx=67
+[info] @1605 [RECORD INSTR]: instr.name=RV_VLDI instr.pc=0x10d0d234 instr.idd=153 #of of-instrs=1
+[info] @1605 [IFU_SREG_SCB]: name=RV_VLDI pc=0x10d0d238 id=154, reg_idx=65
+[info] @1605 [RECORD INSTR]: instr.name=RV_VLDI instr.pc=0x10d0d238 instr.idd=154 #of of-instrs=1
+[info] @1605 [RECORD INSTR]: instr.name=RV_VCMP_EQ instr.pc=0x10d0d23c instr.idd=155 #of of-instrs=1
+[info] [0000001605] [EXU0] record_unit_instr, name RV_VCMP_EQ, id 111
+[info] [0000001605] [LDU] retire_unit_instr, name RV_VLDI, id 124
+[info] @1606 [RECORD INSTR]: instr.name=RV_POR instr.pc=0x10d0d240 instr.idd=157 #of of-instrs=1
+[info] @1606 [RECORD INSTR]: instr.name=RV_VCMP_LE instr.pc=0x10d0d244 instr.idd=158 #of of-instrs=1
+[info] [0000001606] [EXU1] record_unit_instr, name RV_VCMP_LE, id 113
+[info] @1607 [RETIRE INSTR]: instr.name=RV_VLDI instr.pc=0x10d0d234 instr.id=109 #of of-instrs=46
+[info] @1607 [RETIRE INSTR]: instr.name=RV_VCMP_EQ instr.pc=0x10d0d23c instr.id=99 #of of-instrs=45
+[info] [0000001607] [EXU0] retire_unit_instr, name RV_VCMP_EQ, id 99
+[info] @1607 [RECORD INSTR]: instr.name=RV_VCMP_EQ instr.pc=0x10d0d248 instr.idd=160 #of of-instrs=1
+[info] @1607 [RECORD INSTR]: instr.name=RV_PAND instr.pc=0x10d0d24c instr.idd=161 #of of-instrs=1
+[info] @1607 [RECORD INSTR]: instr.name=RV_POR instr.pc=0x10d0d250 instr.idd=162 #of of-instrs=1
+[info] [0000001607] [EXU0] record_unit_instr, name RV_PAND, id 103
+[info] [0000001607] [EXU1] record_unit_instr, name RV_POR, id 112
+[info] [0000001607] [LDU] record_unit_instr, name RV_VLDI, id 138
+[info] @1608 [RETIRE INSTR]: instr.name=RV_VLDI instr.pc=0x10d0d238 instr.id=110 #of of-instrs=47
+[info] @1608 [RETIRE INSTR]: instr.name=RV_VCMP_EQ instr.pc=0x10d0d248 instr.id=102 #of of-instrs=46
+[info] @1608 [RETIRE INSTR]: instr.name=RV_VCMP_LE instr.pc=0x10d0d244 instr.id=101 #of of-instrs=45
+[info] [0000001608] [EXU0] retire_unit_instr, name RV_VCMP_EQ, id 102
+[info] [0000001608] [EXU1] retire_unit_instr, name RV_VCMP_LE, id 101
+[info] @1608 [RECORD INSTR]: instr.name=RV_VSEL instr.pc=0x10d0d254 instr.idd=164 #of of-instrs=1
+[info] @1608 [IDU_SREG_SCB]: name=RV_VSTI pc=0x10d0d25c id=152, reg_idx=66, latency= 3, valid_time=1611
+[info] @1608 [IDU_SREG_SCB]: name=RV_VLDI pc=0x10d0d234 id=153, reg_idx=67, latency= 3, valid_time=1611
+[info] @1608 [IDU_SREG_SCB]: name=RV_VLDI pc=0x10d0d238 id=154, reg_idx=65, latency= 3, valid_time=1611
+[info] [0000001608] [LDU] retire_unit_instr, name RV_VLDI, id 138
+[info] [0000001608] [LDU] record_unit_instr, name RV_VLDI, id 139
+[info] @1609 [RECORD INSTR]: instr.name=RV_VCVT_I2I instr.pc=0x10d0d258 instr.idd=166 #of of-instrs=1
+[info] @1609 [IFU_SREG_SCB]: name=RV_VSTI pc=0x10d0d25c id=167, reg_idx=66
+[info] @1609 [RECORD INSTR]: instr.name=RV_VSTI instr.pc=0x10d0d25c instr.idd=167 #of of-instrs=1
+[info] @1609 [IFU_SREG_SCB]: name=RV_VLDI pc=0x10d0d234 id=168, reg_idx=67
+[info] @1609 [RECORD INSTR]: instr.name=RV_VLDI instr.pc=0x10d0d234 instr.idd=168 #of of-instrs=1
+[info] @1609 [IFU_SREG_SCB]: name=RV_VLDI pc=0x10d0d238 id=169, reg_idx=65
+[info] @1609 [RECORD INSTR]: instr.name=RV_VLDI instr.pc=0x10d0d238 instr.idd=169 #of of-instrs=1
+[info] @1609 [RECORD INSTR]: instr.name=RV_VCMP_EQ instr.pc=0x10d0d23c instr.idd=170 #of of-instrs=1
+[info] [0000001609] [EXU0] record_unit_instr, name RV_VCMP_EQ, id 115
+[info] [0000001609] [LDU] retire_unit_instr, name RV_VLDI, id 139
+[info] @1610 [RETIRE INSTR]: instr.name=RV_VCMP_EQ instr.pc=0x10d0d23c instr.id=111 #of of-instrs=50
+[info] @1610 [RETIRE INSTR]: instr.name=RV_POR instr.pc=0x10d0d240 instr.id=100 #of of-instrs=49
+[info] [0000001610] [EXU0] retire_unit_instr, name RV_VCMP_EQ, id 111
+[info] [0000001610] [EXU1] retire_unit_instr, name RV_POR, id 100
+[info] @1610 [RECORD INSTR]: instr.name=RV_POR instr.pc=0x10d0d240 instr.idd=172 #of of-instrs=1
+[info] @1610 [RECORD INSTR]: instr.name=RV_VCMP_LE instr.pc=0x10d0d244 instr.idd=173 #of of-instrs=1
+[info] [0000001610] [EXU0] record_unit_instr, name RV_PAND, id 116
+[info] [0000001610] [EXU1] record_unit_instr, name RV_POR, id 104
+[info] @1611 [RETIRE INSTR]: instr.name=RV_VLDI instr.pc=0x10d0d234 instr.id=123 #of of-instrs=50
+[info] @1611 [RETIRE INSTR]: instr.name=RV_VCMP_LE instr.pc=0x10d0d244 instr.id=113 #of of-instrs=49
+[info] @1611 [RECORD INSTR]: instr.name=RV_VCMP_EQ instr.pc=0x10d0d248 instr.idd=175 #of of-instrs=1
+[info] @1611 [RECORD INSTR]: instr.name=RV_PAND instr.pc=0x10d0d24c instr.idd=176 #of of-instrs=1
+[info] @1611 [RECORD INSTR]: instr.name=RV_POR instr.pc=0x10d0d250 instr.idd=177 #of of-instrs=1
+[info] [0000001611] [LDU] record_unit_instr, name RV_VLDI, id 153
+[info] [0000001611] [EXU1] retire_unit_instr, name RV_VCMP_LE, id 113
+[info] @1612 [RETIRE INSTR]: instr.name=RV_VLDI instr.pc=0x10d0d238 instr.id=124 #of of-instrs=51
+[info] @1612 [RECORD INSTR]: instr.name=RV_VSEL instr.pc=0x10d0d254 instr.idd=179 #of of-instrs=1
+[info] @1612 [IDU_SREG_SCB]: name=RV_VSTI pc=0x10d0d25c id=167, reg_idx=66, latency= 3, valid_time=1615
+[info] @1612 [IDU_SREG_SCB]: name=RV_VLDI pc=0x10d0d234 id=168, reg_idx=67, latency= 3, valid_time=1615
+[info] @1612 [IDU_SREG_SCB]: name=RV_VLDI pc=0x10d0d238 id=169, reg_idx=65, latency= 3, valid_time=1615
+[info] [0000001612] [EXU0] record_unit_instr, name RV_VCMP_EQ, id 125
+[info] [0000001612] [EXU1] record_unit_instr, name RV_VCMP_LE, id 128
+[info] [0000001612] [LDU] retire_unit_instr, name RV_VLDI, id 153
+[info] [0000001612] [LDU] record_unit_instr, name RV_VLDI, id 154
+[info] @1613 [RETIRE INSTR]: instr.name=RV_PAND instr.pc=0x10d0d24c instr.id=103 #of of-instrs=51
+[info] @1613 [RETIRE INSTR]: instr.name=RV_POR instr.pc=0x10d0d240 instr.id=112 #of of-instrs=50
+[info] [0000001613] [EXU0] retire_unit_instr, name RV_PAND, id 103
+[info] [0000001613] [EXU1] retire_unit_instr, name RV_POR, id 112
+[info] @1613 [RECORD INSTR]: instr.name=RV_VCVT_I2I instr.pc=0x10d0d258 instr.idd=181 #of of-instrs=1
+[info] @1613 [IFU_SREG_SCB]: name=RV_VSTI pc=0x10d0d25c id=182, reg_idx=66
+[info] @1613 [RECORD INSTR]: instr.name=RV_VSTI instr.pc=0x10d0d25c instr.idd=182 #of of-instrs=1
+[info] @1613 [IFU_SREG_SCB]: name=RV_VLDI pc=0x10d0d234 id=183, reg_idx=67
+[info] @1613 [RECORD INSTR]: instr.name=RV_VLDI instr.pc=0x10d0d234 instr.idd=183 #of of-instrs=1
+[info] @1613 [IFU_SREG_SCB]: name=RV_VLDI pc=0x10d0d238 id=184, reg_idx=65
+[info] @1613 [RECORD INSTR]: instr.name=RV_VLDI instr.pc=0x10d0d238 instr.idd=184 #of of-instrs=1
+[info] @1613 [RECORD INSTR]: instr.name=RV_VCMP_EQ instr.pc=0x10d0d23c instr.idd=185 #of of-instrs=1
+[info] [0000001613] [EXU0] record_unit_instr, name RV_VSEL, id 105
+[info] [0000001613] [EXU1] record_unit_instr, name RV_POR, id 117
+[info] [0000001613] [LDU] retire_unit_instr, name RV_VLDI, id 154
+[info] @1614 [RETIRE INSTR]: instr.name=RV_VCMP_EQ instr.pc=0x10d0d248 instr.id=115 #of of-instrs=54
+[info] @1614 [RECORD INSTR]: instr.name=RV_POR instr.pc=0x10d0d240 instr.idd=187 #of of-instrs=1
+[info] @1614 [RECORD INSTR]: instr.name=RV_VCMP_LE instr.pc=0x10d0d244 instr.idd=188 #of of-instrs=1
+[info] [0000001614] [EXU0] record_unit_instr, name RV_VCMP_EQ, id 130
+[info] [0000001614] [EXU0] retire_unit_instr, name RV_VCMP_EQ, id 115
+[info] @1615 [RETIRE INSTR]: instr.name=RV_VLDI instr.pc=0x10d0d234 instr.id=138 #of of-instrs=55
+[info] @1615 [RECORD INSTR]: instr.name=RV_VCMP_EQ instr.pc=0x10d0d248 instr.idd=190 #of of-instrs=1
+[info] @1615 [RECORD INSTR]: instr.name=RV_PAND instr.pc=0x10d0d24c instr.idd=191 #of of-instrs=1
+[info] [0000001615] [EXU0] record_unit_instr, name RV_VCMP_EQ, id 140
+[info] [0000001615] [EXU1] record_unit_instr, name RV_VCVT_I2I, id 107
+[info] [0000001615] [LDU] record_unit_instr, name RV_VLDI, id 168
+[info] @1616 [RETIRE INSTR]: instr.name=RV_VLDI instr.pc=0x10d0d238 instr.id=139 #of of-instrs=56
+[info] @1616 [RETIRE INSTR]: instr.name=RV_PAND instr.pc=0x10d0d24c instr.id=116 #of of-instrs=55
+[info] @1616 [RETIRE INSTR]: instr.name=RV_POR instr.pc=0x10d0d250 instr.id=104 #of of-instrs=54
+[info] [0000001616] [EXU0] retire_unit_instr, name RV_PAND, id 116
+[info] [0000001616] [EXU1] retire_unit_instr, name RV_POR, id 104
+[info] @1616 [RECORD INSTR]: instr.name=RV_POR instr.pc=0x10d0d250 instr.idd=193 #of of-instrs=1
+[info] [0000001616] [EXU0] record_unit_instr, name RV_VSEL, id 119
+[info] [0000001616] [EXU1] record_unit_instr, name RV_POR, id 127
+[info] [0000001616] [LDU] retire_unit_instr, name RV_VLDI, id 168
+[info] [0000001616] [LDU] record_unit_instr, name RV_VLDI, id 169
+[info] @1617 [RETIRE INSTR]: instr.name=RV_VCMP_EQ instr.pc=0x10d0d23c instr.id=125 #of of-instrs=54
+[info] @1617 [RETIRE INSTR]: instr.name=RV_VCMP_LE instr.pc=0x10d0d244 instr.id=128 #of of-instrs=53
+[info] @1617 [RECORD INSTR]: instr.name=RV_VSEL instr.pc=0x10d0d254 instr.idd=195 #of of-instrs=1
+[info] @1617 [IDU_SREG_SCB]: name=RV_VSTI pc=0x10d0d25c id=182, reg_idx=66, latency= 3, valid_time=1620
+[info] @1617 [IDU_SREG_SCB]: name=RV_VLDI pc=0x10d0d234 id=183, reg_idx=67, latency= 3, valid_time=1620
+[info] @1617 [IDU_SREG_SCB]: name=RV_VLDI pc=0x10d0d238 id=184, reg_idx=65, latency= 3, valid_time=1620
+[info] [0000001617] [EXU0] record_unit_instr, name RV_VCMP_EQ, id 145
+[info] [0000001617] [LDU] retire_unit_instr, name RV_VLDI, id 169
+[info] [0000001617] [EXU0] retire_unit_instr, name RV_VCMP_EQ, id 125
+[info] [0000001617] [EXU1] retire_unit_instr, name RV_VCMP_LE, id 128
+[info] @1618 [RETIRE INSTR]: instr.name=RV_VSEL instr.pc=0x10d0d254 instr.id=105 #of of-instrs=53
+[info] @1618 [RECORD INSTR]: instr.name=RV_VCVT_I2I instr.pc=0x10d0d258 instr.idd=197 #of of-instrs=1
+[info] @1618 [IFU_SREG_SCB]: name=RV_VSTI pc=0x10d0d25c id=198, reg_idx=66
+[info] @1618 [RECORD INSTR]: instr.name=RV_VSTI instr.pc=0x10d0d25c instr.idd=198 #of of-instrs=1
+[info] @1618 [IFU_SREG_SCB]: name=RV_VLDI pc=0x10d0d234 id=199, reg_idx=67
+[info] @1618 [RECORD INSTR]: instr.name=RV_VLDI instr.pc=0x10d0d234 instr.idd=199 #of of-instrs=1
+[info] @1618 [IFU_SREG_SCB]: name=RV_VLDI pc=0x10d0d238 id=200, reg_idx=65
+[info] @1618 [RECORD INSTR]: instr.name=RV_VLDI instr.pc=0x10d0d238 instr.idd=200 #of of-instrs=1
+[info] @1618 [RECORD INSTR]: instr.name=RV_VCMP_EQ instr.pc=0x10d0d23c instr.idd=201 #of of-instrs=1
+[info] [0000001618] [EXU0] record_unit_instr, name RV_VCMP_EQ, id 155
+[info] [0000001618] [EXU1] record_unit_instr, name RV_VCMP_LE, id 143
+[info] [0000001618] [EXU0] retire_unit_instr, name RV_VSEL, id 105
+[info] @1619 [RETIRE INSTR]: instr.name=RV_VLDI instr.pc=0x10d0d234 instr.id=153 #of of-instrs=57
+[info] @1619 [RETIRE INSTR]: instr.name=RV_VCMP_EQ instr.pc=0x10d0d248 instr.id=130 #of of-instrs=56
+[info] @1619 [RETIRE INSTR]: instr.name=RV_POR instr.pc=0x10d0d250 instr.id=117 #of of-instrs=55
+[info] [0000001619] [EXU0] retire_unit_instr, name RV_VCMP_EQ, id 130
+[info] [0000001619] [EXU1] retire_unit_instr, name RV_POR, id 117
+[info] @1619 [RECORD INSTR]: instr.name=RV_POR instr.pc=0x10d0d240 instr.idd=203 #of of-instrs=1
+[info] @1619 [RECORD INSTR]: instr.name=RV_VCMP_LE instr.pc=0x10d0d244 instr.idd=204 #of of-instrs=1
+[info] [0000001619] [EXU0] record_unit_instr, name RV_PAND, id 131
+[info] [0000001619] [EXU1] record_unit_instr, name RV_VCVT_I2I, id 121
+[info] @1620 [RETIRE INSTR]: instr.name=RV_VLDI instr.pc=0x10d0d238 instr.id=154 #of of-instrs=56
+[info] @1620 [RETIRE INSTR]: instr.name=RV_VCMP_EQ instr.pc=0x10d0d23c instr.id=140 #of of-instrs=55
+[info] @1620 [RECORD INSTR]: instr.name=RV_VCMP_EQ instr.pc=0x10d0d248 instr.idd=206 #of of-instrs=1
+[info] @1620 [RECORD INSTR]: instr.name=RV_PAND instr.pc=0x10d0d24c instr.idd=207 #of of-instrs=1
+[info] @1620 [RECORD INSTR]: instr.name=RV_POR instr.pc=0x10d0d250 instr.idd=208 #of of-instrs=1
+[info] [0000001620] [EXU1] record_unit_instr, name RV_POR, id 142
+[info] [0000001620] [LDU] record_unit_instr, name RV_VLDI, id 183
+[info] [0000001620] [EXU0] retire_unit_instr, name RV_VCMP_EQ, id 140
+[info] [0000001620] [STU] record_unit_instr, name RV_VSTI, id 108
+[info] @1621 [RETIRE INSTR]: instr.name=RV_VSEL instr.pc=0x10d0d254 instr.id=119 #of of-instrs=57
+[info] @1621 [RETIRE INSTR]: instr.name=RV_VCVT_I2I instr.pc=0x10d0d258 instr.id=107 #of of-instrs=56
+[info] [0000001621] [EXU0] retire_unit_instr, name RV_VSEL, id 119
+[info] [0000001621] [EXU1] retire_unit_instr, name RV_VCVT_I2I, id 107
+[info] [0000001621] [EXU0] record_unit_instr, name RV_VCMP_EQ, id 160
+[info] [0000001621] [LDU] retire_unit_instr, name RV_VLDI, id 183
+[info] [0000001621] [LDU] record_unit_instr, name RV_VLDI, id 184
+[info] @1622 [RETIRE INSTR]: instr.name=RV_VCMP_EQ instr.pc=0x10d0d248 instr.id=145 #of of-instrs=55
+[info] @1622 [RETIRE INSTR]: instr.name=RV_POR instr.pc=0x10d0d240 instr.id=127 #of of-instrs=54
+[info] @1622 [RECORD INSTR]: instr.name=RV_VSEL instr.pc=0x10d0d254 instr.idd=211 #of of-instrs=1
+[info] @1622 [IDU_SREG_SCB]: name=RV_VSTI pc=0x10d0d25c id=198, reg_idx=66, latency= 3, valid_time=1625
+[info] @1622 [IDU_SREG_SCB]: name=RV_VLDI pc=0x10d0d234 id=199, reg_idx=67, latency= 3, valid_time=1625
+[info] @1622 [IDU_SREG_SCB]: name=RV_VLDI pc=0x10d0d238 id=200, reg_idx=65, latency= 3, valid_time=1625
+[info] [0000001622] [EXU1] record_unit_instr, name RV_POR, id 132
+[info] [0000001622] [LDU] retire_unit_instr, name RV_VLDI, id 184
+[info] [0000001622] [EXU0] retire_unit_instr, name RV_VCMP_EQ, id 145
+[info] [0000001622] [EXU1] retire_unit_instr, name RV_POR, id 127
+[info] @1623 [RETIRE INSTR]: instr.name=RV_VLDI instr.pc=0x10d0d234 instr.id=168 #of of-instrs=54
+[info] @1623 [RETIRE INSTR]: instr.name=RV_VCMP_EQ instr.pc=0x10d0d23c instr.id=155 #of of-instrs=53
+[info] @1623 [RETIRE INSTR]: instr.name=RV_VCMP_LE instr.pc=0x10d0d244 instr.id=143 #of of-instrs=52
+[info] @1623 [RECORD INSTR]: instr.name=RV_VCVT_I2I instr.pc=0x10d0d258 instr.idd=213 #of of-instrs=1
+[info] @1623 [IFU_SREG_SCB]: name=RV_VSTI pc=0x10d0d25c id=214, reg_idx=66
+[info] @1623 [RECORD INSTR]: instr.name=RV_VSTI instr.pc=0x10d0d25c instr.idd=214 #of of-instrs=1
+[info] @1623 [IFU_SREG_SCB]: name=RV_VLDI pc=0x10d0d234 id=215, reg_idx=67
+[info] @1623 [RECORD INSTR]: instr.name=RV_VLDI instr.pc=0x10d0d234 instr.idd=215 #of of-instrs=1
+[info] @1623 [IFU_SREG_SCB]: name=RV_VLDI pc=0x10d0d238 id=216, reg_idx=65
+[info] @1623 [RECORD INSTR]: instr.name=RV_VLDI instr.pc=0x10d0d238 instr.idd=216 #of of-instrs=1
+[info] @1623 [RECORD INSTR]: instr.name=RV_VCMP_EQ instr.pc=0x10d0d23c instr.idd=217 #of of-instrs=1
+[info] [0000001623] [EXU0] record_unit_instr, name RV_PAND, id 146
+[info] [0000001623] [EXU0] retire_unit_instr, name RV_VCMP_EQ, id 155
+[info] [0000001623] [EXU1] retire_unit_instr, name RV_VCMP_LE, id 143
+[info] @1624 [RETIRE INSTR]: instr.name=RV_VLDI instr.pc=0x10d0d238 instr.id=169 #of of-instrs=56
+[info] @1624 [RECORD INSTR]: instr.name=RV_POR instr.pc=0x10d0d240 instr.idd=219 #of of-instrs=1
+[info] [0000001624] [EXU1] record_unit_instr, name RV_VCMP_LE, id 158
+[info] [0000001624] [STU] record_unit_instr, name RV_VSTI, id 122
+[info] @1625 [RETIRE INSTR]: instr.name=RV_PAND instr.pc=0x10d0d24c instr.id=131 #of of-instrs=56
+[info] @1625 [RETIRE INSTR]: instr.name=RV_VCVT_I2I instr.pc=0x10d0d258 instr.id=121 #of of-instrs=55
+[info] [0000001625] [EXU0] retire_unit_instr, name RV_PAND, id 131
+[info] [0000001625] [EXU1] retire_unit_instr, name RV_VCVT_I2I, id 121
+[info] @1625 [RECORD INSTR]: instr.name=RV_VCMP_LE instr.pc=0x10d0d244 instr.idd=221 #of of-instrs=1
+[info] [0000001625] [EXU0] record_unit_instr, name RV_VSEL, id 134
+[info] [0000001625] [EXU1] record_unit_instr, name RV_POR, id 157
+[info] [0000001625] [LDU] record_unit_instr, name RV_VLDI, id 199
+[info] @1626 [RETIRE INSTR]: instr.name=RV_VCMP_EQ instr.pc=0x10d0d248 instr.id=160 #of of-instrs=55
+[info] @1626 [RETIRE INSTR]: instr.name=RV_POR instr.pc=0x10d0d240 instr.id=142 #of of-instrs=54
+[info] @1626 [RECORD INSTR]: instr.name=RV_VCMP_EQ instr.pc=0x10d0d248 instr.idd=223 #of of-instrs=1
+[info] @1626 [RECORD INSTR]: instr.name=RV_PAND instr.pc=0x10d0d24c instr.idd=224 #of of-instrs=1
+[info] [0000001626] [EXU0] record_unit_instr, name RV_VCMP_EQ, id 170
+[info] [0000001626] [LDU] retire_unit_instr, name RV_VLDI, id 199
+[info] [0000001626] [LDU] record_unit_instr, name RV_VLDI, id 200
+[info] [0000001626] [EXU0] retire_unit_instr, name RV_VCMP_EQ, id 160
+[info] [0000001626] [EXU1] retire_unit_instr, name RV_POR, id 142
+[info] [0000001627] [EXU0] record_unit_instr, name RV_VCMP_EQ, id 175
+[info] [0000001627] [EXU1] record_unit_instr, name RV_POR, id 147
+[info] [0000001627] [LDU] retire_unit_instr, name RV_VLDI, id 200
+[info] @1628 [RETIRE INSTR]: instr.name=RV_VLDI instr.pc=0x10d0d234 instr.id=183 #of of-instrs=55
+[info] @1628 [RETIRE INSTR]: instr.name=RV_POR instr.pc=0x10d0d250 instr.id=132 #of of-instrs=54
+[info] [0000001628] [EXU1] retire_unit_instr, name RV_POR, id 132
+[info] @1628 [RECORD INSTR]: instr.name=RV_POR instr.pc=0x10d0d250 instr.idd=227 #of of-instrs=1
+[info] [0000001628] [EXU0] record_unit_instr, name RV_PAND, id 161
+[info] [0000001628] [EXU1] record_unit_instr, name RV_VCVT_I2I, id 136
+[info] @1629 [RETIRE INSTR]: instr.name=RV_VLDI instr.pc=0x10d0d238 instr.id=184 #of of-instrs=54
+[info] @1629 [RETIRE INSTR]: instr.name=RV_PAND instr.pc=0x10d0d24c instr.id=146 #of of-instrs=53
+[info] @1629 [RETIRE INSTR]: instr.name=RV_VCMP_LE instr.pc=0x10d0d244 instr.id=158 #of of-instrs=52
+[info] [0000001629] [EXU0] retire_unit_instr, name RV_PAND, id 146
+[info] [0000001629] [EXU1] retire_unit_instr, name RV_VCMP_LE, id 158
+[info] @1629 [RECORD INSTR]: instr.name=RV_VSEL instr.pc=0x10d0d254 instr.idd=229 #of of-instrs=1
+[info] @1629 [IDU_SREG_SCB]: name=RV_VSTI pc=0x10d0d25c id=214, reg_idx=66, latency= 3, valid_time=1632
+[info] @1629 [IDU_SREG_SCB]: name=RV_VLDI pc=0x10d0d234 id=215, reg_idx=67, latency= 3, valid_time=1632
+[info] @1629 [IDU_SREG_SCB]: name=RV_VLDI pc=0x10d0d238 id=216, reg_idx=65, latency= 3, valid_time=1632
+[info] [0000001629] [EXU1] record_unit_instr, name RV_POR, id 172
+[info] @1630 [RETIRE INSTR]: instr.name=RV_VSEL instr.pc=0x10d0d254 instr.id=134 #of of-instrs=52
+[info] @1630 [RECORD INSTR]: instr.name=RV_VCVT_I2I instr.pc=0x10d0d258 instr.idd=231 #of of-instrs=1
+[info] @1630 [IFU_SREG_SCB]: name=RV_VSTI pc=0x10d0d25c id=232, reg_idx=66
+[info] @1630 [RECORD INSTR]: instr.name=RV_VSTI instr.pc=0x10d0d25c instr.idd=232 #of of-instrs=1
+[info] @1630 [IFU_SREG_SCB]: name=RV_VLDI pc=0x10d0d234 id=233, reg_idx=67
+[info] @1630 [RECORD INSTR]: instr.name=RV_VLDI instr.pc=0x10d0d234 instr.idd=233 #of of-instrs=1
+[info] @1630 [IFU_SREG_SCB]: name=RV_VLDI pc=0x10d0d238 id=234, reg_idx=65
+[info] @1630 [RECORD INSTR]: instr.name=RV_VLDI instr.pc=0x10d0d238 instr.idd=234 #of of-instrs=1
+[info] @1630 [RECORD INSTR]: instr.name=RV_VCMP_EQ instr.pc=0x10d0d23c instr.idd=235 #of of-instrs=1
+[info] [0000001630] [EXU0] record_unit_instr, name RV_VSEL, id 149
+[info] [0000001630] [EXU0] retire_unit_instr, name RV_VSEL, id 134
+[info] @1631 [RETIRE INSTR]: instr.name=RV_VCMP_EQ instr.pc=0x10d0d23c instr.id=170 #of of-instrs=56
+[info] @1631 [RETIRE INSTR]: instr.name=RV_POR instr.pc=0x10d0d240 instr.id=157 #of of-instrs=55
+[info] [0000001631] [EXU0] retire_unit_instr, name RV_VCMP_EQ, id 170
+[info] [0000001631] [EXU1] retire_unit_instr, name RV_POR, id 157
+[info] @1631 [RECORD INSTR]: instr.name=RV_POR instr.pc=0x10d0d240 instr.idd=237 #of of-instrs=1
+[info] @1631 [RECORD INSTR]: instr.name=RV_VCMP_LE instr.pc=0x10d0d244 instr.idd=238 #of of-instrs=1
+[info] [0000001631] [EXU0] record_unit_instr, name RV_VCMP_EQ, id 185
+[info] [0000001631] [EXU1] record_unit_instr, name RV_VCMP_LE, id 173
+[info] @1632 [RETIRE INSTR]: instr.name=RV_VCMP_EQ instr.pc=0x10d0d248 instr.id=175 #of of-instrs=56
+[info] @1632 [RECORD INSTR]: instr.name=RV_VCMP_EQ instr.pc=0x10d0d248 instr.idd=240 #of of-instrs=1
+[info] @1632 [RECORD INSTR]: instr.name=RV_PAND instr.pc=0x10d0d24c instr.idd=241 #of of-instrs=1
+[info] [0000001632] [EXU0] record_unit_instr, name RV_VCMP_EQ, id 190
+[info] [0000001632] [EXU1] record_unit_instr, name RV_POR, id 162
+[info] [0000001632] [LDU] record_unit_instr, name RV_VLDI, id 215
+[info] [0000001632] [EXU0] retire_unit_instr, name RV_VCMP_EQ, id 175
+[info] [0000001632] [STU] retire_unit_instr, name RV_VSTI, id 108
+[info] @1633 [RETIRE INSTR]: instr.name=RV_VLDI instr.pc=0x10d0d234 instr.id=199 #of of-instrs=57
+[info] @1633 [RETIRE INSTR]: instr.name=RV_POR instr.pc=0x10d0d250 instr.id=147 #of of-instrs=56
+[info] [0000001633] [EXU1] retire_unit_instr, name RV_POR, id 147
+[info] @1633 [RECORD INSTR]: instr.name=RV_POR instr.pc=0x10d0d250 instr.idd=243 #of of-instrs=1
+[info] [0000001633] [EXU0] record_unit_instr, name RV_PAND, id 176
+[info] [0000001633] [EXU1] record_unit_instr, name RV_VCVT_I2I, id 151
+[info] [0000001633] [LDU] retire_unit_instr, name RV_VLDI, id 215
+[info] [0000001633] [LDU] record_unit_instr, name RV_VLDI, id 216
+[info] [0000001633] [STU] record_unit_instr, name RV_VSTI, id 137
+[info] @1634 [RETIRE INSTR]: instr.name=RV_VLDI instr.pc=0x10d0d238 instr.id=200 #of of-instrs=56
+[info] @1634 [RETIRE INSTR]: instr.name=RV_VSTI instr.pc=0x10d0d25c instr.id=108 #of of-instrs=55
+[info] @1634 [RETIRE INSTR]: instr.name=RV_PAND instr.pc=0x10d0d24c instr.id=161 #of of-instrs=54
+[info] @1634 [RETIRE INSTR]: instr.name=RV_VCVT_I2I instr.pc=0x10d0d258 instr.id=136 #of of-instrs=53
+[info] [0000001634] [EXU0] retire_unit_instr, name RV_PAND, id 161
+[info] [0000001634] [EXU1] retire_unit_instr, name RV_VCVT_I2I, id 136
+[info] @1634 [RECORD INSTR]: instr.name=RV_VSEL instr.pc=0x10d0d254 instr.idd=245 #of of-instrs=1
+[info] @1634 [IDU_SREG_SCB]: name=RV_VSTI pc=0x10d0d25c id=232, reg_idx=66, latency= 3, valid_time=1637
+[info] @1634 [IDU_SREG_SCB]: name=RV_VLDI pc=0x10d0d234 id=233, reg_idx=67, latency= 3, valid_time=1637
+[info] @1634 [IDU_SREG_SCB]: name=RV_VLDI pc=0x10d0d238 id=234, reg_idx=65, latency= 3, valid_time=1637
+[info] [0000001634] [EXU1] record_unit_instr, name RV_POR, id 187
+[info] [0000001634] [LDU] retire_unit_instr, name RV_VLDI, id 216
+[info] @1635 [RETIRE INSTR]: instr.name=RV_VSEL instr.pc=0x10d0d254 instr.id=149 #of of-instrs=53
+[info] @1635 [RETIRE INSTR]: instr.name=RV_POR instr.pc=0x10d0d240 instr.id=172 #of of-instrs=52
+[info] @1635 [RECORD INSTR]: instr.name=RV_VCVT_I2I instr.pc=0x10d0d258 instr.idd=247 #of of-instrs=1
+[info] @1635 [IFU_SREG_SCB]: name=RV_VSTI pc=0x10d0d25c id=248, reg_idx=66
+[info] @1635 [RECORD INSTR]: instr.name=RV_VSTI instr.pc=0x10d0d25c instr.idd=248 #of of-instrs=1
+[info] @1635 [IFU_SREG_SCB]: name=RV_VLDI pc=0x10d0d234 id=249, reg_idx=67
+[info] @1635 [RECORD INSTR]: instr.name=RV_VLDI instr.pc=0x10d0d234 instr.idd=249 #of of-instrs=1
+[info] @1635 [IFU_SREG_SCB]: name=RV_VLDI pc=0x10d0d238 id=250, reg_idx=65
+[info] @1635 [RECORD INSTR]: instr.name=RV_VLDI instr.pc=0x10d0d238 instr.idd=250 #of of-instrs=1
+[info] @1635 [RECORD INSTR]: instr.name=RV_VCMP_EQ instr.pc=0x10d0d23c instr.idd=251 #of of-instrs=1
+[info] [0000001635] [EXU0] record_unit_instr, name RV_VSEL, id 164
+[info] [0000001635] [EXU0] retire_unit_instr, name RV_VSEL, id 149
+[info] [0000001635] [EXU1] retire_unit_instr, name RV_POR, id 172
+[info] @1636 [RETIRE INSTR]: instr.name=RV_VCMP_EQ instr.pc=0x10d0d23c instr.id=185 #of of-instrs=56
+[info] @1636 [RETIRE INSTR]: instr.name=RV_VCMP_LE instr.pc=0x10d0d244 instr.id=173 #of of-instrs=55
+[info] @1636 [RECORD INSTR]: instr.name=RV_POR instr.pc=0x10d0d240 instr.idd=253 #of of-instrs=1
+[info] @1636 [RECORD INSTR]: instr.name=RV_VCMP_LE instr.pc=0x10d0d244 instr.idd=254 #of of-instrs=1
+[info] [0000001636] [EXU0] record_unit_instr, name RV_VCMP_EQ, id 201
+[info] [0000001636] [EXU1] record_unit_instr, name RV_POR, id 177
+[info] [0000001636] [EXU0] retire_unit_instr, name RV_VCMP_EQ, id 185
+[info] [0000001636] [EXU1] retire_unit_instr, name RV_VCMP_LE, id 173
+[info] @1637 [RETIRE INSTR]: instr.name=RV_VCMP_EQ instr.pc=0x10d0d248 instr.id=190 #of of-instrs=56
+[info] @1637 [RECORD INSTR]: instr.name=RV_VCMP_EQ instr.pc=0x10d0d248 instr.idd=256 #of of-instrs=1
+[info] @1637 [RECORD INSTR]: instr.name=RV_PAND instr.pc=0x10d0d24c instr.idd=257 #of of-instrs=1
+[info] [0000001637] [EXU0] record_unit_instr, name RV_VCMP_EQ, id 206
+[info] [0000001637] [EXU1] record_unit_instr, name RV_VCVT_I2I, id 166
+[info] [0000001637] [LDU] record_unit_instr, name RV_VLDI, id 233
+[info] [0000001637] [EXU0] retire_unit_instr, name RV_VCMP_EQ, id 190
+[info] @1638 [RETIRE INSTR]: instr.name=RV_POR instr.pc=0x10d0d250 instr.id=162 #of of-instrs=57
+[info] [0000001638] [EXU1] retire_unit_instr, name RV_POR, id 162
+[info] @1638 [RECORD INSTR]: instr.name=RV_POR instr.pc=0x10d0d250 instr.idd=259 #of of-instrs=1
+[info] [0000001638] [EXU0] record_unit_instr, name RV_VCMP_EQ, id 217
+[info] [0000001638] [EXU1] record_unit_instr, name RV_POR, id 203
+[info] [0000001638] [LDU] retire_unit_instr, name RV_VLDI, id 233
+[info] [0000001638] [LDU] record_unit_instr, name RV_VLDI, id 234
+[info] [0000001638] [STU] record_unit_instr, name RV_VSTI, id 152
+[info] @1639 [RETIRE INSTR]: instr.name=RV_PAND instr.pc=0x10d0d24c instr.id=176 #of of-instrs=57
+[info] @1639 [RETIRE INSTR]: instr.name=RV_VCVT_I2I instr.pc=0x10d0d258 instr.id=151 #of of-instrs=56
+[info] [0000001639] [EXU0] retire_unit_instr, name RV_PAND, id 176
+[info] [0000001639] [EXU1] retire_unit_instr, name RV_VCVT_I2I, id 151
+[info] @1639 [RECORD INSTR]: instr.name=RV_VSEL instr.pc=0x10d0d254 instr.idd=261 #of of-instrs=1
+[info] @1639 [IDU_SREG_SCB]: name=RV_VSTI pc=0x10d0d25c id=248, reg_idx=66, latency= 3, valid_time=1642
+[info] @1639 [IDU_SREG_SCB]: name=RV_VLDI pc=0x10d0d234 id=249, reg_idx=67, latency= 3, valid_time=1642
+[info] @1639 [IDU_SREG_SCB]: name=RV_VLDI pc=0x10d0d238 id=250, reg_idx=65, latency= 3, valid_time=1642
+[info] [0000001639] [EXU0] record_unit_instr, name RV_VSEL, id 179
+[info] [0000001639] [STU] retire_unit_instr, name RV_VSTI, id 122
+[info] @1640 [RETIRE INSTR]: instr.name=RV_VLDI instr.pc=0x10d0d234 instr.id=215 #of of-instrs=56
+[info] @1640 [RETIRE INSTR]: instr.name=RV_VSEL instr.pc=0x10d0d254 instr.id=164 #of of-instrs=55
+[info] @1640 [RETIRE INSTR]: instr.name=RV_POR instr.pc=0x10d0d240 instr.id=187 #of of-instrs=54
+[info] @1640 [RECORD INSTR]: instr.name=RV_VCVT_I2I instr.pc=0x10d0d258 instr.idd=263 #of of-instrs=1
+[info] @1640 [IFU_SREG_SCB]: name=RV_VSTI pc=0x10d0d25c id=264, reg_idx=66
+[info] @1640 [RECORD INSTR]: instr.name=RV_VSTI instr.pc=0x10d0d25c instr.idd=264 #of of-instrs=1
+[info] @1640 [IFU_SREG_SCB]: name=RV_VLDI pc=0x10d0d234 id=265, reg_idx=67
+[info] @1640 [RECORD INSTR]: instr.name=RV_VLDI instr.pc=0x10d0d234 instr.idd=265 #of of-instrs=1
+[info] @1640 [IFU_SREG_SCB]: name=RV_VLDI pc=0x10d0d238 id=266, reg_idx=65
+[info] @1640 [RECORD INSTR]: instr.name=RV_VLDI instr.pc=0x10d0d238 instr.idd=266 #of of-instrs=1
+[info] @1640 [RECORD INSTR]: instr.name=RV_VCMP_EQ instr.pc=0x10d0d23c instr.idd=267 #of of-instrs=1
+[info] [0000001640] [EXU0] record_unit_instr, name RV_VCMP_EQ, id 223
+[info] [0000001640] [EXU1] record_unit_instr, name RV_VCMP_LE, id 188
+[info] [0000001640] [LDU] retire_unit_instr, name RV_VLDI, id 234
+[info] [0000001640] [EXU0] retire_unit_instr, name RV_VSEL, id 164
+[info] [0000001640] [EXU1] retire_unit_instr, name RV_POR, id 187
+[info] @1641 [RETIRE INSTR]: instr.name=RV_VLDI instr.pc=0x10d0d238 instr.id=216 #of of-instrs=58
+[info] @1641 [RETIRE INSTR]: instr.name=RV_VSTI instr.pc=0x10d0d25c instr.id=122 #of of-instrs=57
+[info] @1641 [RETIRE INSTR]: instr.name=RV_VCMP_EQ instr.pc=0x10d0d23c instr.id=201 #of of-instrs=56
+[info] @1641 [RECORD INSTR]: instr.name=RV_POR instr.pc=0x10d0d240 instr.idd=269 #of of-instrs=1
+[info] @1641 [RECORD INSTR]: instr.name=RV_VCMP_LE instr.pc=0x10d0d244 instr.idd=270 #of of-instrs=1
+[info] [0000001641] [EXU1] record_unit_instr, name RV_VCMP_LE, id 204
+[info] [0000001641] [EXU0] retire_unit_instr, name RV_VCMP_EQ, id 201
+[info] @1642 [RETIRE INSTR]: instr.name=RV_VCMP_EQ instr.pc=0x10d0d248 instr.id=206 #of of-instrs=57
+[info] @1642 [RETIRE INSTR]: instr.name=RV_POR instr.pc=0x10d0d250 instr.id=177 #of of-instrs=56
+[info] [0000001642] [EXU0] retire_unit_instr, name RV_VCMP_EQ, id 206
+[info] [0000001642] [EXU1] retire_unit_instr, name RV_POR, id 177
+[info] @1642 [RECORD INSTR]: instr.name=RV_VCMP_EQ instr.pc=0x10d0d248 instr.idd=272 #of of-instrs=1
+[info] @1642 [RECORD INSTR]: instr.name=RV_PAND instr.pc=0x10d0d24c instr.idd=273 #of of-instrs=1
+[info] @1642 [RECORD INSTR]: instr.name=RV_POR instr.pc=0x10d0d250 instr.idd=274 #of of-instrs=1
+[info] [0000001642] [EXU0] record_unit_instr, name RV_PAND, id 191
+[info] [0000001642] [EXU1] record_unit_instr, name RV_VCVT_I2I, id 181
+[info] [0000001642] [LDU] record_unit_instr, name RV_VLDI, id 249
+[info] [0000001642] [STU] record_unit_instr, name RV_VSTI, id 167
+[info] @1643 [RETIRE INSTR]: instr.name=RV_VCMP_EQ instr.pc=0x10d0d23c instr.id=217 #of of-instrs=58
+[info] @1643 [RETIRE INSTR]: instr.name=RV_VCVT_I2I instr.pc=0x10d0d258 instr.id=166 #of of-instrs=57
+[info] @1643 [RECORD INSTR]: instr.name=RV_VSEL instr.pc=0x10d0d254 instr.idd=276 #of of-instrs=1
+[info] @1643 [IDU_SREG_SCB]: name=RV_VSTI pc=0x10d0d25c id=264, reg_idx=66, latency= 3, valid_time=1646
+[info] @1643 [IDU_SREG_SCB]: name=RV_VLDI pc=0x10d0d234 id=265, reg_idx=67, latency= 3, valid_time=1646
+[info] @1643 [IDU_SREG_SCB]: name=RV_VLDI pc=0x10d0d238 id=266, reg_idx=65, latency= 3, valid_time=1646
+[info] [0000001643] [EXU1] record_unit_instr, name RV_POR, id 219
+[info] [0000001643] [LDU] retire_unit_instr, name RV_VLDI, id 249
+[info] [0000001643] [LDU] record_unit_instr, name RV_VLDI, id 250
+[info] [0000001643] [EXU0] retire_unit_instr, name RV_VCMP_EQ, id 217
+[info] [0000001643] [EXU1] retire_unit_instr, name RV_VCVT_I2I, id 166
+[info] @1644 [RETIRE INSTR]: instr.name=RV_VSEL instr.pc=0x10d0d254 instr.id=179 #of of-instrs=57
+[info] @1644 [RETIRE INSTR]: instr.name=RV_POR instr.pc=0x10d0d240 instr.id=203 #of of-instrs=56
+[info] @1644 [RECORD INSTR]: instr.name=RV_VCVT_I2I instr.pc=0x10d0d258 instr.idd=278 #of of-instrs=1
+[info] @1644 [IFU_SREG_SCB]: name=RV_VSTI pc=0x10d0d25c id=279, reg_idx=66
+[info] @1644 [RECORD INSTR]: instr.name=RV_VSTI instr.pc=0x10d0d25c instr.idd=279 #of of-instrs=1
+[info] @1644 [IFU_SREG_SCB]: name=RV_VLDI pc=0x10d0d234 id=280, reg_idx=67
+[info] @1644 [RECORD INSTR]: instr.name=RV_VLDI instr.pc=0x10d0d234 instr.idd=280 #of of-instrs=1
+[info] @1644 [IFU_SREG_SCB]: name=RV_VLDI pc=0x10d0d238 id=281, reg_idx=65
+[info] @1644 [RECORD INSTR]: instr.name=RV_VLDI instr.pc=0x10d0d238 instr.idd=281 #of of-instrs=1
+[info] @1644 [RECORD INSTR]: instr.name=RV_VCMP_EQ instr.pc=0x10d0d23c instr.idd=282 #of of-instrs=1
+[info] [0000001644] [EXU0] record_unit_instr, name RV_PAND, id 207
+[info] [0000001644] [LDU] retire_unit_instr, name RV_VLDI, id 250
+[info] [0000001644] [EXU0] retire_unit_instr, name RV_VSEL, id 179
+[info] [0000001644] [EXU1] retire_unit_instr, name RV_POR, id 203
+[info] @1645 [RETIRE INSTR]: instr.name=RV_VLDI instr.pc=0x10d0d234 instr.id=233 #of of-instrs=60
+[info] @1645 [RETIRE INSTR]: instr.name=RV_VCMP_EQ instr.pc=0x10d0d248 instr.id=223 #of of-instrs=59
+[info] @1645 [RETIRE INSTR]: instr.name=RV_VCMP_LE instr.pc=0x10d0d244 instr.id=188 #of of-instrs=58
+[info] @1645 [RECORD INSTR]: instr.name=RV_POR instr.pc=0x10d0d240 instr.idd=284 #of of-instrs=1
+[info] @1645 [RECORD INSTR]: instr.name=RV_VCMP_LE instr.pc=0x10d0d244 instr.idd=285 #of of-instrs=1
+[info] [0000001645] [EXU1] record_unit_instr, name RV_POR, id 193
+[info] [0000001645] [EXU0] retire_unit_instr, name RV_VCMP_EQ, id 223
+[info] [0000001645] [EXU1] retire_unit_instr, name RV_VCMP_LE, id 188
+[info] [0000001645] [STU] retire_unit_instr, name RV_VSTI, id 137
+[info] @1646 [RETIRE INSTR]: instr.name=RV_VCMP_LE instr.pc=0x10d0d244 instr.id=204 #of of-instrs=59
+[info] [0000001646] [EXU0] record_unit_instr, name RV_VCMP_EQ, id 235
+[info] [0000001646] [LDU] record_unit_instr, name RV_VLDI, id 265
+[info] [0000001646] [EXU1] retire_unit_instr, name RV_VCMP_LE, id 204
+[info] @1647 [RETIRE INSTR]: instr.name=RV_VLDI instr.pc=0x10d0d238 instr.id=234 #of of-instrs=58
+[info] @1647 [RETIRE INSTR]: instr.name=RV_VSTI instr.pc=0x10d0d25c instr.id=137 #of of-instrs=57
+[info] [0000001647] [EXU0] record_unit_instr, name RV_VCMP_EQ, id 240
+[info] [0000001647] [EXU1] record_unit_instr, name RV_POR, id 208
+[info] [0000001647] [LDU] retire_unit_instr, name RV_VLDI, id 265
+[info] [0000001647] [LDU] record_unit_instr, name RV_VLDI, id 266
+[info] [0000001647] [STU] record_unit_instr, name RV_VSTI, id 182
+[info] @1648 [RETIRE INSTR]: instr.name=RV_PAND instr.pc=0x10d0d24c instr.id=191 #of of-instrs=56
+[info] @1648 [RETIRE INSTR]: instr.name=RV_VCVT_I2I instr.pc=0x10d0d258 instr.id=181 #of of-instrs=55
+[info] [0000001648] [EXU0] retire_unit_instr, name RV_PAND, id 191
+[info] [0000001648] [EXU1] retire_unit_instr, name RV_VCVT_I2I, id 181
+[info] @1648 [RECORD INSTR]: instr.name=RV_VCMP_EQ instr.pc=0x10d0d248 instr.idd=289 #of of-instrs=1
+[info] @1648 [RECORD INSTR]: instr.name=RV_PAND instr.pc=0x10d0d24c instr.idd=290 #of of-instrs=1
+[info] [0000001648] [EXU0] record_unit_instr, name RV_VSEL, id 195
+[info] [0000001648] [LDU] retire_unit_instr, name RV_VLDI, id 266
+[info] @1649 [RETIRE INSTR]: instr.name=RV_POR instr.pc=0x10d0d240 instr.id=219 #of of-instrs=56
+[info] @1649 [RECORD INSTR]: instr.name=RV_POR instr.pc=0x10d0d250 instr.idd=292 #of of-instrs=1
+[info] [0000001649] [EXU0] record_unit_instr, name RV_VCMP_EQ, id 251
+[info] [0000001649] [EXU1] record_unit_instr, name RV_VCMP_LE, id 221
+[info] [0000001649] [EXU1] retire_unit_instr, name RV_POR, id 219
+[info] @1650 [RETIRE INSTR]: instr.name=RV_VLDI instr.pc=0x10d0d234 instr.id=249 #of of-instrs=56
+[info] @1650 [RETIRE INSTR]: instr.name=RV_PAND instr.pc=0x10d0d24c instr.id=207 #of of-instrs=55
+[info] [0000001650] [EXU0] retire_unit_instr, name RV_PAND, id 207
+[info] @1650 [RECORD INSTR]: instr.name=RV_VSEL instr.pc=0x10d0d254 instr.idd=294 #of of-instrs=1
+[info] @1650 [IDU_SREG_SCB]: name=RV_VSTI pc=0x10d0d25c id=279, reg_idx=66, latency= 3, valid_time=1653
+[info] @1650 [IDU_SREG_SCB]: name=RV_VLDI pc=0x10d0d234 id=280, reg_idx=67, latency= 3, valid_time=1653
+[info] @1650 [IDU_SREG_SCB]: name=RV_VLDI pc=0x10d0d238 id=281, reg_idx=65, latency= 3, valid_time=1653
+[info] [0000001650] [EXU0] record_unit_instr, name RV_VSEL, id 211
+[info] [0000001650] [EXU1] record_unit_instr, name RV_VCVT_I2I, id 197
+[info] [0000001650] [STU] retire_unit_instr, name RV_VSTI, id 152
+[info] @1651 [RETIRE INSTR]: instr.name=RV_VLDI instr.pc=0x10d0d238 instr.id=250 #of of-instrs=55
+[info] @1651 [RETIRE INSTR]: instr.name=RV_VCMP_EQ instr.pc=0x10d0d23c instr.id=235 #of of-instrs=54
+[info] @1651 [RETIRE INSTR]: instr.name=RV_POR instr.pc=0x10d0d250 instr.id=193 #of of-instrs=53
+[info] [0000001651] [EXU0] retire_unit_instr, name RV_VCMP_EQ, id 235
+[info] [0000001651] [EXU1] retire_unit_instr, name RV_POR, id 193
+[info] @1651 [RECORD INSTR]: instr.name=RV_VCVT_I2I instr.pc=0x10d0d258 instr.idd=296 #of of-instrs=1
+[info] @1651 [IFU_SREG_SCB]: name=RV_VSTI pc=0x10d0d25c id=297, reg_idx=66
+[info] @1651 [RECORD INSTR]: instr.name=RV_VSTI instr.pc=0x10d0d25c instr.idd=297 #of of-instrs=1
+[info] @1651 [IFU_SREG_SCB]: name=RV_VLDI pc=0x10d0d234 id=298, reg_idx=67
+[info] @1651 [RECORD INSTR]: instr.name=RV_VLDI instr.pc=0x10d0d234 instr.idd=298 #of of-instrs=1
+[info] @1651 [IFU_SREG_SCB]: name=RV_VLDI pc=0x10d0d238 id=299, reg_idx=65
+[info] @1651 [RECORD INSTR]: instr.name=RV_VLDI instr.pc=0x10d0d238 instr.idd=299 #of of-instrs=1
+[info] @1651 [RECORD INSTR]: instr.name=RV_VCMP_EQ instr.pc=0x10d0d23c instr.idd=300 #of of-instrs=1
+[info] [0000001651] [EXU0] record_unit_instr, name RV_PAND, id 224
+[info] [0000001651] [EXU1] record_unit_instr, name RV_POR, id 237
+[info] @1652 [RETIRE INSTR]: instr.name=RV_VCMP_EQ instr.pc=0x10d0d248 instr.id=240 #of of-instrs=57
+[info] @1652 [RETIRE INSTR]: instr.name=RV_VSTI instr.pc=0x10d0d25c instr.id=152 #of of-instrs=56
+[info] @1652 [RECORD INSTR]: instr.name=RV_POR instr.pc=0x10d0d240 instr.idd=302 #of of-instrs=1
+[info] @1652 [RECORD INSTR]: instr.name=RV_VCMP_LE instr.pc=0x10d0d244 instr.idd=303 #of of-instrs=1
+[info] [0000001652] [EXU1] record_unit_instr, name RV_VCVT_I2I, id 213
+[info] [0000001652] [EXU0] retire_unit_instr, name RV_VCMP_EQ, id 240
+[info] @1653 [RETIRE INSTR]: instr.name=RV_VSEL instr.pc=0x10d0d254 instr.id=195 #of of-instrs=57
+[info] @1653 [RETIRE INSTR]: instr.name=RV_POR instr.pc=0x10d0d250 instr.id=208 #of of-instrs=56
+[info] [0000001653] [EXU0] retire_unit_instr, name RV_VSEL, id 195
+[info] [0000001653] [EXU1] retire_unit_instr, name RV_POR, id 208
+[info] @1653 [RECORD INSTR]: instr.name=RV_VCMP_EQ instr.pc=0x10d0d248 instr.idd=305 #of of-instrs=1
+[info] @1653 [RECORD INSTR]: instr.name=RV_PAND instr.pc=0x10d0d24c instr.idd=306 #of of-instrs=1
+[info] @1653 [RECORD INSTR]: instr.name=RV_POR instr.pc=0x10d0d250 instr.idd=307 #of of-instrs=1
+[info] [0000001653] [EXU0] record_unit_instr, name RV_VCMP_EQ, id 256
+[info] [0000001653] [EXU1] record_unit_instr, name RV_POR, id 253
+[info] [0000001653] [LDU] record_unit_instr, name RV_VLDI, id 280
+[info] @1654 [RETIRE INSTR]: instr.name=RV_VLDI instr.pc=0x10d0d234 instr.id=265 #of of-instrs=58
+[info] @1654 [RETIRE INSTR]: instr.name=RV_VCMP_EQ instr.pc=0x10d0d23c instr.id=251 #of of-instrs=57
+[info] @1654 [RETIRE INSTR]: instr.name=RV_VCMP_LE instr.pc=0x10d0d244 instr.id=221 #of of-instrs=56
+[info] @1654 [RECORD INSTR]: instr.name=RV_VSEL instr.pc=0x10d0d254 instr.idd=309 #of of-instrs=1
+[info] @1654 [IDU_SREG_SCB]: name=RV_VSTI pc=0x10d0d25c id=297, reg_idx=66, latency= 3, valid_time=1657
+[info] @1654 [IDU_SREG_SCB]: name=RV_VLDI pc=0x10d0d234 id=298, reg_idx=67, latency= 3, valid_time=1657
+[info] @1654 [IDU_SREG_SCB]: name=RV_VLDI pc=0x10d0d238 id=299, reg_idx=65, latency= 3, valid_time=1657
+[info] [0000001654] [EXU0] record_unit_instr, name RV_VCMP_EQ, id 267
+[info] [0000001654] [LDU] retire_unit_instr, name RV_VLDI, id 280
+[info] [0000001654] [LDU] record_unit_instr, name RV_VLDI, id 281
+[info] [0000001654] [EXU0] retire_unit_instr, name RV_VCMP_EQ, id 251
+[info] [0000001654] [EXU1] retire_unit_instr, name RV_VCMP_LE, id 221
+[info] @1655 [RETIRE INSTR]: instr.name=RV_VLDI instr.pc=0x10d0d238 instr.id=266 #of of-instrs=56
+[info] @1655 [RETIRE INSTR]: instr.name=RV_VSEL instr.pc=0x10d0d254 instr.id=211 #of of-instrs=55
+[info] @1655 [RECORD INSTR]: instr.name=RV_VCVT_I2I instr.pc=0x10d0d258 instr.idd=311 #of of-instrs=1
+[info] @1655 [IFU_SREG_SCB]: name=RV_VSTI pc=0x10d0d25c id=312, reg_idx=66
+[info] @1655 [RECORD INSTR]: instr.name=RV_VSTI instr.pc=0x10d0d25c instr.idd=312 #of of-instrs=1
+[info] @1655 [IFU_SREG_SCB]: name=RV_VLDI pc=0x10d0d234 id=313, reg_idx=67
+[info] @1655 [RECORD INSTR]: instr.name=RV_VLDI instr.pc=0x10d0d234 instr.idd=313 #of of-instrs=1
+[info] @1655 [IFU_SREG_SCB]: name=RV_VLDI pc=0x10d0d238 id=314, reg_idx=65
+[info] @1655 [RECORD INSTR]: instr.name=RV_VLDI instr.pc=0x10d0d238 instr.idd=314 #of of-instrs=1
+[info] @1655 [RECORD INSTR]: instr.name=RV_VCMP_EQ instr.pc=0x10d0d23c instr.idd=315 #of of-instrs=1
+[info] [0000001655] [EXU0] record_unit_instr, name RV_VCMP_EQ, id 272
+[info] [0000001655] [EXU1] record_unit_instr, name RV_POR, id 227
+[info] [0000001655] [LDU] retire_unit_instr, name RV_VLDI, id 281
+[info] [0000001655] [EXU0] retire_unit_instr, name RV_VSEL, id 211
+[info] [0000001655] [STU] retire_unit_instr, name RV_VSTI, id 167
+[info] [0000001655] [STU] record_unit_instr, name RV_VSTI, id 198
+[info] @1656 [RETIRE INSTR]: instr.name=RV_VCVT_I2I instr.pc=0x10d0d258 instr.id=197 #of of-instrs=59
+[info] [0000001656] [EXU1] retire_unit_instr, name RV_VCVT_I2I, id 197
+[info] @1656 [RECORD INSTR]: instr.name=RV_POR instr.pc=0x10d0d240 instr.idd=317 #of of-instrs=1
+[info] @1657 [RETIRE INSTR]: instr.name=RV_PAND instr.pc=0x10d0d24c instr.id=224 #of of-instrs=59
+[info] @1657 [RETIRE INSTR]: instr.name=RV_POR instr.pc=0x10d0d240 instr.id=237 #of of-instrs=58
+[info] @1657 [RETIRE INSTR]: instr.name=RV_VSTI instr.pc=0x10d0d25c instr.id=167 #of of-instrs=57
+[info] [0000001657] [EXU0] retire_unit_instr, name RV_PAND, id 224
+[info] [0000001657] [EXU1] retire_unit_instr, name RV_POR, id 237
+[info] @1657 [RECORD INSTR]: instr.name=RV_VCMP_LE instr.pc=0x10d0d244 instr.idd=319 #of of-instrs=1
+[info] [0000001657] [EXU1] record_unit_instr, name RV_VCMP_LE, id 238
+[info] [0000001657] [LDU] record_unit_instr, name RV_VLDI, id 298
+[info] [0000001657] [STU] record_unit_instr, name RV_VSTI, id 214
+[info] @1658 [RETIRE INSTR]: instr.name=RV_VCMP_EQ instr.pc=0x10d0d248 instr.id=256 #of of-instrs=57
+[info] @1658 [RETIRE INSTR]: instr.name=RV_VCVT_I2I instr.pc=0x10d0d258 instr.id=213 #of of-instrs=56
+[info] @1658 [RECORD INSTR]: instr.name=RV_VCMP_EQ instr.pc=0x10d0d248 instr.idd=321 #of of-instrs=1
+[info] @1658 [RECORD INSTR]: instr.name=RV_PAND instr.pc=0x10d0d24c instr.idd=322 #of of-instrs=1
+[info] [0000001658] [EXU0] record_unit_instr, name RV_VSEL, id 229
+[info] [0000001658] [EXU1] record_unit_instr, name RV_VCMP_LE, id 254
+[info] [0000001658] [LDU] retire_unit_instr, name RV_VLDI, id 298
+[info] [0000001658] [LDU] record_unit_instr, name RV_VLDI, id 299
+[info] [0000001658] [EXU0] retire_unit_instr, name RV_VCMP_EQ, id 256
+[info] [0000001658] [EXU1] retire_unit_instr, name RV_VCVT_I2I, id 213
+[info] @1659 [RETIRE INSTR]: instr.name=RV_VCMP_EQ instr.pc=0x10d0d23c instr.id=267 #of of-instrs=57
+[info] @1659 [RETIRE INSTR]: instr.name=RV_POR instr.pc=0x10d0d240 instr.id=253 #of of-instrs=56
+[info] @1659 [RECORD INSTR]: instr.name=RV_POR instr.pc=0x10d0d250 instr.idd=324 #of of-instrs=1
+[info] [0000001659] [EXU0] record_unit_instr, name RV_PAND, id 241
+[info] [0000001659] [EXU1] record_unit_instr, name RV_VCMP_LE, id 270
+[info] [0000001659] [LDU] retire_unit_instr, name RV_VLDI, id 299
+[info] [0000001659] [EXU0] retire_unit_instr, name RV_VCMP_EQ, id 267
+[info] [0000001659] [EXU1] retire_unit_instr, name RV_POR, id 253
+[info] @1660 [RETIRE INSTR]: instr.name=RV_VCMP_EQ instr.pc=0x10d0d248 instr.id=272 #of of-instrs=56
+[info] [0000001660] [EXU1] record_unit_instr, name RV_VCVT_I2I, id 231
+[info] [0000001660] [EXU0] retire_unit_instr, name RV_VCMP_EQ, id 272
+[info] [0000001660] [STU] retire_unit_instr, name RV_VSTI, id 182
+[info] @1661 [RETIRE INSTR]: instr.name=RV_VLDI instr.pc=0x10d0d234 instr.id=280 #of of-instrs=55
+[info] @1661 [RETIRE INSTR]: instr.name=RV_POR instr.pc=0x10d0d250 instr.id=227 #of of-instrs=54
+[info] [0000001661] [EXU1] retire_unit_instr, name RV_POR, id 227
+[info] @1661 [RECORD INSTR]: instr.name=RV_VSEL instr.pc=0x10d0d254 instr.idd=327 #of of-instrs=1
+[info] @1661 [IDU_SREG_SCB]: name=RV_VSTI pc=0x10d0d25c id=312, reg_idx=66, latency= 3, valid_time=1664
+[info] @1661 [IDU_SREG_SCB]: name=RV_VLDI pc=0x10d0d234 id=313, reg_idx=67, latency= 3, valid_time=1664
+[info] @1661 [IDU_SREG_SCB]: name=RV_VLDI pc=0x10d0d238 id=314, reg_idx=65, latency= 3, valid_time=1664
+[info] [0000001661] [EXU0] record_unit_instr, name RV_PAND, id 257
+[info] [0000001661] [EXU1] record_unit_instr, name RV_POR, id 269
+[info] @1662 [RETIRE INSTR]: instr.name=RV_VLDI instr.pc=0x10d0d238 instr.id=281 #of of-instrs=54
+[info] @1662 [RETIRE INSTR]: instr.name=RV_VSTI instr.pc=0x10d0d25c instr.id=182 #of of-instrs=53
+[info] @1662 [RETIRE INSTR]: instr.name=RV_VCMP_LE instr.pc=0x10d0d244 instr.id=238 #of of-instrs=52
+[info] @1662 [RECORD INSTR]: instr.name=RV_VCVT_I2I instr.pc=0x10d0d258 instr.idd=329 #of of-instrs=1
+[info] @1662 [IFU_SREG_SCB]: name=RV_VSTI pc=0x10d0d25c id=330, reg_idx=66
+[info] @1662 [RECORD INSTR]: instr.name=RV_VSTI instr.pc=0x10d0d25c instr.idd=330 #of of-instrs=1
+[info] @1662 [IFU_SREG_SCB]: name=RV_VLDI pc=0x10d0d234 id=331, reg_idx=67
+[info] @1662 [RECORD INSTR]: instr.name=RV_VLDI instr.pc=0x10d0d234 instr.idd=331 #of of-instrs=1
+[info] @1662 [IFU_SREG_SCB]: name=RV_VLDI pc=0x10d0d238 id=332, reg_idx=65
+[info] @1662 [RECORD INSTR]: instr.name=RV_VLDI instr.pc=0x10d0d238 instr.idd=332 #of of-instrs=1
+[info] @1662 [RECORD INSTR]: instr.name=RV_VCMP_EQ instr.pc=0x10d0d23c instr.idd=333 #of of-instrs=1
+[info] [0000001662] [EXU1] retire_unit_instr, name RV_VCMP_LE, id 238
+[info] @1663 [RETIRE INSTR]: instr.name=RV_VSEL instr.pc=0x10d0d254 instr.id=229 #of of-instrs=56
+[info] @1663 [RETIRE INSTR]: instr.name=RV_VCMP_LE instr.pc=0x10d0d244 instr.id=254 #of of-instrs=55
+[info] [0000001663] [EXU0] retire_unit_instr, name RV_VSEL, id 229
+[info] [0000001663] [EXU1] retire_unit_instr, name RV_VCMP_LE, id 254
+[info] @1663 [RECORD INSTR]: instr.name=RV_POR instr.pc=0x10d0d240 instr.idd=335 #of of-instrs=1
+[info] [0000001663] [EXU0] record_unit_instr, name RV_VCMP_EQ, id 282
+[info] [0000001663] [EXU1] record_unit_instr, name RV_POR, id 243
+[info] @1664 [RETIRE INSTR]: instr.name=RV_VCMP_LE instr.pc=0x10d0d244 instr.id=270 #of of-instrs=55
+[info] @1664 [RECORD INSTR]: instr.name=RV_VCMP_LE instr.pc=0x10d0d244 instr.idd=337 #of of-instrs=1
+[info] [0000001664] [EXU0] record_unit_instr, name RV_PAND, id 273
+[info] [0000001664] [LDU] record_unit_instr, name RV_VLDI, id 313
+[info] [0000001664] [EXU1] retire_unit_instr, name RV_VCMP_LE, id 270
+[info] @1665 [RETIRE INSTR]: instr.name=RV_VLDI instr.pc=0x10d0d234 instr.id=298 #of of-instrs=55
+[info] @1665 [RETIRE INSTR]: instr.name=RV_PAND instr.pc=0x10d0d24c instr.id=241 #of of-instrs=54
+[info] [0000001665] [EXU0] retire_unit_instr, name RV_PAND, id 241
+[info] @1665 [RECORD INSTR]: instr.name=RV_VCMP_EQ instr.pc=0x10d0d248 instr.idd=339 #of of-instrs=1
+[info] @1665 [RECORD INSTR]: instr.name=RV_PAND instr.pc=0x10d0d24c instr.idd=340 #of of-instrs=1
+[info] [0000001665] [EXU1] record_unit_instr, name RV_POR, id 259
+[info] [0000001665] [LDU] retire_unit_instr, name RV_VLDI, id 313
+[info] [0000001665] [LDU] record_unit_instr, name RV_VLDI, id 314
+[info] [0000001665] [STU] retire_unit_instr, name RV_VSTI, id 198
+[info] [0000001665] [STU] record_unit_instr, name RV_VSTI, id 232
+[info] @1666 [RETIRE INSTR]: instr.name=RV_VLDI instr.pc=0x10d0d238 instr.id=299 #of of-instrs=55
+[info] @1666 [RETIRE INSTR]: instr.name=RV_VCVT_I2I instr.pc=0x10d0d258 instr.id=231 #of of-instrs=54
+[info] [0000001666] [EXU1] retire_unit_instr, name RV_VCVT_I2I, id 231
+[info] [0000001666] [EXU0] record_unit_instr, name RV_VSEL, id 245
+[info] [0000001666] [LDU] retire_unit_instr, name RV_VLDI, id 314
+[info] @1667 [RETIRE INSTR]: instr.name=RV_PAND instr.pc=0x10d0d24c instr.id=257 #of of-instrs=53
+[info] @1667 [RETIRE INSTR]: instr.name=RV_POR instr.pc=0x10d0d240 instr.id=269 #of of-instrs=52
+[info] @1667 [RETIRE INSTR]: instr.name=RV_VSTI instr.pc=0x10d0d25c instr.id=198 #of of-instrs=51
+[info] [0000001667] [EXU0] retire_unit_instr, name RV_PAND, id 257
+[info] [0000001667] [EXU1] retire_unit_instr, name RV_POR, id 269
+[info] @1667 [RECORD INSTR]: instr.name=RV_POR instr.pc=0x10d0d250 instr.idd=343 #of of-instrs=1
+[info] [0000001667] [EXU0] record_unit_instr, name RV_VCMP_EQ, id 289
+[info] [0000001667] [EXU1] record_unit_instr, name RV_POR, id 274
+[info] @1668 [RETIRE INSTR]: instr.name=RV_VCMP_EQ instr.pc=0x10d0d23c instr.id=282 #of of-instrs=51
+[info] @1668 [RECORD INSTR]: instr.name=RV_VSEL instr.pc=0x10d0d254 instr.idd=345 #of of-instrs=1
+[info] @1668 [IDU_SREG_SCB]: name=RV_VSTI pc=0x10d0d25c id=330, reg_idx=66, latency= 3, valid_time=1671
+[info] @1668 [IDU_SREG_SCB]: name=RV_VLDI pc=0x10d0d234 id=331, reg_idx=67, latency= 3, valid_time=1671
+[info] @1668 [IDU_SREG_SCB]: name=RV_VLDI pc=0x10d0d238 id=332, reg_idx=65, latency= 3, valid_time=1671
+[info] [0000001668] [EXU0] record_unit_instr, name RV_VSEL, id 261
+[info] [0000001668] [EXU1] record_unit_instr, name RV_VCVT_I2I, id 247
+[info] [0000001668] [EXU0] retire_unit_instr, name RV_VCMP_EQ, id 282
+[info] @1669 [RETIRE INSTR]: instr.name=RV_POR instr.pc=0x10d0d250 instr.id=243 #of of-instrs=51
+[info] [0000001669] [EXU1] retire_unit_instr, name RV_POR, id 243
+[info] @1669 [RECORD INSTR]: instr.name=RV_VCVT_I2I instr.pc=0x10d0d258 instr.idd=347 #of of-instrs=1
+[info] @1669 [IFU_SREG_SCB]: name=RV_VSTI pc=0x10d0d25c id=348, reg_idx=66
+[info] @1669 [RECORD INSTR]: instr.name=RV_VSTI instr.pc=0x10d0d25c instr.idd=348 #of of-instrs=1
+[info] @1669 [IFU_SREG_SCB]: name=RV_VLDI pc=0x10d0d234 id=349, reg_idx=67
+[info] @1669 [RECORD INSTR]: instr.name=RV_VLDI instr.pc=0x10d0d234 instr.idd=349 #of of-instrs=1
+[info] @1669 [IFU_SREG_SCB]: name=RV_VLDI pc=0x10d0d238 id=350, reg_idx=65
+[info] @1669 [RECORD INSTR]: instr.name=RV_VLDI instr.pc=0x10d0d238 instr.idd=350 #of of-instrs=1
+[info] @1669 [RECORD INSTR]: instr.name=RV_VCMP_EQ instr.pc=0x10d0d23c instr.idd=351 #of of-instrs=1
+[info] [0000001669] [EXU0] record_unit_instr, name RV_VCMP_EQ, id 300
+[info] [0000001669] [EXU1] record_unit_instr, name RV_POR, id 284
+[info] @1670 [RETIRE INSTR]: instr.name=RV_PAND instr.pc=0x10d0d24c instr.id=273 #of of-instrs=55
+[info] [0000001670] [EXU0] retire_unit_instr, name RV_PAND, id 273
+[info] @1670 [RECORD INSTR]: instr.name=RV_POR instr.pc=0x10d0d240 instr.idd=353 #of of-instrs=1
+[info] @1670 [RECORD INSTR]: instr.name=RV_VCMP_LE instr.pc=0x10d0d244 instr.idd=354 #of of-instrs=1
+[info] [0000001670] [EXU0] record_unit_instr, name RV_VSEL, id 276
+[info] [0000001670] [EXU1] record_unit_instr, name RV_VCVT_I2I, id 263
+[info] @1671 [RETIRE INSTR]: instr.name=RV_VSEL instr.pc=0x10d0d254 instr.id=245 #of of-instrs=56
+[info] @1671 [RETIRE INSTR]: instr.name=RV_POR instr.pc=0x10d0d250 instr.id=259 #of of-instrs=55
+[info] [0000001671] [EXU0] retire_unit_instr, name RV_VSEL, id 245
+[info] [0000001671] [EXU1] retire_unit_instr, name RV_POR, id 259
+[info] @1671 [RECORD INSTR]: instr.name=RV_VCMP_EQ instr.pc=0x10d0d248 instr.idd=356 #of of-instrs=1
+[info] @1671 [RECORD INSTR]: instr.name=RV_PAND instr.pc=0x10d0d24c instr.idd=357 #of of-instrs=1
+[info] @1671 [RECORD INSTR]: instr.name=RV_POR instr.pc=0x10d0d250 instr.idd=358 #of of-instrs=1
+[info] [0000001671] [EXU0] record_unit_instr, name RV_VCMP_EQ, id 305
+[info] [0000001671] [EXU1] record_unit_instr, name RV_POR, id 302
+[info] [0000001671] [LDU] record_unit_instr, name RV_VLDI, id 331
+[info] [0000001671] [STU] retire_unit_instr, name RV_VSTI, id 214
+[info] @1672 [RETIRE INSTR]: instr.name=RV_VLDI instr.pc=0x10d0d234 instr.id=313 #of of-instrs=57
+[info] @1672 [RETIRE INSTR]: instr.name=RV_VCMP_EQ instr.pc=0x10d0d248 instr.id=289 #of of-instrs=56
+[info] @1672 [RECORD INSTR]: instr.name=RV_VSEL instr.pc=0x10d0d254 instr.idd=360 #of of-instrs=1
+[info] @1672 [IDU_SREG_SCB]: name=RV_VSTI pc=0x10d0d25c id=348, reg_idx=66, latency= 3, valid_time=1675
+[info] @1672 [IDU_SREG_SCB]: name=RV_VLDI pc=0x10d0d234 id=349, reg_idx=67, latency= 3, valid_time=1675
+[info] @1672 [IDU_SREG_SCB]: name=RV_VLDI pc=0x10d0d238 id=350, reg_idx=65, latency= 3, valid_time=1675
+[info] [0000001672] [EXU0] record_unit_instr, name RV_VCMP_EQ, id 315
+[info] [0000001672] [EXU1] record_unit_instr, name RV_VCVT_I2I, id 278
+[info] [0000001672] [LDU] retire_unit_instr, name RV_VLDI, id 331
+[info] [0000001672] [LDU] record_unit_instr, name RV_VLDI, id 332
+[info] [0000001672] [EXU0] retire_unit_instr, name RV_VCMP_EQ, id 289
+[info] @1673 [RETIRE INSTR]: instr.name=RV_VLDI instr.pc=0x10d0d238 instr.id=314 #of of-instrs=56
+[info] @1673 [RETIRE INSTR]: instr.name=RV_VSTI instr.pc=0x10d0d25c instr.id=214 #of of-instrs=55
+[info] @1673 [RETIRE INSTR]: instr.name=RV_VSEL instr.pc=0x10d0d254 instr.id=261 #of of-instrs=54
+[info] @1673 [RETIRE INSTR]: instr.name=RV_POR instr.pc=0x10d0d250 instr.id=274 #of of-instrs=53
+[info] [0000001673] [EXU0] retire_unit_instr, name RV_VSEL, id 261
+[info] [0000001673] [EXU1] retire_unit_instr, name RV_POR, id 274
+[info] @1673 [RECORD INSTR]: instr.name=RV_VCVT_I2I instr.pc=0x10d0d258 instr.idd=362 #of of-instrs=1
+[info] @1673 [IFU_SREG_SCB]: name=RV_VSTI pc=0x10d0d25c id=363, reg_idx=66
+[info] @1673 [RECORD INSTR]: instr.name=RV_VSTI instr.pc=0x10d0d25c instr.idd=363 #of of-instrs=1
+[info] @1673 [IFU_SREG_SCB]: name=RV_VLDI pc=0x10d0d234 id=364, reg_idx=67
+[info] @1673 [RECORD INSTR]: instr.name=RV_VLDI instr.pc=0x10d0d234 instr.idd=364 #of of-instrs=1
+[info] @1673 [IFU_SREG_SCB]: name=RV_VLDI pc=0x10d0d238 id=365, reg_idx=65
+[info] @1673 [RECORD INSTR]: instr.name=RV_VLDI instr.pc=0x10d0d238 instr.idd=365 #of of-instrs=1
+[info] @1673 [RECORD INSTR]: instr.name=RV_VCMP_EQ instr.pc=0x10d0d23c instr.idd=366 #of of-instrs=1
+[info] [0000001673] [EXU0] record_unit_instr, name RV_VCMP_EQ, id 321
+[info] [0000001673] [LDU] retire_unit_instr, name RV_VLDI, id 332
+[info] [0000001673] [STU] record_unit_instr, name RV_VSTI, id 248
+[info] @1674 [RETIRE INSTR]: instr.name=RV_VCMP_EQ instr.pc=0x10d0d23c instr.id=300 #of of-instrs=57
+[info] @1674 [RETIRE INSTR]: instr.name=RV_VCVT_I2I instr.pc=0x10d0d258 instr.id=247 #of of-instrs=56
+[info] @1674 [RECORD INSTR]: instr.name=RV_POR instr.pc=0x10d0d240 instr.idd=368 #of of-instrs=1
+[info] @1674 [RECORD INSTR]: instr.name=RV_VCMP_LE instr.pc=0x10d0d244 instr.idd=369 #of of-instrs=1
+[info] [0000001674] [EXU1] record_unit_instr, name RV_VCMP_LE, id 285
+[info] [0000001674] [EXU0] retire_unit_instr, name RV_VCMP_EQ, id 300
+[info] [0000001674] [EXU1] retire_unit_instr, name RV_VCVT_I2I, id 247
+[info] @1675 [RETIRE INSTR]: instr.name=RV_VSEL instr.pc=0x10d0d254 instr.id=276 #of of-instrs=57
+[info] @1675 [RETIRE INSTR]: instr.name=RV_POR instr.pc=0x10d0d240 instr.id=284 #of of-instrs=56
+[info] @1675 [RECORD INSTR]: instr.name=RV_VCMP_EQ instr.pc=0x10d0d248 instr.idd=371 #of of-instrs=1
+[info] @1675 [RECORD INSTR]: instr.name=RV_PAND instr.pc=0x10d0d24c instr.idd=372 #of of-instrs=1
+[info] @1675 [RECORD INSTR]: instr.name=RV_POR instr.pc=0x10d0d250 instr.idd=373 #of of-instrs=1
+[info] [0000001675] [EXU1] record_unit_instr, name RV_VCMP_LE, id 303
+[info] [0000001675] [LDU] record_unit_instr, name RV_VLDI, id 349
+[info] [0000001675] [EXU0] retire_unit_instr, name RV_VSEL, id 276
+[info] [0000001675] [EXU1] retire_unit_instr, name RV_POR, id 284
+[info] [0000001675] [STU] record_unit_instr, name RV_VSTI, id 264
+[info] @1676 [RETIRE INSTR]: instr.name=RV_VCMP_EQ instr.pc=0x10d0d248 instr.id=305 #of of-instrs=58
+[info] @1676 [RETIRE INSTR]: instr.name=RV_VCVT_I2I instr.pc=0x10d0d258 instr.id=263 #of of-instrs=57
+[info] @1676 [RECORD INSTR]: instr.name=RV_VSEL instr.pc=0x10d0d254 instr.idd=375 #of of-instrs=1
+[info] @1676 [IDU_SREG_SCB]: name=RV_VSTI pc=0x10d0d25c id=363, reg_idx=66, latency= 3, valid_time=1679
+[info] @1676 [IDU_SREG_SCB]: name=RV_VLDI pc=0x10d0d234 id=364, reg_idx=67, latency= 3, valid_time=1679
+[info] @1676 [IDU_SREG_SCB]: name=RV_VLDI pc=0x10d0d238 id=365, reg_idx=65, latency= 3, valid_time=1679
+[info] [0000001676] [EXU0] record_unit_instr, name RV_PAND, id 290
+[info] [0000001676] [EXU1] record_unit_instr, name RV_VCMP_LE, id 319
+[info] [0000001676] [LDU] retire_unit_instr, name RV_VLDI, id 349
+[info] [0000001676] [LDU] record_unit_instr, name RV_VLDI, id 350
+[info] [0000001676] [EXU0] retire_unit_instr, name RV_VCMP_EQ, id 305
+[info] [0000001676] [EXU1] retire_unit_instr, name RV_VCVT_I2I, id 263
+[info] @1677 [RETIRE INSTR]: instr.name=RV_VCMP_EQ instr.pc=0x10d0d23c instr.id=315 #of of-instrs=57
+[info] @1677 [RETIRE INSTR]: instr.name=RV_POR instr.pc=0x10d0d240 instr.id=302 #of of-instrs=56
+[info] @1677 [RECORD INSTR]: instr.name=RV_VCVT_I2I instr.pc=0x10d0d258 instr.idd=377 #of of-instrs=1
+[info] @1677 [IFU_SREG_SCB]: name=RV_VSTI pc=0x10d0d25c id=378, reg_idx=66
+[info] @1677 [RECORD INSTR]: instr.name=RV_VSTI instr.pc=0x10d0d25c instr.idd=378 #of of-instrs=1
+[info] @1677 [IFU_SREG_SCB]: name=RV_VLDI pc=0x10d0d234 id=379, reg_idx=67
+[info] @1677 [RECORD INSTR]: instr.name=RV_VLDI instr.pc=0x10d0d234 instr.idd=379 #of of-instrs=1
+[info] @1677 [IFU_SREG_SCB]: name=RV_VLDI pc=0x10d0d238 id=380, reg_idx=65
+[info] @1677 [RECORD INSTR]: instr.name=RV_VLDI instr.pc=0x10d0d238 instr.idd=380 #of of-instrs=1
+[info] @1677 [RECORD INSTR]: instr.name=RV_VCMP_EQ instr.pc=0x10d0d23c instr.idd=381 #of of-instrs=1
+[info] [0000001677] [EXU1] record_unit_instr, name RV_POR, id 317
+[info] [0000001677] [LDU] retire_unit_instr, name RV_VLDI, id 350
+[info] [0000001677] [EXU0] retire_unit_instr, name RV_VCMP_EQ, id 315
+[info] [0000001677] [EXU1] retire_unit_instr, name RV_POR, id 302
+[info] [0000001677] [STU] record_unit_instr, name RV_VSTI, id 279
+[info] @1678 [RETIRE INSTR]: instr.name=RV_VCMP_EQ instr.pc=0x10d0d248 instr.id=321 #of of-instrs=60
+[info] @1678 [RETIRE INSTR]: instr.name=RV_VCVT_I2I instr.pc=0x10d0d258 instr.id=278 #of of-instrs=59
+[info] @1678 [RECORD INSTR]: instr.name=RV_POR instr.pc=0x10d0d240 instr.idd=383 #of of-instrs=1
+[info] @1678 [RECORD INSTR]: instr.name=RV_VCMP_LE instr.pc=0x10d0d244 instr.idd=384 #of of-instrs=1
+[info] [0000001678] [EXU0] record_unit_instr, name RV_PAND, id 306
+[info] [0000001678] [EXU0] retire_unit_instr, name RV_VCMP_EQ, id 321
+[info] [0000001678] [EXU1] retire_unit_instr, name RV_VCVT_I2I, id 278
+[info] [0000001678] [STU] retire_unit_instr, name RV_VSTI, id 232
+[info] @1679 [RETIRE INSTR]: instr.name=RV_VLDI instr.pc=0x10d0d234 instr.id=331 #of of-instrs=60
+[info] @1679 [RETIRE INSTR]: instr.name=RV_VCMP_LE instr.pc=0x10d0d244 instr.id=285 #of of-instrs=59
+[info] [0000001679] [EXU1] record_unit_instr, name RV_POR, id 292
+[info] [0000001679] [LDU] record_unit_instr, name RV_VLDI, id 364
+[info] [0000001679] [EXU1] retire_unit_instr, name RV_VCMP_LE, id 285
+[info] @1680 [RETIRE INSTR]: instr.name=RV_VLDI instr.pc=0x10d0d238 instr.id=332 #of of-instrs=58
+[info] @1680 [RETIRE INSTR]: instr.name=RV_VSTI instr.pc=0x10d0d25c instr.id=232 #of of-instrs=57
+[info] @1680 [RETIRE INSTR]: instr.name=RV_VCMP_LE instr.pc=0x10d0d244 instr.id=303 #of of-instrs=56
+[info] [0000001680] [EXU0] record_unit_instr, name RV_PAND, id 322
+[info] [0000001680] [LDU] retire_unit_instr, name RV_VLDI, id 364
+[info] [0000001680] [LDU] record_unit_instr, name RV_VLDI, id 365
+[info] [0000001680] [EXU1] retire_unit_instr, name RV_VCMP_LE, id 303
+[info] @1681 [RETIRE INSTR]: instr.name=RV_VCMP_LE instr.pc=0x10d0d244 instr.id=319 #of of-instrs=55
+[info] [0000001681] [EXU1] record_unit_instr, name RV_POR, id 307
+[info] [0000001681] [LDU] retire_unit_instr, name RV_VLDI, id 365
+[info] [0000001681] [EXU1] retire_unit_instr, name RV_VCMP_LE, id 319
+[info] @1682 [RETIRE INSTR]: instr.name=RV_PAND instr.pc=0x10d0d24c instr.id=290 #of of-instrs=54
+[info] [0000001682] [EXU0] retire_unit_instr, name RV_PAND, id 290
+[info] @1682 [RECORD INSTR]: instr.name=RV_VCMP_EQ instr.pc=0x10d0d248 instr.idd=389 #of of-instrs=1
+[info] @1682 [RECORD INSTR]: instr.name=RV_PAND instr.pc=0x10d0d24c instr.idd=390 #of of-instrs=1
+[info] [0000001682] [EXU0] record_unit_instr, name RV_VSEL, id 294
+[info] @1683 [RETIRE INSTR]: instr.name=RV_VLDI instr.pc=0x10d0d234 instr.id=349 #of of-instrs=55
+[info] @1683 [RETIRE INSTR]: instr.name=RV_POR instr.pc=0x10d0d240 instr.id=317 #of of-instrs=54
+[info] [0000001683] [EXU1] retire_unit_instr, name RV_POR, id 317
+[info] @1683 [RECORD INSTR]: instr.name=RV_POR instr.pc=0x10d0d250 instr.idd=392 #of of-instrs=1
+[info] [0000001683] [EXU0] record_unit_instr, name RV_VCMP_EQ, id 333
+[info] [0000001683] [EXU1] record_unit_instr, name RV_POR, id 324
+[info] [0000001683] [STU] retire_unit_instr, name RV_VSTI, id 248
+[info] @1684 [RETIRE INSTR]: instr.name=RV_VLDI instr.pc=0x10d0d238 instr.id=350 #of of-instrs=54
+[info] @1684 [RETIRE INSTR]: instr.name=RV_PAND instr.pc=0x10d0d24c instr.id=306 #of of-instrs=53
+[info] [0000001684] [EXU0] retire_unit_instr, name RV_PAND, id 306
+[info] @1684 [RECORD INSTR]: instr.name=RV_VSEL instr.pc=0x10d0d254 instr.idd=394 #of of-instrs=1
+[info] @1684 [IDU_SREG_SCB]: name=RV_VSTI pc=0x10d0d25c id=378, reg_idx=66, latency= 3, valid_time=1687
+[info] @1684 [IDU_SREG_SCB]: name=RV_VLDI pc=0x10d0d234 id=379, reg_idx=67, latency= 3, valid_time=1687
+[info] @1684 [IDU_SREG_SCB]: name=RV_VLDI pc=0x10d0d238 id=380, reg_idx=65, latency= 3, valid_time=1687
+[info] [0000001684] [EXU0] record_unit_instr, name RV_VSEL, id 309
+[info] [0000001684] [EXU1] record_unit_instr, name RV_VCVT_I2I, id 296
+[info] @1685 [RETIRE INSTR]: instr.name=RV_POR instr.pc=0x10d0d250 instr.id=292 #of of-instrs=53
+[info] @1685 [RETIRE INSTR]: instr.name=RV_VSTI instr.pc=0x10d0d25c instr.id=248 #of of-instrs=52
+[info] [0000001685] [EXU1] retire_unit_instr, name RV_POR, id 292
+[info] @1685 [RECORD INSTR]: instr.name=RV_VCVT_I2I instr.pc=0x10d0d258 instr.idd=396 #of of-instrs=1
+[info] @1685 [IFU_SREG_SCB]: name=RV_VSTI pc=0x10d0d25c id=397, reg_idx=66
+[info] @1685 [RECORD INSTR]: instr.name=RV_VSTI instr.pc=0x10d0d25c instr.idd=397 #of of-instrs=1
+[info] @1685 [IFU_SREG_SCB]: name=RV_VLDI pc=0x10d0d234 id=398, reg_idx=67
+[info] @1685 [RECORD INSTR]: instr.name=RV_VLDI instr.pc=0x10d0d234 instr.idd=398 #of of-instrs=1
+[info] @1685 [IFU_SREG_SCB]: name=RV_VLDI pc=0x10d0d238 id=399, reg_idx=65
+[info] @1685 [RECORD INSTR]: instr.name=RV_VLDI instr.pc=0x10d0d238 instr.idd=399 #of of-instrs=1
+[info] @1685 [RECORD INSTR]: instr.name=RV_VCMP_EQ instr.pc=0x10d0d23c instr.idd=400 #of of-instrs=1
+[info] [0000001685] [EXU0] record_unit_instr, name RV_VCMP_EQ, id 339
+[info] [0000001685] [EXU1] record_unit_instr, name RV_POR, id 335
+[info] @1686 [RETIRE INSTR]: instr.name=RV_PAND instr.pc=0x10d0d24c instr.id=322 #of of-instrs=56
+[info] [0000001686] [EXU0] retire_unit_instr, name RV_PAND, id 322
+[info] @1686 [RECORD INSTR]: instr.name=RV_POR instr.pc=0x10d0d240 instr.idd=402 #of of-instrs=1
+[info] @1686 [RECORD INSTR]: instr.name=RV_VCMP_LE instr.pc=0x10d0d244 instr.idd=403 #of of-instrs=1
+[info] [0000001686] [EXU0] record_unit_instr, name RV_VSEL, id 327
+[info] [0000001686] [EXU1] record_unit_instr, name RV_VCVT_I2I, id 311
+[info] @1687 [RETIRE INSTR]: instr.name=RV_VLDI instr.pc=0x10d0d234 instr.id=364 #of of-instrs=57
+[info] @1687 [RETIRE INSTR]: instr.name=RV_VSEL instr.pc=0x10d0d254 instr.id=294 #of of-instrs=56
+[info] @1687 [RETIRE INSTR]: instr.name=RV_POR instr.pc=0x10d0d250 instr.id=307 #of of-instrs=55
+[info] [0000001687] [EXU0] retire_unit_instr, name RV_VSEL, id 294
+[info] [0000001687] [EXU1] retire_unit_instr, name RV_POR, id 307
+[info] @1687 [RECORD INSTR]: instr.name=RV_VCMP_EQ instr.pc=0x10d0d248 instr.idd=405 #of of-instrs=1
+[info] @1687 [RECORD INSTR]: instr.name=RV_PAND instr.pc=0x10d0d24c instr.idd=406 #of of-instrs=1
+[info] @1687 [RECORD INSTR]: instr.name=RV_POR instr.pc=0x10d0d250 instr.idd=407 #of of-instrs=1
+[info] [0000001687] [EXU0] record_unit_instr, name RV_VCMP_EQ, id 351
+[info] [0000001687] [LDU] record_unit_instr, name RV_VLDI, id 379
+[info] @1688 [RETIRE INSTR]: instr.name=RV_VLDI instr.pc=0x10d0d238 instr.id=365 #of of-instrs=57
+[info] @1688 [RETIRE INSTR]: instr.name=RV_VCMP_EQ instr.pc=0x10d0d23c instr.id=333 #of of-instrs=56
+[info] @1688 [RECORD INSTR]: instr.name=RV_VSEL instr.pc=0x10d0d254 instr.idd=409 #of of-instrs=1
+[info] @1688 [IDU_SREG_SCB]: name=RV_VSTI pc=0x10d0d25c id=397, reg_idx=66, latency= 3, valid_time=1691
+[info] @1688 [IDU_SREG_SCB]: name=RV_VLDI pc=0x10d0d234 id=398, reg_idx=67, latency= 3, valid_time=1691
+[info] @1688 [IDU_SREG_SCB]: name=RV_VLDI pc=0x10d0d238 id=399, reg_idx=65, latency= 3, valid_time=1691
+[info] [0000001688] [EXU0] record_unit_instr, name RV_VCMP_EQ, id 356
+[info] [0000001688] [EXU1] record_unit_instr, name RV_VCMP_LE, id 337
+[info] [0000001688] [EXU0] retire_unit_instr, name RV_VCMP_EQ, id 333
+[info] [0000001688] [STU] retire_unit_instr, name RV_VSTI, id 264
+[info] @1689 [RETIRE INSTR]: instr.name=RV_VSEL instr.pc=0x10d0d254 instr.id=309 #of of-instrs=56
+[info] @1689 [RETIRE INSTR]: instr.name=RV_POR instr.pc=0x10d0d250 instr.id=324 #of of-instrs=55
+[info] [0000001689] [EXU0] retire_unit_instr, name RV_VSEL, id 309
+[info] [0000001689] [EXU1] retire_unit_instr, name RV_POR, id 324
+[info] @1689 [RECORD INSTR]: instr.name=RV_VCVT_I2I instr.pc=0x10d0d258 instr.idd=411 #of of-instrs=1
+[info] @1689 [IFU_SREG_SCB]: name=RV_VSTI pc=0x10d0d25c id=412, reg_idx=66
+[info] @1689 [RECORD INSTR]: instr.name=RV_VSTI instr.pc=0x10d0d25c instr.idd=412 #of of-instrs=1
+[info] @1689 [IFU_SREG_SCB]: name=RV_VLDI pc=0x10d0d234 id=413, reg_idx=67
+[info] @1689 [RECORD INSTR]: instr.name=RV_VLDI instr.pc=0x10d0d234 instr.idd=413 #of of-instrs=1
+[info] @1689 [IFU_SREG_SCB]: name=RV_VLDI pc=0x10d0d238 id=414, reg_idx=65
+[info] @1689 [RECORD INSTR]: instr.name=RV_VLDI instr.pc=0x10d0d238 instr.idd=414 #of of-instrs=1
+[info] @1689 [RECORD INSTR]: instr.name=RV_VCMP_EQ instr.pc=0x10d0d23c instr.idd=415 #of of-instrs=1
+[info] [0000001689] [EXU0] record_unit_instr, name RV_VCMP_EQ, id 366
+[info] [0000001689] [EXU1] record_unit_instr, name RV_VCVT_I2I, id 329
+[info] [0000001689] [LDU] retire_unit_instr, name RV_VLDI, id 379
+[info] [0000001689] [LDU] record_unit_instr, name RV_VLDI, id 380
+[info] [0000001689] [STU] record_unit_instr, name RV_VSTI, id 297
+[info] @1690 [RETIRE INSTR]: instr.name=RV_VCMP_EQ instr.pc=0x10d0d248 instr.id=339 #of of-instrs=59
+[info] @1690 [RETIRE INSTR]: instr.name=RV_VCVT_I2I instr.pc=0x10d0d258 instr.id=296 #of of-instrs=58
+[info] @1690 [RETIRE INSTR]: instr.name=RV_VSTI instr.pc=0x10d0d25c instr.id=264 #of of-instrs=57
+[info] @1690 [RECORD INSTR]: instr.name=RV_POR instr.pc=0x10d0d240 instr.idd=417 #of of-instrs=1
+[info] @1690 [RECORD INSTR]: instr.name=RV_VCMP_LE instr.pc=0x10d0d244 instr.idd=418 #of of-instrs=1
+[info] [0000001690] [EXU0] record_unit_instr, name RV_PAND, id 340
+[info] [0000001690] [EXU1] record_unit_instr, name RV_POR, id 353
+[info] [0000001690] [LDU] retire_unit_instr, name RV_VLDI, id 380
+[info] [0000001690] [EXU0] retire_unit_instr, name RV_VCMP_EQ, id 339
+[info] [0000001690] [EXU1] retire_unit_instr, name RV_VCVT_I2I, id 296
+[info] @1691 [RETIRE INSTR]: instr.name=RV_VSEL instr.pc=0x10d0d254 instr.id=327 #of of-instrs=58
+[info] @1691 [RETIRE INSTR]: instr.name=RV_POR instr.pc=0x10d0d240 instr.id=335 #of of-instrs=57
+[info] @1691 [RECORD INSTR]: instr.name=RV_VCMP_EQ instr.pc=0x10d0d248 instr.idd=420 #of of-instrs=1
+[info] @1691 [RECORD INSTR]: instr.name=RV_PAND instr.pc=0x10d0d24c instr.idd=421 #of of-instrs=1
+[info] @1691 [RECORD INSTR]: instr.name=RV_POR instr.pc=0x10d0d250 instr.idd=422 #of of-instrs=1
+[info] [0000001691] [LDU] record_unit_instr, name RV_VLDI, id 398
+[info] [0000001691] [EXU0] retire_unit_instr, name RV_VSEL, id 327
+[info] [0000001691] [EXU1] retire_unit_instr, name RV_POR, id 335
+[info] [0000001691] [STU] record_unit_instr, name RV_VSTI, id 312
+[info] @1692 [RETIRE INSTR]: instr.name=RV_VCMP_EQ instr.pc=0x10d0d23c instr.id=351 #of of-instrs=59
+[info] @1692 [RETIRE INSTR]: instr.name=RV_VCVT_I2I instr.pc=0x10d0d258 instr.id=311 #of of-instrs=58
+[info] @1692 [RECORD INSTR]: instr.name=RV_VSEL instr.pc=0x10d0d254 instr.idd=424 #of of-instrs=1
+[info] @1692 [IDU_SREG_SCB]: name=RV_VSTI pc=0x10d0d25c id=412, reg_idx=66, latency= 3, valid_time=1695
+[info] @1692 [IDU_SREG_SCB]: name=RV_VLDI pc=0x10d0d234 id=413, reg_idx=67, latency= 3, valid_time=1695
+[info] @1692 [IDU_SREG_SCB]: name=RV_VLDI pc=0x10d0d238 id=414, reg_idx=65, latency= 3, valid_time=1695
+[info] [0000001692] [EXU0] record_unit_instr, name RV_VCMP_EQ, id 371
+[info] [0000001692] [EXU1] record_unit_instr, name RV_VCMP_LE, id 354
+[info] [0000001692] [LDU] retire_unit_instr, name RV_VLDI, id 398
+[info] [0000001692] [LDU] record_unit_instr, name RV_VLDI, id 399
+[info] [0000001692] [EXU0] retire_unit_instr, name RV_VCMP_EQ, id 351
+[info] [0000001692] [EXU1] retire_unit_instr, name RV_VCVT_I2I, id 311
+[info] @1693 [RETIRE INSTR]: instr.name=RV_VCMP_EQ instr.pc=0x10d0d248 instr.id=356 #of of-instrs=58
+[info] @1693 [RETIRE INSTR]: instr.name=RV_VCMP_LE instr.pc=0x10d0d244 instr.id=337 #of of-instrs=57
+[info] @1693 [RECORD INSTR]: instr.name=RV_VCVT_I2I instr.pc=0x10d0d258 instr.idd=426 #of of-instrs=1
+[info] @1693 [IFU_SREG_SCB]: name=RV_VSTI pc=0x10d0d25c id=427, reg_idx=66
+[info] @1693 [RECORD INSTR]: instr.name=RV_VSTI instr.pc=0x10d0d25c instr.idd=427 #of of-instrs=1
+[info] @1693 [IFU_SREG_SCB]: name=RV_VLDI pc=0x10d0d234 id=428, reg_idx=67
+[info] @1693 [RECORD INSTR]: instr.name=RV_VLDI instr.pc=0x10d0d234 instr.idd=428 #of of-instrs=1
+[info] @1693 [IFU_SREG_SCB]: name=RV_VLDI pc=0x10d0d238 id=429, reg_idx=65
+[info] @1693 [RECORD INSTR]: instr.name=RV_VLDI instr.pc=0x10d0d238 instr.idd=429 #of of-instrs=1
+[info] @1693 [RECORD INSTR]: instr.name=RV_VCMP_EQ instr.pc=0x10d0d23c instr.idd=430 #of of-instrs=1
+[info] [0000001693] [EXU1] record_unit_instr, name RV_POR, id 343
+[info] [0000001693] [LDU] retire_unit_instr, name RV_VLDI, id 399
+[info] [0000001693] [EXU0] retire_unit_instr, name RV_VCMP_EQ, id 356
+[info] [0000001693] [EXU1] retire_unit_instr, name RV_VCMP_LE, id 337
+[info] @1694 [RETIRE INSTR]: instr.name=RV_VCMP_EQ instr.pc=0x10d0d23c instr.id=366 #of of-instrs=61
+[info] @1694 [RECORD INSTR]: instr.name=RV_POR instr.pc=0x10d0d240 instr.idd=432 #of of-instrs=1
+[info] [0000001694] [EXU0] record_unit_instr, name RV_PAND, id 357
+[info] [0000001694] [EXU0] retire_unit_instr, name RV_VCMP_EQ, id 366
+[info] [0000001694] [STU] record_unit_instr, name RV_VSTI, id 330
+[info] @1695 [RETIRE INSTR]: instr.name=RV_VCVT_I2I instr.pc=0x10d0d258 instr.id=329 #of of-instrs=61
+[info] [0000001695] [EXU1] retire_unit_instr, name RV_VCVT_I2I, id 329
+[info] [0000001695] [EXU1] record_unit_instr, name RV_VCMP_LE, id 369
+[info] [0000001695] [LDU] record_unit_instr, name RV_VLDI, id 413
+[info] [0000001695] [STU] retire_unit_instr, name RV_VSTI, id 279
+[info] @1696 [RETIRE INSTR]: instr.name=RV_VLDI instr.pc=0x10d0d234 instr.id=379 #of of-instrs=60
+[info] @1696 [RETIRE INSTR]: instr.name=RV_PAND instr.pc=0x10d0d24c instr.id=340 #of of-instrs=59
+[info] @1696 [RETIRE INSTR]: instr.name=RV_POR instr.pc=0x10d0d240 instr.id=353 #of of-instrs=58
+[info] [0000001696] [EXU0] retire_unit_instr, name RV_PAND, id 340
+[info] [0000001696] [EXU1] retire_unit_instr, name RV_POR, id 353
+[info] @1696 [RECORD INSTR]: instr.name=RV_VCMP_LE instr.pc=0x10d0d244 instr.idd=435 #of of-instrs=1
+[info] [0000001696] [EXU0] record_unit_instr, name RV_VSEL, id 345
+[info] [0000001696] [EXU1] record_unit_instr, name RV_POR, id 368
+[info] [0000001696] [LDU] retire_unit_instr, name RV_VLDI, id 413
+[info] [0000001696] [LDU] record_unit_instr, name RV_VLDI, id 414
+[info] @1697 [RETIRE INSTR]: instr.name=RV_VLDI instr.pc=0x10d0d238 instr.id=380 #of of-instrs=58
+[info] @1697 [RETIRE INSTR]: instr.name=RV_VSTI instr.pc=0x10d0d25c instr.id=279 #of of-instrs=57
+[info] @1697 [RETIRE INSTR]: instr.name=RV_VCMP_EQ instr.pc=0x10d0d248 instr.id=371 #of of-instrs=56
+[info] @1697 [RETIRE INSTR]: instr.name=RV_VCMP_LE instr.pc=0x10d0d244 instr.id=354 #of of-instrs=55
+[info] @1697 [RECORD INSTR]: instr.name=RV_VCMP_EQ instr.pc=0x10d0d248 instr.idd=437 #of of-instrs=1
+[info] @1697 [RECORD INSTR]: instr.name=RV_PAND instr.pc=0x10d0d24c instr.idd=438 #of of-instrs=1
+[info] [0000001697] [EXU0] record_unit_instr, name RV_VCMP_EQ, id 381
+[info] [0000001697] [LDU] retire_unit_instr, name RV_VLDI, id 414
+[info] [0000001697] [EXU0] retire_unit_instr, name RV_VCMP_EQ, id 371
+[info] [0000001697] [EXU1] retire_unit_instr, name RV_VCMP_LE, id 354
+[info] [0000001698] [EXU0] record_unit_instr, name RV_VCMP_EQ, id 389
+[info] [0000001698] [EXU1] record_unit_instr, name RV_VCVT_I2I, id 347
+[info] @1699 [RETIRE INSTR]: instr.name=RV_VLDI instr.pc=0x10d0d234 instr.id=398 #of of-instrs=56
+[info] @1699 [RETIRE INSTR]: instr.name=RV_POR instr.pc=0x10d0d250 instr.id=343 #of of-instrs=55
+[info] [0000001699] [EXU1] retire_unit_instr, name RV_POR, id 343
+[info] @1699 [RECORD INSTR]: instr.name=RV_POR instr.pc=0x10d0d250 instr.idd=441 #of of-instrs=1
+[info] [0000001699] [EXU0] record_unit_instr, name RV_PAND, id 372
+[info] [0000001699] [EXU1] record_unit_instr, name RV_POR, id 358
+[info] @1700 [RETIRE INSTR]: instr.name=RV_VLDI instr.pc=0x10d0d238 instr.id=399 #of of-instrs=55
+[info] @1700 [RETIRE INSTR]: instr.name=RV_PAND instr.pc=0x10d0d24c instr.id=357 #of of-instrs=54
+[info] @1700 [RETIRE INSTR]: instr.name=RV_VCMP_LE instr.pc=0x10d0d244 instr.id=369 #of of-instrs=53
+[info] [0000001700] [EXU0] retire_unit_instr, name RV_PAND, id 357
+[info] [0000001700] [EXU1] retire_unit_instr, name RV_VCMP_LE, id 369
+[info] @1700 [RECORD INSTR]: instr.name=RV_VSEL instr.pc=0x10d0d254 instr.idd=443 #of of-instrs=1
+[info] @1700 [IDU_SREG_SCB]: name=RV_VSTI pc=0x10d0d25c id=427, reg_idx=66, latency= 3, valid_time=1703
+[info] @1700 [IDU_SREG_SCB]: name=RV_VLDI pc=0x10d0d234 id=428, reg_idx=67, latency= 3, valid_time=1703
+[info] @1700 [IDU_SREG_SCB]: name=RV_VLDI pc=0x10d0d238 id=429, reg_idx=65, latency= 3, valid_time=1703
+[info] @1701 [RETIRE INSTR]: instr.name=RV_VSEL instr.pc=0x10d0d254 instr.id=345 #of of-instrs=53
+[info] @1701 [RECORD INSTR]: instr.name=RV_VCVT_I2I instr.pc=0x10d0d258 instr.idd=445 #of of-instrs=1
+[info] @1701 [IFU_SREG_SCB]: name=RV_VSTI pc=0x10d0d25c id=446, reg_idx=66
+[info] @1701 [RECORD INSTR]: instr.name=RV_VSTI instr.pc=0x10d0d25c instr.idd=446 #of of-instrs=1
+[info] @1701 [IFU_SREG_SCB]: name=RV_VLDI pc=0x10d0d234 id=447, reg_idx=67
+[info] @1701 [RECORD INSTR]: instr.name=RV_VLDI instr.pc=0x10d0d234 instr.idd=447 #of of-instrs=1
+[info] @1701 [IFU_SREG_SCB]: name=RV_VLDI pc=0x10d0d238 id=448, reg_idx=65
+[info] @1701 [RECORD INSTR]: instr.name=RV_VLDI instr.pc=0x10d0d238 instr.idd=448 #of of-instrs=1
+[info] @1701 [RECORD INSTR]: instr.name=RV_VCMP_EQ instr.pc=0x10d0d23c instr.idd=449 #of of-instrs=1
+[info] [0000001701] [EXU0] record_unit_instr, name RV_VCMP_EQ, id 400
+[info] [0000001701] [EXU1] record_unit_instr, name RV_VCMP_LE, id 384
+[info] [0000001701] [EXU0] retire_unit_instr, name RV_VSEL, id 345
+[info] @1702 [RETIRE INSTR]: instr.name=RV_VCMP_EQ instr.pc=0x10d0d23c instr.id=381 #of of-instrs=57
+[info] @1702 [RETIRE INSTR]: instr.name=RV_POR instr.pc=0x10d0d240 instr.id=368 #of of-instrs=56
+[info] [0000001702] [EXU0] retire_unit_instr, name RV_VCMP_EQ, id 381
+[info] [0000001702] [EXU1] retire_unit_instr, name RV_POR, id 368
+[info] @1702 [RECORD INSTR]: instr.name=RV_POR instr.pc=0x10d0d240 instr.idd=451 #of of-instrs=1
+[info] @1702 [RECORD INSTR]: instr.name=RV_VCMP_LE instr.pc=0x10d0d244 instr.idd=452 #of of-instrs=1
+[info] [0000001702] [EXU0] record_unit_instr, name RV_VSEL, id 360
+[info] [0000001702] [EXU1] record_unit_instr, name RV_POR, id 373
+[info] [0000001702] [STU] retire_unit_instr, name RV_VSTI, id 297
+[info] @1703 [RETIRE INSTR]: instr.name=RV_VLDI instr.pc=0x10d0d234 instr.id=413 #of of-instrs=57
+[info] @1703 [RETIRE INSTR]: instr.name=RV_VCMP_EQ instr.pc=0x10d0d248 instr.id=389 #of of-instrs=56
+[info] @1703 [RECORD INSTR]: instr.name=RV_VCMP_EQ instr.pc=0x10d0d248 instr.idd=454 #of of-instrs=1
+[info] @1703 [RECORD INSTR]: instr.name=RV_PAND instr.pc=0x10d0d24c instr.idd=455 #of of-instrs=1
+[info] [0000001703] [EXU0] record_unit_instr, name RV_VCMP_EQ, id 405
+[info] [0000001703] [LDU] record_unit_instr, name RV_VLDI, id 428
+[info] [0000001703] [EXU0] retire_unit_instr, name RV_VCMP_EQ, id 389
+[info] [0000001703] [STU] record_unit_instr, name RV_VSTI, id 348
+[info] @1704 [RETIRE INSTR]: instr.name=RV_VLDI instr.pc=0x10d0d238 instr.id=414 #of of-instrs=57
+[info] @1704 [RETIRE INSTR]: instr.name=RV_VSTI instr.pc=0x10d0d25c instr.id=297 #of of-instrs=56
+[info] @1704 [RETIRE INSTR]: instr.name=RV_VCVT_I2I instr.pc=0x10d0d258 instr.id=347 #of of-instrs=55
+[info] [0000001704] [EXU1] retire_unit_instr, name RV_VCVT_I2I, id 347
+[info] [0000001704] [EXU0] record_unit_instr, name RV_VCMP_EQ, id 415
+[info] [0000001704] [EXU1] record_unit_instr, name RV_VCVT_I2I, id 362
+[info] [0000001704] [LDU] retire_unit_instr, name RV_VLDI, id 428
+[info] [0000001704] [LDU] record_unit_instr, name RV_VLDI, id 429
+[info] @1705 [RETIRE INSTR]: instr.name=RV_PAND instr.pc=0x10d0d24c instr.id=372 #of of-instrs=54
+[info] @1705 [RETIRE INSTR]: instr.name=RV_POR instr.pc=0x10d0d250 instr.id=358 #of of-instrs=53
+[info] [0000001705] [EXU0] retire_unit_instr, name RV_PAND, id 372
+[info] [0000001705] [EXU1] retire_unit_instr, name RV_POR, id 358
+[info] @1705 [RECORD INSTR]: instr.name=RV_POR instr.pc=0x10d0d250 instr.idd=458 #of of-instrs=1
+[info] [0000001705] [EXU0] record_unit_instr, name RV_VSEL, id 375
+[info] [0000001705] [EXU1] record_unit_instr, name RV_POR, id 383
+[info] [0000001705] [LDU] retire_unit_instr, name RV_VLDI, id 429
+[info] @1706 [RETIRE INSTR]: instr.name=RV_VCMP_EQ instr.pc=0x10d0d23c instr.id=400 #of of-instrs=53
+[info] @1706 [RETIRE INSTR]: instr.name=RV_VCMP_LE instr.pc=0x10d0d244 instr.id=384 #of of-instrs=52
+[info] @1706 [RECORD INSTR]: instr.name=RV_VSEL instr.pc=0x10d0d254 instr.idd=460 #of of-instrs=1
+[info] @1706 [IDU_SREG_SCB]: name=RV_VSTI pc=0x10d0d25c id=446, reg_idx=66, latency= 3, valid_time=1709
+[info] @1706 [IDU_SREG_SCB]: name=RV_VLDI pc=0x10d0d234 id=447, reg_idx=67, latency= 3, valid_time=1709
+[info] @1706 [IDU_SREG_SCB]: name=RV_VLDI pc=0x10d0d238 id=448, reg_idx=65, latency= 3, valid_time=1709
+[info] [0000001706] [EXU0] record_unit_instr, name RV_VCMP_EQ, id 420
+[info] [0000001706] [EXU0] retire_unit_instr, name RV_VCMP_EQ, id 400
+[info] [0000001706] [EXU1] retire_unit_instr, name RV_VCMP_LE, id 384
+[info] @1707 [RETIRE INSTR]: instr.name=RV_VSEL instr.pc=0x10d0d254 instr.id=360 #of of-instrs=52
+[info] @1707 [RECORD INSTR]: instr.name=RV_VCVT_I2I instr.pc=0x10d0d258 instr.idd=462 #of of-instrs=1
+[info] @1707 [IFU_SREG_SCB]: name=RV_VSTI pc=0x10d0d25c id=463, reg_idx=66
+[info] @1707 [RECORD INSTR]: instr.name=RV_VSTI instr.pc=0x10d0d25c instr.idd=463 #of of-instrs=1
+[info] @1707 [IFU_SREG_SCB]: name=RV_VLDI pc=0x10d0d234 id=464, reg_idx=67
+[info] @1707 [RECORD INSTR]: instr.name=RV_VLDI instr.pc=0x10d0d234 instr.idd=464 #of of-instrs=1
+[info] @1707 [IFU_SREG_SCB]: name=RV_VLDI pc=0x10d0d238 id=465, reg_idx=65
+[info] @1707 [RECORD INSTR]: instr.name=RV_VLDI instr.pc=0x10d0d238 instr.idd=465 #of of-instrs=1
+[info] @1707 [RECORD INSTR]: instr.name=RV_VCMP_EQ instr.pc=0x10d0d23c instr.idd=466 #of of-instrs=1
+[info] [0000001707] [EXU1] record_unit_instr, name RV_VCVT_I2I, id 377
+[info] [0000001707] [EXU0] retire_unit_instr, name RV_VSEL, id 360
+[info] [0000001707] [STU] retire_unit_instr, name RV_VSTI, id 312
+[info] @1708 [RETIRE INSTR]: instr.name=RV_VCMP_EQ instr.pc=0x10d0d248 instr.id=405 #of of-instrs=56
+[info] @1708 [RETIRE INSTR]: instr.name=RV_POR instr.pc=0x10d0d250 instr.id=373 #of of-instrs=55
+[info] [0000001708] [EXU0] retire_unit_instr, name RV_VCMP_EQ, id 405
+[info] [0000001708] [EXU1] retire_unit_instr, name RV_POR, id 373
+[info] @1708 [RECORD INSTR]: instr.name=RV_POR instr.pc=0x10d0d240 instr.idd=468 #of of-instrs=1
+[info] @1708 [RECORD INSTR]: instr.name=RV_VCMP_LE instr.pc=0x10d0d244 instr.idd=469 #of of-instrs=1
+[info] [0000001708] [EXU0] record_unit_instr, name RV_PAND, id 390
+[info] [0000001708] [EXU1] record_unit_instr, name RV_POR, id 402
+[info] @1709 [RETIRE INSTR]: instr.name=RV_VCMP_EQ instr.pc=0x10d0d23c instr.id=415 #of of-instrs=56
+[info] @1709 [RETIRE INSTR]: instr.name=RV_VSTI instr.pc=0x10d0d25c instr.id=312 #of of-instrs=55
+[info] @1709 [RECORD INSTR]: instr.name=RV_VCMP_EQ instr.pc=0x10d0d248 instr.idd=471 #of of-instrs=1
+[info] @1709 [RECORD INSTR]: instr.name=RV_PAND instr.pc=0x10d0d24c instr.idd=472 #of of-instrs=1
+[info] @1709 [RECORD INSTR]: instr.name=RV_POR instr.pc=0x10d0d250 instr.idd=473 #of of-instrs=1
+[info] [0000001709] [LDU] record_unit_instr, name RV_VLDI, id 447
+[info] [0000001709] [EXU0] retire_unit_instr, name RV_VCMP_EQ, id 415
+[info] [0000001709] [STU] record_unit_instr, name RV_VSTI, id 363
+[info] @1710 [RETIRE INSTR]: instr.name=RV_VSEL instr.pc=0x10d0d254 instr.id=375 #of of-instrs=57
+[info] @1710 [RETIRE INSTR]: instr.name=RV_VCVT_I2I instr.pc=0x10d0d258 instr.id=362 #of of-instrs=56
+[info] [0000001710] [EXU0] retire_unit_instr, name RV_VSEL, id 375
+[info] [0000001710] [EXU1] retire_unit_instr, name RV_VCVT_I2I, id 362
+[info] [0000001710] [EXU0] record_unit_instr, name RV_VCMP_EQ, id 430
+[info] [0000001710] [EXU1] record_unit_instr, name RV_VCMP_LE, id 403
+[info] [0000001710] [LDU] retire_unit_instr, name RV_VLDI, id 447
+[info] [0000001710] [LDU] record_unit_instr, name RV_VLDI, id 448
+[info] @1711 [RETIRE INSTR]: instr.name=RV_VLDI instr.pc=0x10d0d234 instr.id=428 #of of-instrs=55
+[info] @1711 [RETIRE INSTR]: instr.name=RV_VCMP_EQ instr.pc=0x10d0d248 instr.id=420 #of of-instrs=54
+[info] @1711 [RETIRE INSTR]: instr.name=RV_POR instr.pc=0x10d0d240 instr.id=383 #of of-instrs=53
+[info] @1711 [RECORD INSTR]: instr.name=RV_VSEL instr.pc=0x10d0d254 instr.idd=476 #of of-instrs=1
+[info] @1711 [IDU_SREG_SCB]: name=RV_VSTI pc=0x10d0d25c id=463, reg_idx=66, latency= 3, valid_time=1714
+[info] @1711 [IDU_SREG_SCB]: name=RV_VLDI pc=0x10d0d234 id=464, reg_idx=67, latency= 3, valid_time=1714
+[info] @1711 [IDU_SREG_SCB]: name=RV_VLDI pc=0x10d0d238 id=465, reg_idx=65, latency= 3, valid_time=1714
+[info] [0000001711] [EXU0] record_unit_instr, name RV_VCMP_EQ, id 437
+[info] [0000001711] [EXU1] record_unit_instr, name RV_POR, id 392
+[info] [0000001711] [LDU] retire_unit_instr, name RV_VLDI, id 448
+[info] [0000001711] [EXU0] retire_unit_instr, name RV_VCMP_EQ, id 420
+[info] [0000001711] [EXU1] retire_unit_instr, name RV_POR, id 383
+[info] @1712 [RETIRE INSTR]: instr.name=RV_VLDI instr.pc=0x10d0d238 instr.id=429 #of of-instrs=53
+[info] @1712 [RECORD INSTR]: instr.name=RV_VCVT_I2I instr.pc=0x10d0d258 instr.idd=478 #of of-instrs=1
+[info] @1712 [IFU_SREG_SCB]: name=RV_VSTI pc=0x10d0d25c id=479, reg_idx=66
+[info] @1712 [RECORD INSTR]: instr.name=RV_VSTI instr.pc=0x10d0d25c instr.idd=479 #of of-instrs=1
+[info] @1712 [IFU_SREG_SCB]: name=RV_VLDI pc=0x10d0d234 id=480, reg_idx=67
+[info] @1712 [RECORD INSTR]: instr.name=RV_VLDI instr.pc=0x10d0d234 instr.idd=480 #of of-instrs=1
+[info] @1712 [IFU_SREG_SCB]: name=RV_VLDI pc=0x10d0d238 id=481, reg_idx=65
+[info] @1712 [RECORD INSTR]: instr.name=RV_VLDI instr.pc=0x10d0d238 instr.idd=481 #of of-instrs=1
+[info] @1712 [RECORD INSTR]: instr.name=RV_VCMP_EQ instr.pc=0x10d0d23c instr.idd=482 #of of-instrs=1
+[info] [0000001712] [EXU0] record_unit_instr, name RV_PAND, id 406
+[info] [0000001712] [STU] retire_unit_instr, name RV_VSTI, id 330
+[info] [0000001712] [STU] record_unit_instr, name RV_VSTI, id 378
+[info] @1713 [RETIRE INSTR]: instr.name=RV_VCVT_I2I instr.pc=0x10d0d258 instr.id=377 #of of-instrs=57
+[info] [0000001713] [EXU1] retire_unit_instr, name RV_VCVT_I2I, id 377
+[info] @1713 [RECORD INSTR]: instr.name=RV_POR instr.pc=0x10d0d240 instr.idd=484 #of of-instrs=1
+[info] [0000001713] [EXU1] record_unit_instr, name RV_VCMP_LE, id 418
+[info] @1714 [RETIRE INSTR]: instr.name=RV_PAND instr.pc=0x10d0d24c instr.id=390 #of of-instrs=57
+[info] @1714 [RETIRE INSTR]: instr.name=RV_POR instr.pc=0x10d0d240 instr.id=402 #of of-instrs=56
+[info] @1714 [RETIRE INSTR]: instr.name=RV_VSTI instr.pc=0x10d0d25c instr.id=330 #of of-instrs=55
+[info] [0000001714] [EXU0] retire_unit_instr, name RV_PAND, id 390
+[info] [0000001714] [EXU1] retire_unit_instr, name RV_POR, id 402
+[info] @1714 [RECORD INSTR]: instr.name=RV_VCMP_LE instr.pc=0x10d0d244 instr.idd=486 #of of-instrs=1
+[info] [0000001714] [EXU0] record_unit_instr, name RV_VSEL, id 394
+[info] [0000001714] [EXU1] record_unit_instr, name RV_POR, id 417
+[info] [0000001714] [LDU] record_unit_instr, name RV_VLDI, id 464
+[info] @1715 [RETIRE INSTR]: instr.name=RV_VCMP_EQ instr.pc=0x10d0d23c instr.id=430 #of of-instrs=55
+[info] @1715 [RETIRE INSTR]: instr.name=RV_VCMP_LE instr.pc=0x10d0d244 instr.id=403 #of of-instrs=54
+[info] @1715 [RECORD INSTR]: instr.name=RV_VCMP_EQ instr.pc=0x10d0d248 instr.idd=488 #of of-instrs=1
+[info] @1715 [RECORD INSTR]: instr.name=RV_PAND instr.pc=0x10d0d24c instr.idd=489 #of of-instrs=1
+[info] [0000001715] [EXU0] record_unit_instr, name RV_VCMP_EQ, id 449
+[info] [0000001715] [LDU] retire_unit_instr, name RV_VLDI, id 464
+[info] [0000001715] [LDU] record_unit_instr, name RV_VLDI, id 465
+[info] [0000001715] [EXU0] retire_unit_instr, name RV_VCMP_EQ, id 430
+[info] [0000001715] [EXU1] retire_unit_instr, name RV_VCMP_LE, id 403
+[info] @1716 [RETIRE INSTR]: instr.name=RV_VCMP_EQ instr.pc=0x10d0d248 instr.id=437 #of of-instrs=55
+[info] [0000001716] [EXU0] record_unit_instr, name RV_VCMP_EQ, id 454
+[info] [0000001716] [EXU1] record_unit_instr, name RV_POR, id 407
+[info] [0000001716] [LDU] retire_unit_instr, name RV_VLDI, id 465
+[info] [0000001716] [EXU0] retire_unit_instr, name RV_VCMP_EQ, id 437
+[info] @1717 [RETIRE INSTR]: instr.name=RV_VLDI instr.pc=0x10d0d234 instr.id=447 #of of-instrs=54
+[info] @1717 [RETIRE INSTR]: instr.name=RV_POR instr.pc=0x10d0d250 instr.id=392 #of of-instrs=53
+[info] [0000001717] [EXU1] retire_unit_instr, name RV_POR, id 392
+[info] @1717 [RECORD INSTR]: instr.name=RV_POR instr.pc=0x10d0d250 instr.idd=492 #of of-instrs=1
+[info] [0000001717] [EXU0] record_unit_instr, name RV_PAND, id 421
+[info] [0000001717] [EXU1] record_unit_instr, name RV_VCVT_I2I, id 396
+[info] [0000001717] [STU] retire_unit_instr, name RV_VSTI, id 348
+[info] @1718 [RETIRE INSTR]: instr.name=RV_VLDI instr.pc=0x10d0d238 instr.id=448 #of of-instrs=53
+[info] @1718 [RETIRE INSTR]: instr.name=RV_PAND instr.pc=0x10d0d24c instr.id=406 #of of-instrs=52
+[info] @1718 [RETIRE INSTR]: instr.name=RV_VCMP_LE instr.pc=0x10d0d244 instr.id=418 #of of-instrs=51
+[info] [0000001718] [EXU0] retire_unit_instr, name RV_PAND, id 406
+[info] [0000001718] [EXU1] retire_unit_instr, name RV_VCMP_LE, id 418
+[info] @1718 [RECORD INSTR]: instr.name=RV_VSEL instr.pc=0x10d0d254 instr.idd=494 #of of-instrs=1
+[info] @1718 [IDU_SREG_SCB]: name=RV_VSTI pc=0x10d0d25c id=479, reg_idx=66, latency= 3, valid_time=1721
+[info] @1718 [IDU_SREG_SCB]: name=RV_VLDI pc=0x10d0d234 id=480, reg_idx=67, latency= 3, valid_time=1721
+[info] @1718 [IDU_SREG_SCB]: name=RV_VLDI pc=0x10d0d238 id=481, reg_idx=65, latency= 3, valid_time=1721
+[info] [0000001718] [EXU1] record_unit_instr, name RV_POR, id 432
+[info] @1719 [RETIRE INSTR]: instr.name=RV_VSEL instr.pc=0x10d0d254 instr.id=394 #of of-instrs=51
+[info] @1719 [RETIRE INSTR]: instr.name=RV_VSTI instr.pc=0x10d0d25c instr.id=348 #of of-instrs=50
+[info] @1719 [RECORD INSTR]: instr.name=RV_VCVT_I2I instr.pc=0x10d0d258 instr.idd=496 #of of-instrs=1
+[info] @1719 [IFU_SREG_SCB]: name=RV_VSTI pc=0x10d0d25c id=497, reg_idx=66
+[info] @1719 [RECORD INSTR]: instr.name=RV_VSTI instr.pc=0x10d0d25c instr.idd=497 #of of-instrs=1
+[info] @1719 [IFU_SREG_SCB]: name=RV_VLDI pc=0x10d0d234 id=498, reg_idx=67
+[info] @1719 [RECORD INSTR]: instr.name=RV_VLDI instr.pc=0x10d0d234 instr.idd=498 #of of-instrs=1
+[info] @1719 [IFU_SREG_SCB]: name=RV_VLDI pc=0x10d0d238 id=499, reg_idx=65
+[info] @1719 [RECORD INSTR]: instr.name=RV_VLDI instr.pc=0x10d0d238 instr.idd=499 #of of-instrs=1
+[info] @1719 [RECORD INSTR]: instr.name=RV_VCMP_EQ instr.pc=0x10d0d23c instr.idd=500 #of of-instrs=1
+[info] [0000001719] [EXU0] record_unit_instr, name RV_VSEL, id 409
+[info] [0000001719] [EXU0] retire_unit_instr, name RV_VSEL, id 394
+[info] @1720 [RETIRE INSTR]: instr.name=RV_VCMP_EQ instr.pc=0x10d0d23c instr.id=449 #of of-instrs=54
+[info] @1720 [RETIRE INSTR]: instr.name=RV_POR instr.pc=0x10d0d240 instr.id=417 #of of-instrs=53
+[info] [0000001720] [EXU0] retire_unit_instr, name RV_VCMP_EQ, id 449
+[info] [0000001720] [EXU1] retire_unit_instr, name RV_POR, id 417
+[info] @1720 [RECORD INSTR]: instr.name=RV_POR instr.pc=0x10d0d240 instr.idd=502 #of of-instrs=1
+[info] @1720 [RECORD INSTR]: instr.name=RV_VCMP_LE instr.pc=0x10d0d244 instr.idd=503 #of of-instrs=1
+[info] [0000001720] [EXU1] record_unit_instr, name RV_VCMP_LE, id 435
+[info] @1721 [RETIRE INSTR]: instr.name=RV_VCMP_EQ instr.pc=0x10d0d248 instr.id=454 #of of-instrs=54
+[info] @1721 [RECORD INSTR]: instr.name=RV_VCMP_EQ instr.pc=0x10d0d248 instr.idd=505 #of of-instrs=1
+[info] @1721 [RECORD INSTR]: instr.name=RV_PAND instr.pc=0x10d0d24c instr.idd=506 #of of-instrs=1
+[info] [0000001721] [EXU0] record_unit_instr, name RV_VCMP_EQ, id 466
+[info] [0000001721] [EXU1] record_unit_instr, name RV_VCVT_I2I, id 411
+[info] [0000001721] [LDU] record_unit_instr, name RV_VLDI, id 480
+[info] [0000001721] [EXU0] retire_unit_instr, name RV_VCMP_EQ, id 454
+[info] @1722 [RETIRE INSTR]: instr.name=RV_VLDI instr.pc=0x10d0d234 instr.id=464 #of of-instrs=55
+[info] @1722 [RETIRE INSTR]: instr.name=RV_POR instr.pc=0x10d0d250 instr.id=407 #of of-instrs=54
+[info] [0000001722] [EXU1] retire_unit_instr, name RV_POR, id 407
+[info] @1722 [RECORD INSTR]: instr.name=RV_POR instr.pc=0x10d0d250 instr.idd=508 #of of-instrs=1
+[info] [0000001722] [EXU0] record_unit_instr, name RV_PAND, id 438
+[info] [0000001722] [EXU1] record_unit_instr, name RV_POR, id 422
+[info] [0000001722] [LDU] retire_unit_instr, name RV_VLDI, id 480
+[info] [0000001722] [LDU] record_unit_instr, name RV_VLDI, id 481
+[info] [0000001722] [STU] retire_unit_instr, name RV_VSTI, id 363
+[info] [0000001722] [STU] record_unit_instr, name RV_VSTI, id 397
+[info] @1723 [RETIRE INSTR]: instr.name=RV_VLDI instr.pc=0x10d0d238 instr.id=465 #of of-instrs=54
+[info] @1723 [RETIRE INSTR]: instr.name=RV_PAND instr.pc=0x10d0d24c instr.id=421 #of of-instrs=53
+[info] @1723 [RETIRE INSTR]: instr.name=RV_VCVT_I2I instr.pc=0x10d0d258 instr.id=396 #of of-instrs=52
+[info] [0000001723] [EXU0] retire_unit_instr, name RV_PAND, id 421
+[info] [0000001723] [EXU1] retire_unit_instr, name RV_VCVT_I2I, id 396
+[info] @1723 [RECORD INSTR]: instr.name=RV_VSEL instr.pc=0x10d0d254 instr.idd=510 #of of-instrs=1
+[info] @1723 [IDU_SREG_SCB]: name=RV_VSTI pc=0x10d0d25c id=497, reg_idx=66, latency= 3, valid_time=1726
+[info] @1723 [IDU_SREG_SCB]: name=RV_VLDI pc=0x10d0d234 id=498, reg_idx=67, latency= 3, valid_time=1726
+[info] @1723 [IDU_SREG_SCB]: name=RV_VLDI pc=0x10d0d238 id=499, reg_idx=65, latency= 3, valid_time=1726
+[info] [0000001723] [LDU] retire_unit_instr, name RV_VLDI, id 481
+[info] @1724 [RETIRE INSTR]: instr.name=RV_VSEL instr.pc=0x10d0d254 instr.id=409 #of of-instrs=52
+[info] @1724 [RETIRE INSTR]: instr.name=RV_POR instr.pc=0x10d0d240 instr.id=432 #of of-instrs=51
+[info] @1724 [RETIRE INSTR]: instr.name=RV_VSTI instr.pc=0x10d0d25c instr.id=363 #of of-instrs=50
+[info] @1724 [RECORD INSTR]: instr.name=RV_VCVT_I2I instr.pc=0x10d0d258 instr.idd=512 #of of-instrs=1
+[info] @1724 [IFU_SREG_SCB]: name=RV_VSTI pc=0x10d0d25c id=513, reg_idx=66
+[info] @1724 [RECORD INSTR]: instr.name=RV_VSTI instr.pc=0x10d0d25c instr.idd=513 #of of-instrs=1
+[info] @1724 [IFU_SREG_SCB]: name=RV_VLDI pc=0x10d0d234 id=514, reg_idx=67
+[info] @1724 [RECORD INSTR]: instr.name=RV_VLDI instr.pc=0x10d0d234 instr.idd=514 #of of-instrs=1
+[info] @1724 [IFU_SREG_SCB]: name=RV_VLDI pc=0x10d0d238 id=515, reg_idx=65
+[info] @1724 [RECORD INSTR]: instr.name=RV_VLDI instr.pc=0x10d0d238 instr.idd=515 #of of-instrs=1
+[info] @1724 [RECORD INSTR]: instr.name=RV_VCMP_EQ instr.pc=0x10d0d23c instr.idd=516 #of of-instrs=1
+[info] [0000001724] [EXU0] record_unit_instr, name RV_VCMP_EQ, id 471
+[info] [0000001724] [EXU1] record_unit_instr, name RV_VCMP_LE, id 452
+[info] [0000001724] [EXU0] retire_unit_instr, name RV_VSEL, id 409
+[info] [0000001724] [EXU1] retire_unit_instr, name RV_POR, id 432
+[info] @1725 [RETIRE INSTR]: instr.name=RV_VCMP_LE instr.pc=0x10d0d244 instr.id=435 #of of-instrs=54
+[info] @1725 [RECORD INSTR]: instr.name=RV_POR instr.pc=0x10d0d240 instr.idd=518 #of of-instrs=1
+[info] @1725 [RECORD INSTR]: instr.name=RV_VCMP_LE instr.pc=0x10d0d244 instr.idd=519 #of of-instrs=1
+[info] [0000001725] [EXU0] record_unit_instr, name RV_VSEL, id 424
+[info] [0000001725] [EXU1] record_unit_instr, name RV_POR, id 441
+[info] [0000001725] [EXU1] retire_unit_instr, name RV_VCMP_LE, id 435
+[info] @1726 [RETIRE INSTR]: instr.name=RV_VCMP_EQ instr.pc=0x10d0d23c instr.id=466 #of of-instrs=55
+[info] [0000001726] [EXU0] retire_unit_instr, name RV_VCMP_EQ, id 466
+[info] @1726 [RECORD INSTR]: instr.name=RV_VCMP_EQ instr.pc=0x10d0d248 instr.idd=521 #of of-instrs=1
+[info] @1726 [RECORD INSTR]: instr.name=RV_PAND instr.pc=0x10d0d24c instr.idd=522 #of of-instrs=1
+[info] [0000001726] [LDU] record_unit_instr, name RV_VLDI, id 498
+[info] [0000001726] [STU] record_unit_instr, name RV_VSTI, id 412
+[info] @1727 [RETIRE INSTR]: instr.name=RV_VCVT_I2I instr.pc=0x10d0d258 instr.id=411 #of of-instrs=56
+[info] [0000001727] [EXU1] retire_unit_instr, name RV_VCVT_I2I, id 411
+[info] [0000001727] [EXU0] record_unit_instr, name RV_VCMP_EQ, id 482
+[info] [0000001727] [EXU1] record_unit_instr, name RV_VCVT_I2I, id 426
+[info] [0000001727] [LDU] retire_unit_instr, name RV_VLDI, id 498
+[info] [0000001727] [LDU] record_unit_instr, name RV_VLDI, id 499
+[info] @1728 [RETIRE INSTR]: instr.name=RV_PAND instr.pc=0x10d0d24c instr.id=438 #of of-instrs=55
+[info] @1728 [RETIRE INSTR]: instr.name=RV_POR instr.pc=0x10d0d250 instr.id=422 #of of-instrs=54
+[info] [0000001728] [EXU0] retire_unit_instr, name RV_PAND, id 438
+[info] [0000001728] [EXU1] retire_unit_instr, name RV_POR, id 422
+[info] @1728 [RECORD INSTR]: instr.name=RV_POR instr.pc=0x10d0d250 instr.idd=525 #of of-instrs=1
+[info] [0000001728] [EXU0] record_unit_instr, name RV_VSEL, id 443
+[info] [0000001728] [EXU1] record_unit_instr, name RV_POR, id 451
+[info] [0000001728] [LDU] retire_unit_instr, name RV_VLDI, id 499
+[info] [0000001728] [STU] retire_unit_instr, name RV_VSTI, id 378
+[info] @1729 [RETIRE INSTR]: instr.name=RV_VLDI instr.pc=0x10d0d234 instr.id=480 #of of-instrs=54
+[info] @1729 [RETIRE INSTR]: instr.name=RV_VCMP_EQ instr.pc=0x10d0d248 instr.id=471 #of of-instrs=53
+[info] @1729 [RETIRE INSTR]: instr.name=RV_VCMP_LE instr.pc=0x10d0d244 instr.id=452 #of of-instrs=52
+[info] @1729 [RECORD INSTR]: instr.name=RV_VSEL instr.pc=0x10d0d254 instr.idd=527 #of of-instrs=1
+[info] @1729 [IDU_SREG_SCB]: name=RV_VSTI pc=0x10d0d25c id=513, reg_idx=66, latency= 3, valid_time=1732
+[info] @1729 [IDU_SREG_SCB]: name=RV_VLDI pc=0x10d0d234 id=514, reg_idx=67, latency= 3, valid_time=1732
+[info] @1729 [IDU_SREG_SCB]: name=RV_VLDI pc=0x10d0d238 id=515, reg_idx=65, latency= 3, valid_time=1732
+[info] [0000001729] [EXU0] record_unit_instr, name RV_VCMP_EQ, id 488
+[info] [0000001729] [EXU0] retire_unit_instr, name RV_VCMP_EQ, id 471
+[info] [0000001729] [EXU1] retire_unit_instr, name RV_VCMP_LE, id 452
+[info] @1730 [RETIRE INSTR]: instr.name=RV_VLDI instr.pc=0x10d0d238 instr.id=481 #of of-instrs=52
+[info] @1730 [RETIRE INSTR]: instr.name=RV_VSTI instr.pc=0x10d0d25c instr.id=378 #of of-instrs=51
+[info] @1730 [RETIRE INSTR]: instr.name=RV_VSEL instr.pc=0x10d0d254 instr.id=424 #of of-instrs=50
+[info] @1730 [RECORD INSTR]: instr.name=RV_VCVT_I2I instr.pc=0x10d0d258 instr.idd=529 #of of-instrs=1
+[info] @1730 [IFU_SREG_SCB]: name=RV_VSTI pc=0x10d0d25c id=530, reg_idx=66
+[info] @1730 [RECORD INSTR]: instr.name=RV_VSTI instr.pc=0x10d0d25c instr.idd=530 #of of-instrs=1
+[info] @1730 [IFU_SREG_SCB]: name=RV_VLDI pc=0x10d0d234 id=531, reg_idx=67
+[info] @1730 [RECORD INSTR]: instr.name=RV_VLDI instr.pc=0x10d0d234 instr.idd=531 #of of-instrs=1
+[info] @1730 [IFU_SREG_SCB]: name=RV_VLDI pc=0x10d0d238 id=532, reg_idx=65
+[info] @1730 [RECORD INSTR]: instr.name=RV_VLDI instr.pc=0x10d0d238 instr.idd=532 #of of-instrs=1
+[info] @1730 [RECORD INSTR]: instr.name=RV_VCMP_EQ instr.pc=0x10d0d23c instr.idd=533 #of of-instrs=1
+[info] [0000001730] [EXU1] record_unit_instr, name RV_VCVT_I2I, id 445
+[info] [0000001730] [EXU0] retire_unit_instr, name RV_VSEL, id 424
+[info] @1731 [RETIRE INSTR]: instr.name=RV_POR instr.pc=0x10d0d250 instr.id=441 #of of-instrs=54
+[info] [0000001731] [EXU1] retire_unit_instr, name RV_POR, id 441
+[info] @1731 [RECORD INSTR]: instr.name=RV_POR instr.pc=0x10d0d240 instr.idd=535 #of of-instrs=1
+[info] @1731 [RECORD INSTR]: instr.name=RV_VCMP_LE instr.pc=0x10d0d244 instr.idd=536 #of of-instrs=1
+[info] [0000001731] [EXU0] record_unit_instr, name RV_PAND, id 455
+[info] [0000001731] [EXU1] record_unit_instr, name RV_POR, id 468
+[info] @1732 [RETIRE INSTR]: instr.name=RV_VCMP_EQ instr.pc=0x10d0d23c instr.id=482 #of of-instrs=55
+[info] [0000001732] [EXU0] retire_unit_instr, name RV_VCMP_EQ, id 482
+[info] @1732 [RECORD INSTR]: instr.name=RV_VCMP_EQ instr.pc=0x10d0d248 instr.idd=538 #of of-instrs=1
+[info] @1732 [RECORD INSTR]: instr.name=RV_PAND instr.pc=0x10d0d24c instr.idd=539 #of of-instrs=1
+[info] @1732 [RECORD INSTR]: instr.name=RV_POR instr.pc=0x10d0d250 instr.idd=540 #of of-instrs=1
+[info] [0000001732] [LDU] record_unit_instr, name RV_VLDI, id 514
+[info] [0000001732] [STU] record_unit_instr, name RV_VSTI, id 427
+[info] @1733 [RETIRE INSTR]: instr.name=RV_VSEL instr.pc=0x10d0d254 instr.id=443 #of of-instrs=57
+[info] @1733 [RETIRE INSTR]: instr.name=RV_VCVT_I2I instr.pc=0x10d0d258 instr.id=426 #of of-instrs=56
+[info] [0000001733] [EXU0] retire_unit_instr, name RV_VSEL, id 443
+[info] [0000001733] [EXU1] retire_unit_instr, name RV_VCVT_I2I, id 426
+[info] [0000001733] [EXU0] record_unit_instr, name RV_VCMP_EQ, id 500
+[info] [0000001733] [EXU1] record_unit_instr, name RV_VCMP_LE, id 469
+[info] [0000001733] [LDU] retire_unit_instr, name RV_VLDI, id 514
+[info] [0000001733] [LDU] record_unit_instr, name RV_VLDI, id 515
+[info] [0000001733] [STU] retire_unit_instr, name RV_VSTI, id 397
+[info] @1734 [RETIRE INSTR]: instr.name=RV_VLDI instr.pc=0x10d0d234 instr.id=498 #of of-instrs=55
+[info] @1734 [RETIRE INSTR]: instr.name=RV_VCMP_EQ instr.pc=0x10d0d248 instr.id=488 #of of-instrs=54
+[info] @1734 [RETIRE INSTR]: instr.name=RV_POR instr.pc=0x10d0d240 instr.id=451 #of of-instrs=53
+[info] @1734 [RECORD INSTR]: instr.name=RV_VSEL instr.pc=0x10d0d254 instr.idd=543 #of of-instrs=1
+[info] @1734 [IDU_SREG_SCB]: name=RV_VSTI pc=0x10d0d25c id=530, reg_idx=66, latency= 3, valid_time=1737
+[info] @1734 [IDU_SREG_SCB]: name=RV_VLDI pc=0x10d0d234 id=531, reg_idx=67, latency= 3, valid_time=1737
+[info] @1734 [IDU_SREG_SCB]: name=RV_VLDI pc=0x10d0d238 id=532, reg_idx=65, latency= 3, valid_time=1737
+[info] [0000001734] [EXU0] record_unit_instr, name RV_VCMP_EQ, id 505
+[info] [0000001734] [EXU1] record_unit_instr, name RV_POR, id 458
+[info] [0000001734] [LDU] retire_unit_instr, name RV_VLDI, id 515
+[info] [0000001734] [EXU0] retire_unit_instr, name RV_VCMP_EQ, id 488
+[info] [0000001734] [EXU1] retire_unit_instr, name RV_POR, id 451
+[info] @1735 [RETIRE INSTR]: instr.name=RV_VLDI instr.pc=0x10d0d238 instr.id=499 #of of-instrs=53
+[info] @1735 [RETIRE INSTR]: instr.name=RV_VSTI instr.pc=0x10d0d25c instr.id=397 #of of-instrs=52
+[info] @1735 [RECORD INSTR]: instr.name=RV_VCVT_I2I instr.pc=0x10d0d258 instr.idd=545 #of of-instrs=1
+[info] @1735 [IFU_SREG_SCB]: name=RV_VSTI pc=0x10d0d25c id=546, reg_idx=66
+[info] @1735 [RECORD INSTR]: instr.name=RV_VSTI instr.pc=0x10d0d25c instr.idd=546 #of of-instrs=1
+[info] @1735 [IFU_SREG_SCB]: name=RV_VLDI pc=0x10d0d234 id=547, reg_idx=67
+[info] @1735 [RECORD INSTR]: instr.name=RV_VLDI instr.pc=0x10d0d234 instr.idd=547 #of of-instrs=1
+[info] @1735 [IFU_SREG_SCB]: name=RV_VLDI pc=0x10d0d238 id=548, reg_idx=65
+[info] @1735 [RECORD INSTR]: instr.name=RV_VLDI instr.pc=0x10d0d238 instr.idd=548 #of of-instrs=1
+[info] @1735 [RECORD INSTR]: instr.name=RV_VCMP_EQ instr.pc=0x10d0d23c instr.idd=549 #of of-instrs=1
+[info] [0000001735] [EXU0] record_unit_instr, name RV_PAND, id 472
+[info] [0000001735] [STU] record_unit_instr, name RV_VSTI, id 446
+[info] @1736 [RETIRE INSTR]: instr.name=RV_VCVT_I2I instr.pc=0x10d0d258 instr.id=445 #of of-instrs=56
+[info] [0000001736] [EXU1] retire_unit_instr, name RV_VCVT_I2I, id 445
+[info] @1736 [RECORD INSTR]: instr.name=RV_POR instr.pc=0x10d0d240 instr.idd=551 #of of-instrs=1
+[info] [0000001736] [EXU1] record_unit_instr, name RV_POR, id 484
+[info] @1737 [RETIRE INSTR]: instr.name=RV_PAND instr.pc=0x10d0d24c instr.id=455 #of of-instrs=56
+[info] @1737 [RETIRE INSTR]: instr.name=RV_POR instr.pc=0x10d0d240 instr.id=468 #of of-instrs=55
+[info] [0000001737] [EXU0] retire_unit_instr, name RV_PAND, id 455
+[info] [0000001737] [EXU1] retire_unit_instr, name RV_POR, id 468
+[info] @1737 [RECORD INSTR]: instr.name=RV_VCMP_LE instr.pc=0x10d0d244 instr.idd=553 #of of-instrs=1
+[info] [0000001737] [EXU0] record_unit_instr, name RV_VSEL, id 460
+[info] [0000001737] [LDU] record_unit_instr, name RV_VLDI, id 531
+[info] @1738 [RETIRE INSTR]: instr.name=RV_VCMP_EQ instr.pc=0x10d0d23c instr.id=500 #of of-instrs=55
+[info] @1738 [RETIRE INSTR]: instr.name=RV_VCMP_LE instr.pc=0x10d0d244 instr.id=469 #of of-instrs=54
+[info] @1738 [RECORD INSTR]: instr.name=RV_VCMP_EQ instr.pc=0x10d0d248 instr.idd=555 #of of-instrs=1
+[info] @1738 [RECORD INSTR]: instr.name=RV_PAND instr.pc=0x10d0d24c instr.idd=556 #of of-instrs=1
+[info] [0000001738] [EXU0] record_unit_instr, name RV_VCMP_EQ, id 516
+[info] [0000001738] [EXU1] record_unit_instr, name RV_POR, id 473
+[info] [0000001738] [LDU] retire_unit_instr, name RV_VLDI, id 531
+[info] [0000001738] [LDU] record_unit_instr, name RV_VLDI, id 532
+[info] [0000001738] [EXU0] retire_unit_instr, name RV_VCMP_EQ, id 500
+[info] [0000001738] [EXU1] retire_unit_instr, name RV_VCMP_LE, id 469
+[info] @1739 [RETIRE INSTR]: instr.name=RV_VCMP_EQ instr.pc=0x10d0d248 instr.id=505 #of of-instrs=55
+[info] [0000001739] [EXU0] record_unit_instr, name RV_VCMP_EQ, id 521
+[info] [0000001739] [EXU1] record_unit_instr, name RV_VCVT_I2I, id 462
+[info] [0000001739] [EXU0] retire_unit_instr, name RV_VCMP_EQ, id 505
+[info] [0000001739] [STU] retire_unit_instr, name RV_VSTI, id 412
+[info] @1740 [RETIRE INSTR]: instr.name=RV_VLDI instr.pc=0x10d0d234 instr.id=514 #of of-instrs=54
+[info] @1740 [RETIRE INSTR]: instr.name=RV_POR instr.pc=0x10d0d250 instr.id=458 #of of-instrs=53
+[info] [0000001740] [EXU1] retire_unit_instr, name RV_POR, id 458
+[info] @1740 [RECORD INSTR]: instr.name=RV_POR instr.pc=0x10d0d250 instr.idd=559 #of of-instrs=1
+[info] [0000001740] [EXU1] record_unit_instr, name RV_POR, id 502
+[info] [0000001740] [LDU] retire_unit_instr, name RV_VLDI, id 532
+[info] @1741 [RETIRE INSTR]: instr.name=RV_VLDI instr.pc=0x10d0d238 instr.id=515 #of of-instrs=53
+[info] @1741 [RETIRE INSTR]: instr.name=RV_VSTI instr.pc=0x10d0d25c instr.id=412 #of of-instrs=52
+[info] @1741 [RETIRE INSTR]: instr.name=RV_PAND instr.pc=0x10d0d24c instr.id=472 #of of-instrs=51
+[info] [0000001741] [EXU0] retire_unit_instr, name RV_PAND, id 472
+[info] @1741 [RECORD INSTR]: instr.name=RV_VSEL instr.pc=0x10d0d254 instr.idd=561 #of of-instrs=1
+[info] @1741 [IDU_SREG_SCB]: name=RV_VSTI pc=0x10d0d25c id=546, reg_idx=66, latency= 3, valid_time=1744
+[info] @1741 [IDU_SREG_SCB]: name=RV_VLDI pc=0x10d0d234 id=547, reg_idx=67, latency= 3, valid_time=1744
+[info] @1741 [IDU_SREG_SCB]: name=RV_VLDI pc=0x10d0d238 id=548, reg_idx=65, latency= 3, valid_time=1744
+[info] [0000001741] [EXU0] record_unit_instr, name RV_VSEL, id 476
+[info] @1742 [RETIRE INSTR]: instr.name=RV_VSEL instr.pc=0x10d0d254 instr.id=460 #of of-instrs=51
+[info] @1742 [RETIRE INSTR]: instr.name=RV_POR instr.pc=0x10d0d240 instr.id=484 #of of-instrs=50
+[info] [0000001742] [EXU0] retire_unit_instr, name RV_VSEL, id 460
+[info] [0000001742] [EXU1] retire_unit_instr, name RV_POR, id 484
+[info] @1742 [RECORD INSTR]: instr.name=RV_VCVT_I2I instr.pc=0x10d0d258 instr.idd=563 #of of-instrs=1
+[info] @1742 [IFU_SREG_SCB]: name=RV_VSTI pc=0x10d0d25c id=564, reg_idx=66
+[info] @1742 [RECORD INSTR]: instr.name=RV_VSTI instr.pc=0x10d0d25c instr.idd=564 #of of-instrs=1
+[info] @1742 [IFU_SREG_SCB]: name=RV_VLDI pc=0x10d0d234 id=565, reg_idx=67
+[info] @1742 [RECORD INSTR]: instr.name=RV_VLDI instr.pc=0x10d0d234 instr.idd=565 #of of-instrs=1
+[info] @1742 [IFU_SREG_SCB]: name=RV_VLDI pc=0x10d0d238 id=566, reg_idx=65
+[info] @1742 [RECORD INSTR]: instr.name=RV_VLDI instr.pc=0x10d0d238 instr.idd=566 #of of-instrs=1
+[info] @1742 [RECORD INSTR]: instr.name=RV_VCMP_EQ instr.pc=0x10d0d23c instr.idd=567 #of of-instrs=1
+[info] [0000001742] [EXU1] record_unit_instr, name RV_VCMP_LE, id 486
+[info] @1743 [RETIRE INSTR]: instr.name=RV_VCMP_EQ instr.pc=0x10d0d23c instr.id=516 #of of-instrs=54
+[info] @1743 [RECORD INSTR]: instr.name=RV_POR instr.pc=0x10d0d240 instr.idd=569 #of of-instrs=1
+[info] @1743 [RECORD INSTR]: instr.name=RV_VCMP_LE instr.pc=0x10d0d244 instr.idd=570 #of of-instrs=1
+[info] [0000001743] [EXU1] record_unit_instr, name RV_VCVT_I2I, id 478
+[info] [0000001743] [EXU0] retire_unit_instr, name RV_VCMP_EQ, id 516
+[info] @1744 [RETIRE INSTR]: instr.name=RV_VCMP_EQ instr.pc=0x10d0d248 instr.id=521 #of of-instrs=55
+[info] @1744 [RETIRE INSTR]: instr.name=RV_POR instr.pc=0x10d0d250 instr.id=473 #of of-instrs=54
+[info] [0000001744] [EXU0] retire_unit_instr, name RV_VCMP_EQ, id 521
+[info] [0000001744] [EXU1] retire_unit_instr, name RV_POR, id 473
+[info] @1744 [RECORD INSTR]: instr.name=RV_VCMP_EQ instr.pc=0x10d0d248 instr.idd=572 #of of-instrs=1
+[info] @1744 [RECORD INSTR]: instr.name=RV_PAND instr.pc=0x10d0d24c instr.idd=573 #of of-instrs=1
+[info] @1744 [RECORD INSTR]: instr.name=RV_POR instr.pc=0x10d0d250 instr.idd=574 #of of-instrs=1
+[info] [0000001744] [EXU0] record_unit_instr, name RV_PAND, id 489
+[info] [0000001744] [EXU1] record_unit_instr, name RV_POR, id 518
+[info] [0000001744] [LDU] record_unit_instr, name RV_VLDI, id 547
+[info] [0000001744] [STU] record_unit_instr, name RV_VSTI, id 463
+[info] @1745 [RETIRE INSTR]: instr.name=RV_VLDI instr.pc=0x10d0d234 instr.id=531 #of of-instrs=56
+[info] @1745 [RETIRE INSTR]: instr.name=RV_VCVT_I2I instr.pc=0x10d0d258 instr.id=462 #of of-instrs=55
+[info] @1745 [RECORD INSTR]: instr.name=RV_VSEL instr.pc=0x10d0d254 instr.idd=576 #of of-instrs=1
+[info] @1745 [IDU_SREG_SCB]: name=RV_VSTI pc=0x10d0d25c id=564, reg_idx=66, latency= 3, valid_time=1748
+[info] @1745 [IDU_SREG_SCB]: name=RV_VLDI pc=0x10d0d234 id=565, reg_idx=67, latency= 3, valid_time=1748
+[info] @1745 [IDU_SREG_SCB]: name=RV_VLDI pc=0x10d0d238 id=566, reg_idx=65, latency= 3, valid_time=1748
+[info] [0000001745] [LDU] retire_unit_instr, name RV_VLDI, id 547
+[info] [0000001745] [LDU] record_unit_instr, name RV_VLDI, id 548
+[info] [0000001745] [EXU1] retire_unit_instr, name RV_VCVT_I2I, id 462
+[info] [0000001745] [STU] retire_unit_instr, name RV_VSTI, id 427
+[info] @1746 [RETIRE INSTR]: instr.name=RV_VSEL instr.pc=0x10d0d254 instr.id=476 #of of-instrs=55
+[info] @1746 [RETIRE INSTR]: instr.name=RV_POR instr.pc=0x10d0d240 instr.id=502 #of of-instrs=54
+[info] [0000001746] [EXU0] retire_unit_instr, name RV_VSEL, id 476
+[info] [0000001746] [EXU1] retire_unit_instr, name RV_POR, id 502
+[info] @1746 [RECORD INSTR]: instr.name=RV_VCVT_I2I instr.pc=0x10d0d258 instr.idd=578 #of of-instrs=1
+[info] @1746 [IFU_SREG_SCB]: name=RV_VSTI pc=0x10d0d25c id=579, reg_idx=66
+[info] @1746 [RECORD INSTR]: instr.name=RV_VSTI instr.pc=0x10d0d25c instr.idd=579 #of of-instrs=1
+[info] @1746 [IFU_SREG_SCB]: name=RV_VLDI pc=0x10d0d234 id=580, reg_idx=67
+[info] @1746 [RECORD INSTR]: instr.name=RV_VLDI instr.pc=0x10d0d234 instr.idd=580 #of of-instrs=1
+[info] @1746 [IFU_SREG_SCB]: name=RV_VLDI pc=0x10d0d238 id=581, reg_idx=65
+[info] @1746 [RECORD INSTR]: instr.name=RV_VLDI instr.pc=0x10d0d238 instr.idd=581 #of of-instrs=1
+[info] @1746 [RECORD INSTR]: instr.name=RV_VCMP_EQ instr.pc=0x10d0d23c instr.idd=582 #of of-instrs=1
+[info] [0000001746] [EXU0] record_unit_instr, name RV_VCMP_EQ, id 533
+[info] [0000001746] [EXU1] record_unit_instr, name RV_VCMP_LE, id 503
+[info] [0000001746] [LDU] retire_unit_instr, name RV_VLDI, id 548
+[info] @1747 [RETIRE INSTR]: instr.name=RV_VLDI instr.pc=0x10d0d238 instr.id=532 #of of-instrs=58
+[info] @1747 [RETIRE INSTR]: instr.name=RV_VSTI instr.pc=0x10d0d25c instr.id=427 #of of-instrs=57
+[info] @1747 [RETIRE INSTR]: instr.name=RV_VCMP_LE instr.pc=0x10d0d244 instr.id=486 #of of-instrs=56
+[info] @1747 [RECORD INSTR]: instr.name=RV_POR instr.pc=0x10d0d240 instr.idd=584 #of of-instrs=1
+[info] @1747 [RECORD INSTR]: instr.name=RV_VCMP_LE instr.pc=0x10d0d244 instr.idd=585 #of of-instrs=1
+[info] [0000001747] [EXU0] record_unit_instr, name RV_VCMP_EQ, id 538
+[info] [0000001747] [EXU1] record_unit_instr, name RV_POR, id 492
+[info] [0000001747] [EXU1] retire_unit_instr, name RV_VCMP_LE, id 486
+[info] [0000001748] [EXU0] record_unit_instr, name RV_PAND, id 506
+[info] [0000001748] [LDU] record_unit_instr, name RV_VLDI, id 565
+[info] [0000001748] [STU] record_unit_instr, name RV_VSTI, id 479
+[info] @1749 [RETIRE INSTR]: instr.name=RV_VCVT_I2I instr.pc=0x10d0d258 instr.id=478 #of of-instrs=57
+[info] [0000001749] [EXU1] retire_unit_instr, name RV_VCVT_I2I, id 478
+[info] [0000001749] [EXU1] record_unit_instr, name RV_VCMP_LE, id 519
+[info] [0000001749] [LDU] retire_unit_instr, name RV_VLDI, id 565
+[info] [0000001749] [LDU] record_unit_instr, name RV_VLDI, id 566
+[info] @1750 [RETIRE INSTR]: instr.name=RV_PAND instr.pc=0x10d0d24c instr.id=489 #of of-instrs=56
+[info] @1750 [RETIRE INSTR]: instr.name=RV_POR instr.pc=0x10d0d240 instr.id=518 #of of-instrs=55
+[info] [0000001750] [EXU0] retire_unit_instr, name RV_PAND, id 489
+[info] [0000001750] [EXU1] retire_unit_instr, name RV_POR, id 518
+[info] @1750 [RECORD INSTR]: instr.name=RV_VCMP_EQ instr.pc=0x10d0d248 instr.idd=589 #of of-instrs=1
+[info] @1750 [RECORD INSTR]: instr.name=RV_PAND instr.pc=0x10d0d24c instr.idd=590 #of of-instrs=1
+[info] @1750 [RECORD INSTR]: instr.name=RV_POR instr.pc=0x10d0d250 instr.idd=591 #of of-instrs=1
+[info] [0000001750] [EXU0] record_unit_instr, name RV_VSEL, id 494
+[info] [0000001750] [EXU1] record_unit_instr, name RV_VCMP_LE, id 536
+[info] [0000001750] [LDU] retire_unit_instr, name RV_VLDI, id 566
+[info] @1751 [RETIRE INSTR]: instr.name=RV_VCMP_EQ instr.pc=0x10d0d23c instr.id=533 #of of-instrs=57
+[info] @1751 [RETIRE INSTR]: instr.name=RV_VCMP_LE instr.pc=0x10d0d244 instr.id=503 #of of-instrs=56
+[info] [0000001751] [EXU0] record_unit_instr, name RV_PAND, id 522
+[info] [0000001751] [EXU1] record_unit_instr, name RV_POR, id 508
+[info] [0000001751] [EXU0] retire_unit_instr, name RV_VCMP_EQ, id 533
+[info] [0000001751] [EXU1] retire_unit_instr, name RV_VCMP_LE, id 503
+[info] [0000001751] [STU] retire_unit_instr, name RV_VSTI, id 446
+[info] @1752 [RETIRE INSTR]: instr.name=RV_VLDI instr.pc=0x10d0d234 instr.id=547 #of of-instrs=55
+[info] @1752 [RETIRE INSTR]: instr.name=RV_VCMP_EQ instr.pc=0x10d0d248 instr.id=538 #of of-instrs=54
+[info] [0000001752] [EXU1] record_unit_instr, name RV_VCVT_I2I, id 496
+[info] [0000001752] [EXU0] retire_unit_instr, name RV_VCMP_EQ, id 538
+[info] @1753 [RETIRE INSTR]: instr.name=RV_VLDI instr.pc=0x10d0d238 instr.id=548 #of of-instrs=53
+[info] @1753 [RETIRE INSTR]: instr.name=RV_VSTI instr.pc=0x10d0d25c instr.id=446 #of of-instrs=52
+[info] @1753 [RETIRE INSTR]: instr.name=RV_POR instr.pc=0x10d0d250 instr.id=492 #of of-instrs=51
+[info] [0000001753] [EXU1] retire_unit_instr, name RV_POR, id 492
+[info] @1753 [RECORD INSTR]: instr.name=RV_VSEL instr.pc=0x10d0d254 instr.idd=595 #of of-instrs=1
+[info] @1753 [IDU_SREG_SCB]: name=RV_VSTI pc=0x10d0d25c id=579, reg_idx=66, latency= 3, valid_time=1756
+[info] @1753 [IDU_SREG_SCB]: name=RV_VLDI pc=0x10d0d234 id=580, reg_idx=67, latency= 3, valid_time=1756
+[info] @1753 [IDU_SREG_SCB]: name=RV_VLDI pc=0x10d0d238 id=581, reg_idx=65, latency= 3, valid_time=1756
+[info] [0000001753] [EXU0] record_unit_instr, name RV_VCMP_EQ, id 549
+[info] [0000001753] [EXU1] record_unit_instr, name RV_POR, id 535
+[info] @1754 [RETIRE INSTR]: instr.name=RV_PAND instr.pc=0x10d0d24c instr.id=506 #of of-instrs=51
+[info] @1754 [RETIRE INSTR]: instr.name=RV_VCMP_LE instr.pc=0x10d0d244 instr.id=519 #of of-instrs=50
+[info] [0000001754] [EXU0] retire_unit_instr, name RV_PAND, id 506
+[info] [0000001754] [EXU1] retire_unit_instr, name RV_VCMP_LE, id 519
+[info] @1754 [RECORD INSTR]: instr.name=RV_VCVT_I2I instr.pc=0x10d0d258 instr.idd=597 #of of-instrs=1
+[info] @1754 [IFU_SREG_SCB]: name=RV_VSTI pc=0x10d0d25c id=598, reg_idx=66
+[info] @1754 [RECORD INSTR]: instr.name=RV_VSTI instr.pc=0x10d0d25c instr.idd=598 #of of-instrs=1
+[info] @1754 [IFU_SREG_SCB]: name=RV_VLDI pc=0x10d0d234 id=599, reg_idx=67
+[info] @1754 [RECORD INSTR]: instr.name=RV_VLDI instr.pc=0x10d0d234 instr.idd=599 #of of-instrs=1
+[info] @1754 [IFU_SREG_SCB]: name=RV_VLDI pc=0x10d0d238 id=600, reg_idx=65
+[info] @1754 [RECORD INSTR]: instr.name=RV_VLDI instr.pc=0x10d0d238 instr.idd=600 #of of-instrs=1
+[info] @1754 [RECORD INSTR]: instr.name=RV_VCMP_EQ instr.pc=0x10d0d23c instr.idd=601 #of of-instrs=1
+[info] [0000001754] [EXU0] record_unit_instr, name RV_VSEL, id 510
+[info] @1755 [RETIRE INSTR]: instr.name=RV_VSEL instr.pc=0x10d0d254 instr.id=494 #of of-instrs=54
+[info] @1755 [RETIRE INSTR]: instr.name=RV_VCMP_LE instr.pc=0x10d0d244 instr.id=536 #of of-instrs=53
+[info] @1755 [RECORD INSTR]: instr.name=RV_POR instr.pc=0x10d0d240 instr.idd=603 #of of-instrs=1
+[info] @1755 [RECORD INSTR]: instr.name=RV_VCMP_LE instr.pc=0x10d0d244 instr.idd=604 #of of-instrs=1
+[info] [0000001755] [EXU0] record_unit_instr, name RV_VCMP_EQ, id 555
+[info] [0000001755] [EXU1] record_unit_instr, name RV_POR, id 525
+[info] [0000001755] [EXU0] retire_unit_instr, name RV_VSEL, id 494
+[info] [0000001755] [EXU1] retire_unit_instr, name RV_VCMP_LE, id 536
+[info] @1756 [RETIRE INSTR]: instr.name=RV_VLDI instr.pc=0x10d0d234 instr.id=565 #of of-instrs=54
+[info] @1756 [RECORD INSTR]: instr.name=RV_VCMP_EQ instr.pc=0x10d0d248 instr.idd=606 #of of-instrs=1
+[info] @1756 [RECORD INSTR]: instr.name=RV_PAND instr.pc=0x10d0d24c instr.idd=607 #of of-instrs=1
+[info] [0000001756] [EXU0] record_unit_instr, name RV_PAND, id 539
+[info] [0000001756] [EXU1] record_unit_instr, name RV_VCVT_I2I, id 512
+[info] [0000001756] [LDU] record_unit_instr, name RV_VLDI, id 580
+[info] [0000001756] [STU] retire_unit_instr, name RV_VSTI, id 463
+[info] @1757 [RETIRE INSTR]: instr.name=RV_VLDI instr.pc=0x10d0d238 instr.id=566 #of of-instrs=55
+[info] @1757 [RETIRE INSTR]: instr.name=RV_PAND instr.pc=0x10d0d24c instr.id=522 #of of-instrs=54
+[info] @1757 [RETIRE INSTR]: instr.name=RV_POR instr.pc=0x10d0d250 instr.id=508 #of of-instrs=53
+[info] [0000001757] [EXU0] retire_unit_instr, name RV_PAND, id 522
+[info] [0000001757] [EXU1] retire_unit_instr, name RV_POR, id 508
+[info] @1757 [RECORD INSTR]: instr.name=RV_POR instr.pc=0x10d0d250 instr.idd=609 #of of-instrs=1
+[info] [0000001757] [EXU1] record_unit_instr, name RV_POR, id 551
+[info] [0000001757] [LDU] retire_unit_instr, name RV_VLDI, id 580
+[info] [0000001757] [LDU] record_unit_instr, name RV_VLDI, id 581
+[info] [0000001757] [STU] record_unit_instr, name RV_VSTI, id 497
+[info] @1758 [RETIRE INSTR]: instr.name=RV_VCMP_EQ instr.pc=0x10d0d23c instr.id=549 #of of-instrs=53
+[info] @1758 [RETIRE INSTR]: instr.name=RV_VCVT_I2I instr.pc=0x10d0d258 instr.id=496 #of of-instrs=52
+[info] @1758 [RETIRE INSTR]: instr.name=RV_VSTI instr.pc=0x10d0d25c instr.id=463 #of of-instrs=51
+[info] @1758 [RECORD INSTR]: instr.name=RV_VSEL instr.pc=0x10d0d254 instr.idd=611 #of of-instrs=1
+[info] @1758 [IDU_SREG_SCB]: name=RV_VSTI pc=0x10d0d25c id=598, reg_idx=66, latency= 3, valid_time=1761
+[info] @1758 [IDU_SREG_SCB]: name=RV_VLDI pc=0x10d0d234 id=599, reg_idx=67, latency= 3, valid_time=1761
+[info] @1758 [IDU_SREG_SCB]: name=RV_VLDI pc=0x10d0d238 id=600, reg_idx=65, latency= 3, valid_time=1761
+[info] [0000001758] [EXU0] record_unit_instr, name RV_VSEL, id 527
+[info] [0000001758] [LDU] retire_unit_instr, name RV_VLDI, id 581
+[info] [0000001758] [EXU0] retire_unit_instr, name RV_VCMP_EQ, id 549
+[info] [0000001758] [EXU1] retire_unit_instr, name RV_VCVT_I2I, id 496
+[info] @1759 [RETIRE INSTR]: instr.name=RV_VSEL instr.pc=0x10d0d254 instr.id=510 #of of-instrs=51
+[info] @1759 [RETIRE INSTR]: instr.name=RV_POR instr.pc=0x10d0d240 instr.id=535 #of of-instrs=50
+[info] @1759 [RECORD INSTR]: instr.name=RV_VCVT_I2I instr.pc=0x10d0d258 instr.idd=613 #of of-instrs=1
+[info] @1759 [IFU_SREG_SCB]: name=RV_VSTI pc=0x10d0d25c id=614, reg_idx=66
+[info] @1759 [RECORD INSTR]: instr.name=RV_VSTI instr.pc=0x10d0d25c instr.idd=614 #of of-instrs=1
+[info] [0000001759] [EXU0] record_unit_instr, name RV_VCMP_EQ, id 567
+[info] [0000001759] [EXU1] record_unit_instr, name RV_POR, id 540
+[info] [0000001759] [EXU0] retire_unit_instr, name RV_VSEL, id 510
+[info] [0000001759] [EXU1] retire_unit_instr, name RV_POR, id 535
+[info] @1760 [RETIRE INSTR]: instr.name=RV_VCMP_EQ instr.pc=0x10d0d248 instr.id=555 #of of-instrs=51
+[info] @1760 [RECORD INSTR]: instr.name=RV_SEND instr.pc=0x10d0d260 instr.idd=615 #of of-instrs=1
+[info] [0000001760] [EXU0] record_unit_instr, name RV_VCMP_EQ, id 572
+[info] [0000001760] [EXU1] record_unit_instr, name RV_VCVT_I2I, id 529
+[info] [0000001760] [EXU0] retire_unit_instr, name RV_VCMP_EQ, id 555
+[info] @1761 [RETIRE INSTR]: instr.name=RV_POR instr.pc=0x10d0d250 instr.id=525 #of of-instrs=51
+[info] [0000001761] [EXU1] retire_unit_instr, name RV_POR, id 525
+[info] [0000001761] [EXU1] record_unit_instr, name RV_POR, id 569
+[info] [0000001761] [LDU] record_unit_instr, name RV_VLDI, id 599
+[info] [0000001761] [STU] record_unit_instr, name RV_VSTI, id 513
+[info] @1762 [RETIRE INSTR]: instr.name=RV_PAND instr.pc=0x10d0d24c instr.id=539 #of of-instrs=50
+[info] @1762 [RETIRE INSTR]: instr.name=RV_VCVT_I2I instr.pc=0x10d0d258 instr.id=512 #of of-instrs=49
+[info] [0000001762] [EXU0] retire_unit_instr, name RV_PAND, id 539
+[info] [0000001762] [EXU1] retire_unit_instr, name RV_VCVT_I2I, id 512
+[info] @1762 [IDU_SREG_SCB]: name=RV_VSTI pc=0x10d0d25c id=614, reg_idx=66, latency= 3, valid_time=1765
+[info] [0000001762] [EXU0] record_unit_instr, name RV_VSEL, id 543
+[info] [0000001762] [LDU] retire_unit_instr, name RV_VLDI, id 599
+[info] [0000001762] [LDU] record_unit_instr, name RV_VLDI, id 600
+[info] @1763 [RETIRE INSTR]: instr.name=RV_VSEL instr.pc=0x10d0d254 instr.id=527 #of of-instrs=48
+[info] @1763 [RETIRE INSTR]: instr.name=RV_POR instr.pc=0x10d0d240 instr.id=551 #of of-instrs=47
+[info] [0000001763] [EXU0] record_unit_instr, name RV_VCMP_EQ, id 582
+[info] [0000001763] [EXU1] record_unit_instr, name RV_VCMP_LE, id 553
+[info] [0000001763] [LDU] retire_unit_instr, name RV_VLDI, id 600
+[info] [0000001763] [EXU0] retire_unit_instr, name RV_VSEL, id 527
+[info] [0000001763] [EXU1] retire_unit_instr, name RV_POR, id 551
+[info] [0000001763] [STU] retire_unit_instr, name RV_VSTI, id 479
+[info] @1764 [RETIRE INSTR]: instr.name=RV_VLDI instr.pc=0x10d0d234 instr.id=580 #of of-instrs=46
+[info] @1764 [RETIRE INSTR]: instr.name=RV_VCMP_EQ instr.pc=0x10d0d23c instr.id=567 #of of-instrs=45
+[info] [0000001764] [ASU] send done, name RV_SEND, id 615
+[info] @1764 [RETIRE INSTR]: instr.name=RV_SEND instr.pc=0x10d0d260 instr.id=615 #of of-instrs=44
+[info] [0000001764] [EXU0] record_unit_instr, name RV_VCMP_EQ, id 589
+[info] [0000001764] [EXU1] record_unit_instr, name RV_VCMP_LE, id 570
+[info] [0000001764] [LDU] vf wait send, name RV_SEND, id 615
+[info] [0000001764] [LDU] vf wait send, name RV_SEND, id 615
+[info] [0000001764] [EXU0] retire_unit_instr, name RV_VCMP_EQ, id 567
+[info] @1765 [RETIRE INSTR]: instr.name=RV_VLDI instr.pc=0x10d0d238 instr.id=581 #of of-instrs=43
+[info] @1765 [RETIRE INSTR]: instr.name=RV_VSTI instr.pc=0x10d0d25c instr.id=479 #of of-instrs=42
+[info] @1765 [RETIRE INSTR]: instr.name=RV_VCMP_EQ instr.pc=0x10d0d248 instr.id=572 #of of-instrs=41
+[info] @1765 [RETIRE INSTR]: instr.name=RV_POR instr.pc=0x10d0d250 instr.id=540 #of of-instrs=40
+[info] [0000001765] [EXU0] retire_unit_instr, name RV_VCMP_EQ, id 572
+[info] [0000001765] [EXU1] retire_unit_instr, name RV_POR, id 540
+[info] [0000001765] [EXU0] record_unit_instr, name RV_PAND, id 556
+[info] [0000001765] [EXU1] record_unit_instr, name RV_VCVT_I2I, id 545
+[info] [0000001765] [LDU] send can not go, with pipe latency 2
+[info] [0000001765] [LDU] vf wait send, name RV_SEND, id 615
+[info] [0000001765] [LDU] vf wait send, name RV_SEND, id 615
+[info] [0000001765] [STU] record_unit_instr, name RV_VSTI, id 530
+[info] @1766 [RETIRE INSTR]: instr.name=RV_VCVT_I2I instr.pc=0x10d0d258 instr.id=529 #of of-instrs=39
+[info] [0000001766] [EXU1] record_unit_instr, name RV_POR, id 584
+[info] [0000001766] [STU] send can not go, pending instr number:3
+[info] [0000001766] [LDU] vf wait send, name RV_SEND, id 615
+[info] [0000001766] [LDU] vf wait send, name RV_SEND, id 615
+[info] [0000001766] [EXU1] retire_unit_instr, name RV_VCVT_I2I, id 529
+[info] @1767 [RETIRE INSTR]: instr.name=RV_VSEL instr.pc=0x10d0d254 instr.id=543 #of of-instrs=38
+[info] @1767 [RETIRE INSTR]: instr.name=RV_POR instr.pc=0x10d0d240 instr.id=569 #of of-instrs=37
+[info] [0000001767] [EXU0] retire_unit_instr, name RV_VSEL, id 543
+[info] [0000001767] [EXU1] retire_unit_instr, name RV_POR, id 569
+[info] [0000001767] [EXU0] record_unit_instr, name RV_PAND, id 573
+[info] [0000001767] [STU] send can not go, pending instr number:3
+[info] [0000001767] [LDU] vf wait send, name RV_SEND, id 615
+[info] [0000001767] [LDU] vf wait send, name RV_SEND, id 615
+[info] @1768 [RETIRE INSTR]: instr.name=RV_VCMP_EQ instr.pc=0x10d0d23c instr.id=582 #of of-instrs=36
+[info] @1768 [RETIRE INSTR]: instr.name=RV_VCMP_LE instr.pc=0x10d0d244 instr.id=553 #of of-instrs=35
+[info] [0000001768] [EXU1] record_unit_instr, name RV_POR, id 559
+[info] [0000001768] [STU] send can not go, pending instr number:3
+[info] [0000001768] [LDU] vf wait send, name RV_SEND, id 615
+[info] [0000001768] [LDU] vf wait send, name RV_SEND, id 615
+[info] [0000001768] [EXU0] retire_unit_instr, name RV_VCMP_EQ, id 582
+[info] [0000001768] [EXU1] retire_unit_instr, name RV_VCMP_LE, id 553
+[info] [0000001768] [STU] retire_unit_instr, name RV_VSTI, id 497
+[info] @1769 [RETIRE INSTR]: instr.name=RV_VLDI instr.pc=0x10d0d234 instr.id=599 #of of-instrs=34
+[info] @1769 [RETIRE INSTR]: instr.name=RV_VCMP_EQ instr.pc=0x10d0d248 instr.id=589 #of of-instrs=33
+[info] @1769 [RETIRE INSTR]: instr.name=RV_VCMP_LE instr.pc=0x10d0d244 instr.id=570 #of of-instrs=32
+[info] [0000001769] [EXU0] record_unit_instr, name RV_VCMP_EQ, id 601
+[info] [0000001769] [STU] send can not go, pending instr number:2
+[info] [0000001769] [LDU] vf wait send, name RV_SEND, id 615
+[info] [0000001769] [LDU] vf wait send, name RV_SEND, id 615
+[info] [0000001769] [EXU0] retire_unit_instr, name RV_VCMP_EQ, id 589
+[info] [0000001769] [EXU1] retire_unit_instr, name RV_VCMP_LE, id 570
+[info] @1770 [RETIRE INSTR]: instr.name=RV_VLDI instr.pc=0x10d0d238 instr.id=600 #of of-instrs=31
+[info] @1770 [RETIRE INSTR]: instr.name=RV_VSTI instr.pc=0x10d0d25c instr.id=497 #of of-instrs=30
+[info] [0000001770] [EXU0] record_unit_instr, name RV_VCMP_EQ, id 606
+[info] [0000001770] [EXU1] record_unit_instr, name RV_POR, id 574
+[info] [0000001770] [STU] send can not go, pending instr number:2
+[info] [0000001770] [LDU] vf wait send, name RV_SEND, id 615
+[info] [0000001770] [LDU] vf wait send, name RV_SEND, id 615
+[info] [0000001770] [STU] record_unit_instr, name RV_VSTI, id 546
+[info] @1771 [RETIRE INSTR]: instr.name=RV_PAND instr.pc=0x10d0d24c instr.id=556 #of of-instrs=29
+[info] @1771 [RETIRE INSTR]: instr.name=RV_VCVT_I2I instr.pc=0x10d0d258 instr.id=545 #of of-instrs=28
+[info] [0000001771] [EXU0] retire_unit_instr, name RV_PAND, id 556
+[info] [0000001771] [EXU1] retire_unit_instr, name RV_VCVT_I2I, id 545
+[info] [0000001771] [EXU0] record_unit_instr, name RV_VSEL, id 561
+[info] [0000001771] [STU] send can not go, pending instr number:3
+[info] [0000001771] [LDU] vf wait send, name RV_SEND, id 615
+[info] [0000001771] [LDU] vf wait send, name RV_SEND, id 615
+[info] @1772 [RETIRE INSTR]: instr.name=RV_POR instr.pc=0x10d0d240 instr.id=584 #of of-instrs=27
+[info] [0000001772] [EXU1] retire_unit_instr, name RV_POR, id 584
+[info] [0000001772] [EXU1] record_unit_instr, name RV_VCMP_LE, id 585
+[info] [0000001772] [STU] send can not go, pending instr number:3
+[info] [0000001772] [LDU] vf wait send, name RV_SEND, id 615
+[info] [0000001772] [LDU] vf wait send, name RV_SEND, id 615
+[info] @1773 [RETIRE INSTR]: instr.name=RV_PAND instr.pc=0x10d0d24c instr.id=573 #of of-instrs=26
+[info] [0000001773] [EXU0] retire_unit_instr, name RV_PAND, id 573
+[info] [0000001773] [EXU0] record_unit_instr, name RV_VSEL, id 576
+[info] [0000001773] [EXU1] record_unit_instr, name RV_VCVT_I2I, id 563
+[info] [0000001773] [STU] send can not go, pending instr number:3
+[info] [0000001773] [LDU] vf wait send, name RV_SEND, id 615
+[info] [0000001773] [LDU] vf wait send, name RV_SEND, id 615
+[info] [0000001773] [STU] retire_unit_instr, name RV_VSTI, id 513
+[info] @1774 [RETIRE INSTR]: instr.name=RV_VCMP_EQ instr.pc=0x10d0d23c instr.id=601 #of of-instrs=25
+[info] @1774 [RETIRE INSTR]: instr.name=RV_POR instr.pc=0x10d0d250 instr.id=559 #of of-instrs=24
+[info] [0000001774] [EXU0] retire_unit_instr, name RV_VCMP_EQ, id 601
+[info] [0000001774] [EXU1] retire_unit_instr, name RV_POR, id 559
+[info] [0000001774] [EXU0] record_unit_instr, name RV_PAND, id 590
+[info] [0000001774] [EXU1] record_unit_instr, name RV_POR, id 603
+[info] [0000001774] [STU] send can not go, pending instr number:2
+[info] [0000001774] [LDU] vf wait send, name RV_SEND, id 615
+[info] [0000001774] [LDU] vf wait send, name RV_SEND, id 615
+[info] @1775 [RETIRE INSTR]: instr.name=RV_VCMP_EQ instr.pc=0x10d0d248 instr.id=606 #of of-instrs=23
+[info] @1775 [RETIRE INSTR]: instr.name=RV_VSTI instr.pc=0x10d0d25c instr.id=513 #of of-instrs=22
+[info] [0000001775] [EXU1] record_unit_instr, name RV_VCVT_I2I, id 578
+[info] [0000001775] [STU] send can not go, pending instr number:2
+[info] [0000001775] [LDU] vf wait send, name RV_SEND, id 615
+[info] [0000001775] [LDU] vf wait send, name RV_SEND, id 615
+[info] [0000001775] [EXU0] retire_unit_instr, name RV_VCMP_EQ, id 606
+[info] @1776 [RETIRE INSTR]: instr.name=RV_VSEL instr.pc=0x10d0d254 instr.id=561 #of of-instrs=21
+[info] @1776 [RETIRE INSTR]: instr.name=RV_POR instr.pc=0x10d0d250 instr.id=574 #of of-instrs=20
+[info] [0000001776] [EXU0] retire_unit_instr, name RV_VSEL, id 561
+[info] [0000001776] [EXU1] retire_unit_instr, name RV_POR, id 574
+[info] [0000001776] [STU] send can not go, pending instr number:2
+[info] [0000001776] [LDU] vf wait send, name RV_SEND, id 615
+[info] [0000001776] [LDU] vf wait send, name RV_SEND, id 615
+[info] @1777 [RETIRE INSTR]: instr.name=RV_VCMP_LE instr.pc=0x10d0d244 instr.id=585 #of of-instrs=19
+[info] [0000001777] [EXU1] record_unit_instr, name RV_POR, id 591
+[info] [0000001777] [STU] send can not go, pending instr number:2
+[info] [0000001777] [LDU] vf wait send, name RV_SEND, id 615
+[info] [0000001777] [LDU] vf wait send, name RV_SEND, id 615
+[info] [0000001777] [EXU1] retire_unit_instr, name RV_VCMP_LE, id 585
+[info] @1778 [RETIRE INSTR]: instr.name=RV_VSEL instr.pc=0x10d0d254 instr.id=576 #of of-instrs=18
+[info] [0000001778] [EXU0] retire_unit_instr, name RV_VSEL, id 576
+[info] [0000001778] [STU] send can not go, pending instr number:2
+[info] [0000001778] [LDU] vf wait send, name RV_SEND, id 615
+[info] [0000001778] [LDU] vf wait send, name RV_SEND, id 615
+[info] [0000001778] [STU] retire_unit_instr, name RV_VSTI, id 530
+[info] [0000001778] [STU] record_unit_instr, name RV_VSTI, id 564
+[info] @1779 [RETIRE INSTR]: instr.name=RV_VCVT_I2I instr.pc=0x10d0d258 instr.id=563 #of of-instrs=17
+[info] [0000001779] [EXU1] retire_unit_instr, name RV_VCVT_I2I, id 563
+[info] [0000001779] [EXU1] record_unit_instr, name RV_VCMP_LE, id 604
+[info] [0000001779] [STU] send can not go, pending instr number:2
+[info] [0000001779] [LDU] vf wait send, name RV_SEND, id 615
+[info] [0000001779] [LDU] vf wait send, name RV_SEND, id 615
+[info] @1780 [RETIRE INSTR]: instr.name=RV_PAND instr.pc=0x10d0d24c instr.id=590 #of of-instrs=16
+[info] @1780 [RETIRE INSTR]: instr.name=RV_POR instr.pc=0x10d0d240 instr.id=603 #of of-instrs=15
+[info] @1780 [RETIRE INSTR]: instr.name=RV_VSTI instr.pc=0x10d0d25c instr.id=530 #of of-instrs=14
+[info] [0000001780] [EXU0] retire_unit_instr, name RV_PAND, id 590
+[info] [0000001780] [EXU1] retire_unit_instr, name RV_POR, id 603
+[info] [0000001780] [EXU0] record_unit_instr, name RV_VSEL, id 595
+[info] [0000001780] [STU] send can not go, pending instr number:2
+[info] [0000001780] [LDU] vf wait send, name RV_SEND, id 615
+[info] [0000001780] [LDU] vf wait send, name RV_SEND, id 615
+[info] [0000001780] [STU] record_unit_instr, name RV_VSTI, id 579
+[info] @1781 [RETIRE INSTR]: instr.name=RV_VCVT_I2I instr.pc=0x10d0d258 instr.id=578 #of of-instrs=13
+[info] [0000001781] [EXU1] retire_unit_instr, name RV_VCVT_I2I, id 578
+[info] [0000001781] [EXU0] record_unit_instr, name RV_PAND, id 607
+[info] [0000001781] [STU] send can not go, pending instr number:3
+[info] [0000001781] [LDU] vf wait send, name RV_SEND, id 615
+[info] [0000001781] [LDU] vf wait send, name RV_SEND, id 615
+[info] [0000001782] [EXU1] record_unit_instr, name RV_VCVT_I2I, id 597
+[info] [0000001782] [STU] send can not go, pending instr number:3
+[info] [0000001782] [LDU] vf wait send, name RV_SEND, id 615
+[info] [0000001782] [LDU] vf wait send, name RV_SEND, id 615
+[info] @1783 [RETIRE INSTR]: instr.name=RV_POR instr.pc=0x10d0d250 instr.id=591 #of of-instrs=12
+[info] [0000001783] [EXU1] retire_unit_instr, name RV_POR, id 591
+[info] [0000001783] [STU] send can not go, pending instr number:3
+[info] [0000001783] [LDU] vf wait send, name RV_SEND, id 615
+[info] [0000001783] [LDU] vf wait send, name RV_SEND, id 615
+[info] [0000001783] [STU] retire_unit_instr, name RV_VSTI, id 546
+[info] @1784 [RETIRE INSTR]: instr.name=RV_VCMP_LE instr.pc=0x10d0d244 instr.id=604 #of of-instrs=11
+[info] [0000001784] [EXU1] retire_unit_instr, name RV_VCMP_LE, id 604
+[info] [0000001784] [EXU1] record_unit_instr, name RV_POR, id 609
+[info] [0000001784] [STU] send can not go, pending instr number:2
+[info] [0000001784] [LDU] vf wait send, name RV_SEND, id 615
+[info] [0000001784] [LDU] vf wait send, name RV_SEND, id 615
+[info] @1785 [RETIRE INSTR]: instr.name=RV_VSEL instr.pc=0x10d0d254 instr.id=595 #of of-instrs=10
+[info] @1785 [RETIRE INSTR]: instr.name=RV_VSTI instr.pc=0x10d0d25c instr.id=546 #of of-instrs=9
+[info] [0000001785] [EXU0] retire_unit_instr, name RV_VSEL, id 595
+[info] [0000001785] [STU] send can not go, pending instr number:2
+[info] [0000001785] [LDU] vf wait send, name RV_SEND, id 615
+[info] [0000001785] [LDU] vf wait send, name RV_SEND, id 615
+[info] [0000001786] [STU] send can not go, pending instr number:2
+[info] [0000001786] [LDU] vf wait send, name RV_SEND, id 615
+[info] [0000001786] [LDU] vf wait send, name RV_SEND, id 615
+[info] @1787 [RETIRE INSTR]: instr.name=RV_PAND instr.pc=0x10d0d24c instr.id=607 #of of-instrs=8
+[info] [0000001787] [EXU0] retire_unit_instr, name RV_PAND, id 607
+[info] [0000001787] [EXU0] record_unit_instr, name RV_VSEL, id 611
+[info] [0000001787] [STU] send can not go, pending instr number:2
+[info] [0000001787] [LDU] vf wait send, name RV_SEND, id 615
+[info] [0000001787] [LDU] vf wait send, name RV_SEND, id 615
+[info] [0000001787] [STU] record_unit_instr, name RV_VSTI, id 598
+[info] @1788 [RETIRE INSTR]: instr.name=RV_VCVT_I2I instr.pc=0x10d0d258 instr.id=597 #of of-instrs=7
+[info] [0000001788] [EXU1] retire_unit_instr, name RV_VCVT_I2I, id 597
+[info] [0000001788] [STU] send can not go, pending instr number:3
+[info] [0000001788] [LDU] vf wait send, name RV_SEND, id 615
+[info] [0000001788] [LDU] vf wait send, name RV_SEND, id 615
+[info] [0000001788] [STU] retire_unit_instr, name RV_VSTI, id 564
+[info] [0000001789] [EXU1] record_unit_instr, name RV_VCVT_I2I, id 613
+[info] [0000001789] [STU] send can not go, pending instr number:2
+[info] [0000001789] [LDU] vf wait send, name RV_SEND, id 615
+[info] [0000001789] [LDU] vf wait send, name RV_SEND, id 615
+[info] @1790 [RETIRE INSTR]: instr.name=RV_POR instr.pc=0x10d0d250 instr.id=609 #of of-instrs=6
+[info] @1790 [RETIRE INSTR]: instr.name=RV_VSTI instr.pc=0x10d0d25c instr.id=564 #of of-instrs=5
+[info] [0000001790] [EXU1] retire_unit_instr, name RV_POR, id 609
+[info] [0000001790] [STU] send can not go, pending instr number:2
+[info] [0000001790] [LDU] vf wait send, name RV_SEND, id 615
+[info] [0000001790] [LDU] vf wait send, name RV_SEND, id 615
+[info] [0000001791] [STU] send can not go, pending instr number:2
+[info] [0000001791] [LDU] vf wait send, name RV_SEND, id 615
+[info] [0000001791] [LDU] vf wait send, name RV_SEND, id 615
+[info] @1792 [RETIRE INSTR]: instr.name=RV_VSEL instr.pc=0x10d0d254 instr.id=611 #of of-instrs=4
+[info] [0000001792] [EXU0] retire_unit_instr, name RV_VSEL, id 611
+[info] [0000001792] [STU] send can not go, pending instr number:2
+[info] [0000001792] [LDU] vf wait send, name RV_SEND, id 615
+[info] [0000001792] [LDU] vf wait send, name RV_SEND, id 615
+[info] [0000001793] [STU] send can not go, pending instr number:2
+[info] [0000001793] [LDU] vf wait send, name RV_SEND, id 615
+[info] [0000001793] [LDU] vf wait send, name RV_SEND, id 615
+[info] [0000001793] [STU] retire_unit_instr, name RV_VSTI, id 579
+[info] [0000001794] [STU] send can not go, pending instr number:1
+[info] [0000001794] [LDU] vf wait send, name RV_SEND, id 615
+[info] [0000001794] [LDU] vf wait send, name RV_SEND, id 615
+[info] [0000001794] [STU] record_unit_instr, name RV_VSTI, id 614
+[info] @1795 [RETIRE INSTR]: instr.name=RV_VCVT_I2I instr.pc=0x10d0d258 instr.id=613 #of of-instrs=3
+[info] @1795 [RETIRE INSTR]: instr.name=RV_VSTI instr.pc=0x10d0d25c instr.id=579 #of of-instrs=2
+[info] [0000001795] [EXU1] retire_unit_instr, name RV_VCVT_I2I, id 613
+[info] [0000001795] [STU] send can not go, pending instr number:2
+[info] [0000001795] [LDU] vf wait send, name RV_SEND, id 615
+[info] [0000001795] [LDU] vf wait send, name RV_SEND, id 615
+[info] [0000001796] [STU] send can not go, pending instr number:2
+[info] [0000001796] [LDU] vf wait send, name RV_SEND, id 615
+[info] [0000001796] [LDU] vf wait send, name RV_SEND, id 615
+[info] [0000001797] [STU] send can not go, pending instr number:2
+[info] [0000001797] [LDU] vf wait send, name RV_SEND, id 615
+[info] [0000001797] [LDU] vf wait send, name RV_SEND, id 615
+[info] [0000001798] [STU] send can not go, pending instr number:2
+[info] [0000001798] [LDU] vf wait send, name RV_SEND, id 615
+[info] [0000001798] [LDU] vf wait send, name RV_SEND, id 615
+[info] [0000001798] [LDU] vf wait send, name RV_SEND, id 615
+[info] [0000001798] [LDU] vf wait send, name RV_SEND, id 615
+[info] [0000001798] [STU] retire_unit_instr, name RV_VSTI, id 598
+[info] [0000001798] [STU] send can not go, with pipe latency 5
+[info] [0000001798] [GSU_GA] send can not go, with pipe latency 9
+[info] [0000001798] [GSU_GA] send can not go, with pipe latency 9
+[info] [0000001799] [GSU_GA] send can not go, with pipe latency 9
+[info] [0000001799] [GSU_GA] send can not go, with pipe latency 9
+[info] [0000001799] [STU] send can not go, pending instr number:1
+[info] [0000001799] [STU] send can not go, pending instr number:1
+[info] [0000001799] [STU] send can not go, pending instr number:1
+[info] [0000001799] [LDU] vf wait send, name RV_SEND, id 615
+[info] [0000001799] [LDU] vf wait send, name RV_SEND, id 615
+[info] [0000001799] [LDU] vf wait send, name RV_SEND, id 615
+[info] [0000001799] [LDU] vf wait send, name RV_SEND, id 615
+[info] [0000001799] [STU] send can not go, with pipe latency 5
+[info] @1800 [RETIRE INSTR]: instr.name=RV_VSTI instr.pc=0x10d0d25c instr.id=598 #of of-instrs=1
+[info] [0000001800] [GSU_GA] send can not go, with pipe latency 9
+[info] [0000001800] [GSU_GA] send can not go, with pipe latency 9
+[info] [0000001800] [STU] send can not go, pending instr number:1
+[info] [0000001800] [STU] send can not go, pending instr number:1
+[info] [0000001800] [STU] send can not go, pending instr number:1
+[info] [0000001800] [LDU] vf wait send, name RV_SEND, id 615
+[info] [0000001800] [LDU] vf wait send, name RV_SEND, id 615
+[info] [0000001800] [LDU] vf wait send, name RV_SEND, id 615
+[info] [0000001800] [LDU] vf wait send, name RV_SEND, id 615
+[info] [0000001800] [STU] send can not go, with pipe latency 5
+[info] [0000001801] [GSU_GA] send can not go, with pipe latency 9
+[info] [0000001801] [GSU_GA] send can not go, with pipe latency 9
+[info] [0000001801] [STU] send can not go, pending instr number:1
+[info] [0000001801] [STU] send can not go, pending instr number:1
+[info] [0000001801] [STU] send can not go, pending instr number:1
+[info] [0000001801] [LDU] vf wait send, name RV_SEND, id 615
+[info] [0000001801] [LDU] vf wait send, name RV_SEND, id 615
+[info] [0000001801] [LDU] vf wait send, name RV_SEND, id 615
+[info] [0000001801] [LDU] vf wait send, name RV_SEND, id 615
+[info] [0000001801] [STU] send can not go, with pipe latency 5
+[info] [0000001802] [GSU_GA] send can not go, with pipe latency 9
+[info] [0000001802] [GSU_GA] send can not go, with pipe latency 9
+[info] [0000001802] [STU] send can not go, pending instr number:1
+[info] [0000001802] [STU] send can not go, pending instr number:1
+[info] [0000001802] [STU] send can not go, pending instr number:1
+[info] [0000001802] [LDU] vf wait send, name RV_SEND, id 615
+[info] [0000001802] [LDU] vf wait send, name RV_SEND, id 615
+[info] [0000001802] [LDU] vf wait send, name RV_SEND, id 615
+[info] [0000001802] [LDU] vf wait send, name RV_SEND, id 615
+[info] [0000001802] [STU] send can not go, pending instr number:1
+[info] [0000001803] [GSU_GA] send can not go, with pipe latency 9
+[info] [0000001803] [GSU_GA] send can not go, with pipe latency 9
+[info] [0000001803] [STU] send can not go, pending instr number:1
+[info] [0000001803] [STU] send can not go, pending instr number:1
+[info] [0000001803] [STU] send can not go, pending instr number:1
+[info] [0000001803] [LDU] vf wait send, name RV_SEND, id 615
+[info] [0000001803] [LDU] vf wait send, name RV_SEND, id 615
+[info] [0000001803] [LDU] vf wait send, name RV_SEND, id 615
+[info] [0000001803] [LDU] vf wait send, name RV_SEND, id 615
+[info] [0000001803] [STU] send can not go, pending instr number:1
+[info] [0000001804] [GSU_GA] send can not go, with pipe latency 9
+[info] [0000001804] [GSU_GA] send can not go, with pipe latency 9
+[info] [0000001804] [STU] send can not go, pending instr number:1
+[info] [0000001804] [STU] send can not go, pending instr number:1
+[info] [0000001804] [STU] send can not go, pending instr number:1
+[info] [0000001804] [LDU] vf wait send, name RV_SEND, id 615
+[info] [0000001804] [LDU] vf wait send, name RV_SEND, id 615
+[info] [0000001804] [LDU] vf wait send, name RV_SEND, id 615
+[info] [0000001804] [LDU] vf wait send, name RV_SEND, id 615
+[info] [0000001804] [STU] retire_unit_instr, name RV_VSTI, id 614
+[info] [0000001804] send release
+[info] [0000001804] [STU] send done, name RV_SEND, id 615
+[info] [0000001805] [GSU_GA] send can not go, with pipe latency 9
+[info] [0000001805] [GSU_GA] send can not go, with pipe latency 9
+[info] [0000001805] send release
+[info] [0000001805] [EXU0] send done, name RV_SEND, id 615
+[info] [0000001805] send release
+[info] [0000001805] [EXU1] send done, name RV_SEND, id 615
+[info] [0000001805] send release
+[info] [0000001805] [LDU] send done, name RV_SEND, id 615
+[info] [0000001805] [GSU_GA] vf wait send, name RV_SEND, id 615
+[info] [0000001805] [GSU_GA] vf wait send, name RV_SEND, id 615
+[info] [0000001805] [GSU_GA] vf wait send, name RV_SEND, id 615
+[info] [0000001805] [GSU_GA] vf wait send, name RV_SEND, id 615
+[info] @1806 [RETIRE INSTR]: instr.name=RV_VSTI instr.pc=0x10d0d25c instr.id=614 #of of-instrs=0
+[info] [0000001806] send release
+[info] [0000001806] [GSU_GA] send done, name RV_SEND, id 615
+[info] [0000001806] send release
+[info] [0000001806] [GSU_SC] send done, name RV_SEND, id 615
+[info] [0000001806] vf end by send, name RV_SEND, id 615
+[info] [0000001806] vf end by send, name RV_SEND, id 615
+[info] [0000001806] vf end by send, name RV_SEND, id 615
+[info] [0000001806] vf end by send, name RV_SEND, id 615
+[info] @1807 [RETIRE INSTR]: instr.name=RV_SEND instr.pc=0x10d0d260 instr.id=615 #of of-instrs=0
+[info] @1807 [RETIRE INSTR]: instr.name=RV_SEND instr.pc=0x10d0d260 instr.id=615 #of of-instrs=0
+[info] 1814 notify_vfend, vf completed!
+[info] ++++++++++++++++++++++core: 0, subcore: 1, start: 216, tick: 2232, kernelId: 0, blkID: 0, blkDim: 1, rtsqId: 1, streamId: 0, taskId: 0, subtaskId: 0, threadId: 0, done++++++++++++++++++++++.

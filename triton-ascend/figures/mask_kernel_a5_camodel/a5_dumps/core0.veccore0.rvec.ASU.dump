@@ -1,0 +1,15 @@
+[info] [0000001589] 1589 exec instr latency success, instr pc:0x10d0d218, latency:1, retire_time:1590.
+[info] [0000001589] 1589 exec instr latency success, instr pc:0x10d0d218, latency:1, retire_time:1590.
+[info] [0000001590] 1590 get instr from idu success,instr pc:0x10d0d218
+[info] [0000001590] 1590 exec instr latency success, instr pc:0x10d0d218, latency:1, retire_time:1591.
+[info] [0000001590] 1590 add_wait_commit_tab, reg_index:65, count:1.
+[info] [0000001590] 1590 exec instr to retire que success, instr pc:0x10d0d218
+[info] [0000001591] 1591 update_commit_tab, reg_index:65, count:0.
+[info] [0000001591] INSTR Retired. name=RV_SMOV    id=90     ssid=7        pc=0x10D0D218
+[info] [PERF] [0000001591] ASU instr_name RV_SMOV instr_id 90 PC 10d0d218 recv 1590
+[info] [0000001763] 1763 get instr from idu success,instr pc:0x10d0d260
+[info] [0000001763] 1763 exec instr latency success, instr pc:0x10d0d260, latency:1, retire_time:1764.
+[info] [0000001763] 1763 exec instr to retire que success, instr pc:0x10d0d260
+[info] [0000001764] INSTR Retired. name=RV_SEND    id=615    ssid=366      pc=0x10D0D260
+[info] [PERF] [0000001764] ASU instr_name RV_SEND instr_id 615 PC 10d0d260 recv 1763
+[info] ++++++++++++++++++++++core: 0, subcore: 1, start: 216, tick: 2232, kernelId: 0, blkID: 0, blkDim: 1, rtsqId: 1, streamId: 0, taskId: 0, subtaskId: 0, threadId: 0, done++++++++++++++++++++++.

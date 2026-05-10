@@ -1,0 +1,9 @@
+[info] [0000000000] Core 0 Setting LOG.core_enable_mask=0xffffffff and STAT.core_enable_mask=0xffffffff, chip_idx=0
+[info] [0000000216] Core 0 subcore1 Simt Param
+[info] shmemSz 262144
+[info] stackBase_ 284217344
+[info] warpStackSz_ 36864
+[info] dvgStackBase_ 655360
+[info] dvgWarpStackSz_ 1024
+[info] [0000000216] Core 0 subcore 1 start pc 0x10d0d000 param base 0x1022c000
+[info] [0000002232] Core 0 subcore 1 block done.

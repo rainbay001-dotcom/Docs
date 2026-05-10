@@ -1,0 +1,934 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>UMDK Repository Overview</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --ink: #172033;
+      --muted: #5d6778;
+      --paper: #f7f9fc;
+      --panel: #ffffff;
+      --line: #cfd7e6;
+      --strong-line: #93a4bf;
+      --blue: #2563eb;
+      --cyan: #0891b2;
+      --green: #15803d;
+      --amber: #b45309;
+      --red: #b91c1c;
+      --violet: #7c3aed;
+      --code: #102039;
+      --code-bg: #eef3fb;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      color: var(--ink);
+      background: var(--paper);
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      line-height: 1.55;
+    }
+
+    main {
+      width: min(1180px, calc(100% - 40px));
+      margin: 0 auto;
+      padding: 34px 0 56px;
+    }
+
+    h1, h2, h3 {
+      margin: 0;
+      line-height: 1.18;
+    }
+
+    h1 {
+      font-size: 34px;
+      letter-spacing: 0;
+    }
+
+    h2 {
+      margin-top: 34px;
+      padding-top: 8px;
+      border-top: 1px solid var(--line);
+      font-size: 24px;
+    }
+
+    h3 {
+      margin-top: 24px;
+      font-size: 18px;
+    }
+
+    p {
+      margin: 10px 0 0;
+    }
+
+    code {
+      color: var(--code);
+      background: var(--code-bg);
+      border-radius: 5px;
+      padding: 1px 5px;
+      font-size: 0.94em;
+    }
+
+    pre {
+      margin: 12px 0 0;
+      padding: 14px 16px;
+      overflow: auto;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #0f172a;
+      color: #e2e8f0;
+      line-height: 1.45;
+      font-size: 13px;
+    }
+
+    pre code {
+      color: inherit;
+      background: transparent;
+      padding: 0;
+      border-radius: 0;
+    }
+
+    ul {
+      margin: 10px 0 0 22px;
+      padding: 0;
+    }
+
+    li {
+      margin: 6px 0;
+    }
+
+    table {
+      width: 100%;
+      margin-top: 14px;
+      border-collapse: collapse;
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      overflow: hidden;
+    }
+
+    th, td {
+      padding: 10px 12px;
+      border-bottom: 1px solid var(--line);
+      text-align: left;
+      vertical-align: top;
+      font-size: 14px;
+    }
+
+    th {
+      color: #24324a;
+      background: #edf2f8;
+      font-weight: 700;
+    }
+
+    tr:last-child td {
+      border-bottom: 0;
+    }
+
+    .hero {
+      display: grid;
+      grid-template-columns: 1.05fr 0.95fr;
+      gap: 22px;
+      align-items: stretch;
+      margin-bottom: 26px;
+    }
+
+    .intro,
+    .meta,
+    .panel {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      box-shadow: 0 12px 28px rgba(17, 24, 39, 0.06);
+    }
+
+    .intro {
+      padding: 24px;
+    }
+
+    .meta {
+      padding: 18px;
+    }
+
+    .eyebrow {
+      margin: 0 0 8px;
+      color: var(--cyan);
+      font-weight: 700;
+      letter-spacing: 0;
+      text-transform: uppercase;
+      font-size: 12px;
+    }
+
+    .lede {
+      margin-top: 14px;
+      color: #334155;
+      font-size: 17px;
+    }
+
+    .meta-grid {
+      display: grid;
+      gap: 10px;
+      margin-top: 10px;
+    }
+
+    .meta-item {
+      padding: 10px 12px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #f8fafc;
+    }
+
+    .meta-item strong {
+      display: block;
+      margin-bottom: 2px;
+      font-size: 13px;
+    }
+
+    .meta-item span {
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    .diagram {
+      width: 100%;
+      height: auto;
+      margin-top: 14px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #ffffff;
+    }
+
+    .card-grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 14px;
+      margin-top: 14px;
+    }
+
+    .card {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 14px;
+    }
+
+    .card h3 {
+      margin-top: 0;
+      font-size: 16px;
+    }
+
+    .note {
+      margin-top: 14px;
+      padding: 12px 14px;
+      border-left: 4px solid var(--blue);
+      background: #eef6ff;
+      border-radius: 6px;
+      color: #24324a;
+    }
+
+    .warn {
+      border-left-color: var(--amber);
+      background: #fff7ed;
+    }
+
+    .two-col {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 16px;
+      margin-top: 14px;
+    }
+
+    .source-list {
+      columns: 2;
+      column-gap: 28px;
+    }
+
+    .source-list li {
+      break-inside: avoid;
+    }
+
+    .svg-title {
+      font: 700 16px Inter, Arial, sans-serif;
+      fill: #172033;
+    }
+
+    .svg-text {
+      font: 13px Inter, Arial, sans-serif;
+      fill: #263449;
+    }
+
+    .svg-small {
+      font: 12px Inter, Arial, sans-serif;
+      fill: #5e6878;
+    }
+
+    .svg-tiny {
+      font: 11px Inter, Arial, sans-serif;
+      fill: #64748b;
+    }
+
+    .box {
+      fill: #ffffff;
+      stroke: #9fb0c9;
+      stroke-width: 1.2;
+      rx: 8;
+    }
+
+    .box-blue {
+      fill: #eff6ff;
+      stroke: #60a5fa;
+    }
+
+    .box-green {
+      fill: #f0fdf4;
+      stroke: #86efac;
+    }
+
+    .box-cyan {
+      fill: #ecfeff;
+      stroke: #67e8f9;
+    }
+
+    .box-amber {
+      fill: #fffbeb;
+      stroke: #fbbf24;
+    }
+
+    .box-violet {
+      fill: #f5f3ff;
+      stroke: #a78bfa;
+    }
+
+    .box-red {
+      fill: #fff1f2;
+      stroke: #fda4af;
+    }
+
+    .arrow {
+      stroke: #52637a;
+      stroke-width: 1.6;
+      fill: none;
+      marker-end: url(#arrow);
+    }
+
+    .dash {
+      stroke-dasharray: 5 5;
+    }
+
+    @media (max-width: 900px) {
+      main {
+        width: min(100% - 24px, 1180px);
+      }
+
+      .hero,
+      .two-col,
+      .card-grid {
+        grid-template-columns: 1fr;
+      }
+
+      .source-list {
+        columns: 1;
+      }
+    }
+  </style>
+</head>
+<body>
+<main>
+  <section class="hero">
+    <div class="intro">
+      <p class="eyebrow">UMDK Repository Map</p>
+      <h1>What Is In The UMDK Repo</h1>
+      <p class="lede">
+        UMDK is a user-space development kit for Lingqu UnifiedBus memory-semantic communication.
+        The repo contains the base URMA stack, higher-level RPC and message-queue libraries,
+        socket-compatible acceleration, distributed lock libraries, CAM Ascend communication operators,
+        examples, tools, tests, packaging, and bilingual documentation.
+      </p>
+      <p>
+        This overview is based on the local checkout at <code>/Volumes/KernelDev/umdk</code>. The main
+        CMake/RPM product path starts at <code>src/CMakeLists.txt</code> and builds URMA, ULOCK/DLOCK,
+        URPC/UMQ, and USOCK/UMS. CAM is present in the same repository, but it has its own build scripts
+        under <code>build/cam</code> and produces Ascend operator and Python artifacts.
+      </p>
+    </div>
+
+    <aside class="meta">
+      <p class="eyebrow">Source Snapshot</p>
+      <div class="meta-grid">
+        <div class="meta-item">
+          <strong>Repository</strong>
+          <span><code>/Volumes/KernelDev/umdk</code></span>
+        </div>
+        <div class="meta-item">
+          <strong>Branch</strong>
+          <span><code>master</code>, tracking <code>origin/master</code></span>
+        </div>
+        <div class="meta-item">
+          <strong>Release metadata</strong>
+          <span><code>umdk.spec</code> names version <code>25.12.0</code></span>
+        </div>
+        <div class="meta-item">
+          <strong>Main roots</strong>
+          <span><code>src</code>, <code>doc</code>, <code>test</code>, <code>build/cam</code>, <code>LICENSES</code></span>
+        </div>
+      </div>
+    </aside>
+  </section>
+
+  <svg class="diagram" viewBox="0 0 1120 720" role="img" aria-label="UMDK overall architecture graph">
+    <defs>
+      <marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+        <path d="M 0 0 L 10 5 L 0 10 z" fill="#52637a"></path>
+      </marker>
+    </defs>
+
+    <text class="svg-title" x="34" y="34">UMDK overall architecture and repository ownership</text>
+
+    <rect class="box box-blue" x="44" y="62" width="1032" height="72"></rect>
+    <text class="svg-title" x="66" y="90">Applications and frameworks</text>
+    <text class="svg-small" x="66" y="114">Native apps, vLLM/SGLang/VeRL integration, databases, socket apps, URPC services, UMQ programs, tests and perftest tools</text>
+
+    <rect class="box" x="44" y="172" width="1032" height="238"></rect>
+    <text class="svg-title" x="66" y="200">UMDK user-space libraries and tools</text>
+
+    <rect class="box box-green" x="70" y="226" width="176" height="132"></rect>
+    <text class="svg-text" x="90" y="252">URMA</text>
+    <text class="svg-small" x="90" y="276">liburma, provider ABI</text>
+    <text class="svg-small" x="90" y="298">JFS/JFR/Jetty/JFC</text>
+    <text class="svg-small" x="90" y="320">segments, TPs, atomics</text>
+    <text class="svg-tiny" x="90" y="342">src/urma</text>
+
+    <rect class="box box-cyan" x="266" y="226" width="176" height="132"></rect>
+    <text class="svg-text" x="286" y="252">URPC and UMQ</text>
+    <text class="svg-small" x="286" y="276">RPC framework</text>
+    <text class="svg-small" x="286" y="298">message queues</text>
+    <text class="svg-small" x="286" y="320">UB, IPC, UBMM modes</text>
+    <text class="svg-tiny" x="286" y="342">src/urpc</text>
+
+    <rect class="box box-violet" x="462" y="226" width="176" height="132"></rect>
+    <text class="svg-text" x="482" y="252">ULOCK / DLOCK</text>
+    <text class="svg-small" x="482" y="276">distributed locks</text>
+    <text class="svg-small" x="482" y="298">distributed objects</text>
+    <text class="svg-small" x="482" y="320">client, server, common</text>
+    <text class="svg-tiny" x="482" y="342">src/ulock/dlock</text>
+
+    <rect class="box box-amber" x="658" y="226" width="176" height="132"></rect>
+    <text class="svg-text" x="678" y="252">USOCK / UMS</text>
+    <text class="svg-small" x="678" y="276">socket-compatible path</text>
+    <text class="svg-small" x="678" y="298">kernel module</text>
+    <text class="svg-small" x="678" y="320">preload, run tool, agent</text>
+    <text class="svg-tiny" x="678" y="342">src/usock/ums</text>
+
+    <rect class="box box-red" x="854" y="226" width="176" height="132"></rect>
+    <text class="svg-text" x="874" y="252">CAM</text>
+    <text class="svg-small" x="874" y="276">Ascend communication ops</text>
+    <text class="svg-small" x="874" y="298">MoE dispatch/combine</text>
+    <text class="svg-small" x="874" y="320">pybind and examples</text>
+    <text class="svg-tiny" x="874" y="342">src/cam, build/cam</text>
+
+    <path class="arrow" d="M 560 134 L 560 168"></path>
+
+    <rect class="box" x="44" y="448" width="1032" height="106"></rect>
+    <text class="svg-title" x="66" y="476">Common services, packaging, and diagnostics</text>
+    <text class="svg-small" x="66" y="502">URMA common utilities, URPC common_util, logging, stats, config files, admin tools, perftests, examples, release notes, RPM spec</text>
+    <text class="svg-small" x="66" y="528">Docs live under doc/en and doc/ch. Tests live under test with component unit and integration suites.</text>
+
+    <path class="arrow" d="M 158 358 L 158 448"></path>
+    <path class="arrow" d="M 354 358 L 354 448"></path>
+    <path class="arrow" d="M 550 358 L 550 448"></path>
+    <path class="arrow" d="M 746 358 L 746 448"></path>
+    <path class="arrow dash" d="M 942 358 L 942 448"></path>
+
+    <rect class="box box-green" x="44" y="592" width="500" height="88"></rect>
+    <text class="svg-title" x="66" y="620">Kernel and driver side dependencies</text>
+    <text class="svg-small" x="66" y="646">ubcore, uburma, UDMA kernel provider, UMS kernel module, UMMU, UB bus modules</text>
+    <text class="svg-tiny" x="66" y="668">UMS kmod source is in this repo; most UB/UDMA kernel pieces live in the kernel repo.</text>
+
+    <rect class="box box-violet" x="576" y="592" width="500" height="88"></rect>
+    <text class="svg-title" x="598" y="620">Hardware and platform targets</text>
+    <text class="svg-small" x="598" y="646">Lingqu UnifiedBus fabric, HiSilicon UDMA, Ascend A2/A3 SuperPOD, CANN runtime for CAM</text>
+    <text class="svg-tiny" x="598" y="668">URMA/URPC/DLOCK/UMS target UB transport; CAM targets Ascend operator execution.</text>
+
+    <path class="arrow" d="M 560 554 L 294 592"></path>
+    <path class="arrow" d="M 560 554 L 826 592"></path>
+  </svg>
+
+  <h2>Repository At A Glance</h2>
+  <table>
+    <thead>
+      <tr>
+        <th>Path</th>
+        <th>What It Contains</th>
+        <th>How To Think About It</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><code>README.md</code>, <code>README_zh.md</code></td>
+        <td>High-level UMDK introduction, components, dependencies, RPM build commands, install notes.</td>
+        <td>The first orientation point for the whole project.</td>
+      </tr>
+      <tr>
+        <td><code>src</code></td>
+        <td>Main source tree for URMA, ULOCK/DLOCK, URPC/UMQ, and USOCK/UMS. <code>src/CMakeLists.txt</code> controls these component builds.</td>
+        <td>The primary C/C++ product tree.</td>
+      </tr>
+      <tr>
+        <td><code>src/cam</code></td>
+        <td>CAM Ascend communication operators, kernels, Python bindings, examples, and third-party Catlass submodule.</td>
+        <td>Separate Ascend operator/Python package path, not wired through top-level <code>src/CMakeLists.txt</code>.</td>
+      </tr>
+      <tr>
+        <td><code>build/cam</code></td>
+        <td>CAM build scripts that generate a CANN operator <code>.run</code> package and a Python wheel.</td>
+        <td>Use this path for CAM instead of the RPM path.</td>
+      </tr>
+      <tr>
+        <td><code>doc</code></td>
+        <td>English and Chinese user/API/security docs plus component images.</td>
+        <td>Canonical local documentation shipped with the repo.</td>
+      </tr>
+      <tr>
+        <td><code>test</code></td>
+        <td>Unit tests, gtest-style component tests, Python integration framework, and suites for URMA, URPC, UMQ, UMS, DLOCK, and CAM.</td>
+        <td>Validation tree; useful for behavior discovery.</td>
+      </tr>
+      <tr>
+        <td><code>umdk.spec</code></td>
+        <td>RPM packaging, build options, package split, file lists, install scripts, and kernel-module handling.</td>
+        <td>The best source for what gets installed into Linux systems.</td>
+      </tr>
+      <tr>
+        <td><code>LICENSES</code>, <code>doc/LICENSE</code></td>
+        <td>Code and documentation licensing notices.</td>
+        <td>License boundaries.</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <h2>Main Build Split</h2>
+  <p>
+    The repo has two practical build families. The main CMake/RPM family is driven by
+    <code>cmake ./src</code> from <code>umdk.spec</code>. It can build all standard components or selected components
+    using RPM conditionals such as <code>--with urma</code>, <code>--with urpc</code>, <code>--with dlock</code>, and
+    <code>--with ums</code>. CAM is built separately using scripts under <code>build/cam</code>.
+  </p>
+  <div class="two-col">
+    <div class="panel" style="padding: 14px;">
+      <h3>Main CMake/RPM Path</h3>
+      <p>
+        <code>src/CMakeLists.txt</code> adds <code>urma</code>, <code>ulock</code>, <code>urpc</code>, and <code>usock</code>
+        based on <code>BUILD_ALL</code> and component switches. The RPM spec wraps this with dependencies, install paths,
+        package names, and kernel-version options.
+      </p>
+    </div>
+    <div class="panel" style="padding: 14px;">
+      <h3>CAM Path</h3>
+      <p>
+        <code>src/cam</code> and <code>build/cam</code> target Ascend operator packaging. CAM produces an operator
+        <code>.run</code> package and a Python wheel, and requires Ascend/CANN/Torch/Torch-NPU-style environment setup.
+      </p>
+    </div>
+  </div>
+
+  <h2>URMA</h2>
+  <p>
+    URMA is the base user-space memory-semantic API. It exposes application-facing APIs for remote memory and
+    transport resources, plus a provider ABI for hardware providers. It is the foundation used by URPC, UMQ,
+    DLOCK, and parts of UMS/CAM integration.
+  </p>
+  <table>
+    <thead>
+      <tr>
+        <th>Subtree</th>
+        <th>Contents</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><code>src/urma/common</code></td>
+        <td>Shared utility code: lists, hash maps, bitmaps, strings, timing, barriers, and general helpers.</td>
+      </tr>
+      <tr>
+        <td><code>src/urma/lib/urma/core</code></td>
+        <td><code>liburma.so</code> core API implementation: devices, provider loading, control/data path APIs, command TLVs, formatting, logging, and performance hooks.</td>
+      </tr>
+      <tr>
+        <td><code>src/urma/lib/urma/core/include</code></td>
+        <td>Public URMA headers such as <code>urma_api.h</code>, <code>urma_provider.h</code>, <code>urma_types.h</code>, and <code>urma_opcode.h</code>.</td>
+      </tr>
+      <tr>
+        <td><code>src/urma/lib/uvs</code></td>
+        <td>UVS/TPSA user-space control library. Builds <code>libtpsa.so</code> and provides UVS APIs, private APIs, ioctl, TLV, UBAGG ioctl, and logging code.</td>
+      </tr>
+      <tr>
+        <td><code>src/urma/lib/urma/bond</code></td>
+        <td>UB aggregation and bonding library. Handles multipath context, datapath conversion and scheduling, topology info, health check, link recovery, netlink, and segment handling.</td>
+      </tr>
+      <tr>
+        <td><code>src/urma/hw/udma</code></td>
+        <td>User-space UDMA provider. Contains provider ops and resource code for buffers, Jetty, JFS, JFR, JFC, segments, TIDs, DBs, and control queue TP handling.</td>
+      </tr>
+      <tr>
+        <td><code>src/urma/tools</code></td>
+        <td><code>urma_admin</code>, <code>urma_ping</code>, and <code>urma_perftest</code>.</td>
+      </tr>
+      <tr>
+        <td><code>src/urma/examples</code></td>
+        <td><code>urma_sample</code> and example README.</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <h2>URPC and UMQ</h2>
+  <p>
+    URPC is the RPC framework. UMQ is a neighboring message-queue subsystem in the same source root. The framework
+    builds <code>liburpc_framework.so</code>; UMQ builds base and backend libraries such as <code>libumq.so</code>,
+    <code>libumq_buf.so</code>, <code>libumq_ub.so</code>, and <code>libumq_ipc.so</code>. The source tree also contains
+    a <code>umq_ubmm</code> backend.
+  </p>
+  <table>
+    <thead>
+      <tr>
+        <th>Subtree</th>
+        <th>Contents</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><code>src/urpc/include/framework</code></td>
+        <td>Public URPC framework API, types, and errno headers.</td>
+      </tr>
+      <tr>
+        <td><code>src/urpc/framework</code></td>
+        <td>URPC framework implementation: channel and queue core, control plane, data plane, managers, protocol, function registry, and framework logging.</td>
+      </tr>
+      <tr>
+        <td><code>src/urpc/include/umq</code></td>
+        <td>Public UMQ base/pro APIs, DFX APIs, backend API headers, and transport-layer vtables.</td>
+      </tr>
+      <tr>
+        <td><code>src/urpc/umq</code></td>
+        <td>UMQ implementation: front-end API dispatch, qbuf pools, DFX/perf, IPC backend, UB backend, UBMM backend, message rings, ID generator, and logging.</td>
+      </tr>
+      <tr>
+        <td><code>src/urpc/util</code></td>
+        <td>URPC common utilities: bitmap, command queue, hash map, ID generator, epoll helper, socket helper, slab/pool, timer, thread, TLV, locks, and logs.</td>
+      </tr>
+      <tr>
+        <td><code>src/urpc/tools</code></td>
+        <td><code>urpc_admin</code>, <code>urpc_framework_perftest</code>, and <code>umq_perftest</code>.</td>
+      </tr>
+      <tr>
+        <td><code>src/urpc/examples</code></td>
+        <td>URPC framework example, UMQ example, and UMQ connection setup tool.</td>
+      </tr>
+      <tr>
+        <td><code>src/urpc/third_party</code></td>
+        <td>Bazel-related third-party wiring for OpenSSL, URMA, and zlib.</td>
+      </tr>
+    </tbody>
+  </table>
+  <p class="note">
+    The URPC and UMQ HTML deep dives in this docs directory go deeper into these two subtrees. This overview keeps
+    the focus on repository contents and boundaries.
+  </p>
+
+  <h2>ULOCK / DLOCK</h2>
+  <p>
+    The <code>src/ulock/dlock</code> subtree implements distributed lock and distributed object libraries on top
+    of URMA-style connectivity. The release notes describe client management, server management, distributed lock
+    operations, distributed object operations, heartbeat, failure recovery, secure transmission, and DFX.
+  </p>
+  <table>
+    <thead>
+      <tr>
+        <th>Library</th>
+        <th>Source</th>
+        <th>Role</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><code>libdlockm.so</code></td>
+        <td><code>src/ulock/dlock/lib/common</code></td>
+        <td>Common descriptor, connection, cipher, Jetty manager, TCP/TLS, URMA context, logging, and utility code.</td>
+      </tr>
+      <tr>
+        <td><code>libdlockc.so</code></td>
+        <td><code>src/ulock/dlock/lib/client</code></td>
+        <td>Client APIs and wrappers for lock and object operations.</td>
+      </tr>
+      <tr>
+        <td><code>libdlocks.so</code></td>
+        <td><code>src/ulock/dlock/lib/server</code></td>
+        <td>Primary server, server manager, client entries, lock/object memory, server nodes, and wrappers.</td>
+      </tr>
+      <tr>
+        <td>Public headers</td>
+        <td><code>src/ulock/dlock/lib/include</code></td>
+        <td><code>dlock_client_api.h</code>, <code>dlock_server_api.h</code>, <code>dlock_types.h</code>, and log header.</td>
+      </tr>
+      <tr>
+        <td>Examples</td>
+        <td><code>src/ulock/dlock/examples</code></td>
+        <td>Client, object-client, and primary-server examples.</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <h2>USOCK / UMS</h2>
+  <p>
+    USOCK is the socket-compatible feature area. The concrete subtree in this checkout is UMS. It contains a kernel
+    module, a preload library, an activation wrapper, an admin tool, and a user-space agent for secure token exchange.
+  </p>
+  <table>
+    <thead>
+      <tr>
+        <th>Subtree or Artifact</th>
+        <th>Purpose</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><code>src/usock/ums/kmod/ums</code></td>
+        <td>UMS kernel module source: connection management, device integration, TX/RX IO, DFX, DIM, namespace helpers, and socket operation hooks for accept, bind, close, connect, listen, and release.</td>
+      </tr>
+      <tr>
+        <td><code>src/usock/ums/tools/ums-preload.c</code></td>
+        <td>Builds <code>libums-preload.so</code>, used by the transparent replacement path.</td>
+      </tr>
+      <tr>
+        <td><code>src/usock/ums/tools/ums_run</code></td>
+        <td>Wrapper tool for enabling UMS without modifying an application's code path.</td>
+      </tr>
+      <tr>
+        <td><code>src/usock/ums/tools/ums_admin</code></td>
+        <td>UMS admin CLI.</td>
+      </tr>
+      <tr>
+        <td><code>src/usock/ums/ums_agent</code></td>
+        <td>User-space daemon with config, systemd unit, logging, and token-exchange logic. The RPM spec describes it as a TLS 1.3 token exchange daemon between UMS kernel modules.</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <h2>CAM</h2>
+  <p>
+    CAM stands for Communication Acceleration for Matrix on Ascend NPU. The local README describes EP communication,
+    fused DeepMoE, KVCache transfer, RL weights transfer, and AFD communication as its feature areas. The current source
+    tree has communication operator kernels, host tiling code, pybind bindings, PyTorch extension helpers, examples, and
+    Catlass as a third-party submodule.
+  </p>
+  <table>
+    <thead>
+      <tr>
+        <th>Subtree</th>
+        <th>Contents</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><code>src/cam/comm_operator/ascend_kernels</code></td>
+        <td>Ascend operator host and kernel code for dispatch layout, fused DeepMoE, MoE combine/dispatch normal, A2, SHMEM variants, notify dispatch, and shared utilities.</td>
+      </tr>
+      <tr>
+        <td><code>src/cam/comm_operator/pybind</code></td>
+        <td>Python bindings for CAM operations plus PyTorch extension bridge code.</td>
+      </tr>
+      <tr>
+        <td><code>src/cam/examples</code></td>
+        <td>Python examples and run scripts for fused DeepMoE and MoE dispatch/combine modes.</td>
+      </tr>
+      <tr>
+        <td><code>src/cam/third_party/catlass</code></td>
+        <td>Third-party Catlass submodule.</td>
+      </tr>
+      <tr>
+        <td><code>build/cam</code></td>
+        <td>Build scripts that generate CAM operator <code>.run</code> and Python <code>.whl</code> artifacts.</td>
+      </tr>
+    </tbody>
+  </table>
+  <p class="warn note">
+    CAM is not in the top-level <code>src/CMakeLists.txt</code> component list. Treat it as a separate product path
+    that requires an Ascend/CANN/PyTorch environment, not as part of the standard UMDK RPM CMake path.
+  </p>
+
+  <h2>Docs And Tests</h2>
+  <table>
+    <thead>
+      <tr>
+        <th>Area</th>
+        <th>Contents</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><code>doc/en/urma</code>, <code>doc/ch/urma</code></td>
+        <td>URMA API, quickstart, and user guides.</td>
+      </tr>
+      <tr>
+        <td><code>doc/en/urpc</code>, <code>doc/ch/urpc</code></td>
+        <td>URPC framework API/user/security docs and UMQ initialize, IO, buffer, flow-control, and abnormal-event docs.</td>
+      </tr>
+      <tr>
+        <td><code>doc/en/cam</code>, <code>doc/ch/cam</code></td>
+        <td>CAM API guides.</td>
+      </tr>
+      <tr>
+        <td><code>test/urma</code></td>
+        <td>URMA gtest and scripts, including bond tests.</td>
+      </tr>
+      <tr>
+        <td><code>test/urpc</code></td>
+        <td>URPC unit tests for core/channel/queue, lib/control/datapath, protocol, UMQ, and utilities.</td>
+      </tr>
+      <tr>
+        <td><code>test/usock/ums</code></td>
+        <td>UMS scripts and unit tests.</td>
+      </tr>
+      <tr>
+        <td><code>test/ulock/dlock</code></td>
+        <td>DLOCK tests.</td>
+      </tr>
+      <tr>
+        <td><code>test/cam</code></td>
+        <td>CAM unit tests for fused DeepMoE, dispatch/combine prefill variants, SHMEM path, and utility code.</td>
+      </tr>
+      <tr>
+        <td><code>test/intergration_test</code></td>
+        <td>Python integration framework and suites for DLOCK, UMQ, UMS, URMA, URMA_UT, and URPC_LIB.</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <h2>Installable Outputs</h2>
+  <p>
+    <code>umdk.spec</code> is the best single source for installed artifacts. The table below summarizes the major
+    packages and outputs visible in the spec and CMake files.
+  </p>
+  <table>
+    <thead>
+      <tr>
+        <th>Package or Target Area</th>
+        <th>Representative Outputs</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>URMA runtime/devel/tools/examples</td>
+        <td><code>liburma.so</code>, <code>liburma_common.so</code>, <code>liburma_ubagg.so</code>, optional <code>liburma-udma.so</code>, URMA headers, <code>urma_admin</code>, <code>urma_ping</code>, <code>urma_perftest</code>, <code>urma_sample</code>.</td>
+      </tr>
+      <tr>
+        <td>TPSA/UVS</td>
+        <td><code>libtpsa.so</code>, TPSA config, logging and logrotate config.</td>
+      </tr>
+      <tr>
+        <td>URPC framework</td>
+        <td><code>liburpc_framework.so</code>, URPC framework headers, <code>urpc_admin</code>, <code>urpc_framework_perftest</code>, framework example.</td>
+      </tr>
+      <tr>
+        <td>UMQ</td>
+        <td><code>libumq.so</code>, <code>libumq_buf.so</code>, <code>libumq_ub.so</code>, <code>libumq_ipc.so</code>, UMQ headers, <code>umq_perftest</code>, UMQ example. The source also contains <code>umq_ubmm</code>.</td>
+      </tr>
+      <tr>
+        <td>DLOCK</td>
+        <td><code>libdlockm.so</code>, <code>libdlocks.so</code>, <code>libdlockc.so</code>, headers, primary-server and client examples.</td>
+      </tr>
+      <tr>
+        <td>UMS</td>
+        <td><code>ums.ko</code>, <code>libums-preload.so</code>, <code>ums_run</code>, <code>ums_agent</code>, systemd unit, config, logging and logrotate files.</td>
+      </tr>
+      <tr>
+        <td>CAM</td>
+        <td>CANN operator <code>.run</code> package and Python wheel from <code>build/cam</code>.</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <h2>How Components Depend On Each Other</h2>
+  <ul>
+    <li><code>URMA</code> is the base memory-semantic transport library. Other UMDK libraries mostly build on it or interact with the same UB kernel stack.</li>
+    <li><code>UDMA provider</code> is the user-space hardware provider under URMA. Its matching kernel provider and ubcore/uburma pieces live outside this repo in the kernel stack.</li>
+    <li><code>UVS/TPSA</code> provides topology/session/control support used by the URMA/UB ecosystem.</li>
+    <li><code>URPC framework</code> links against URMA and common URMA utilities, and exposes RPC semantics on top of URMA/UB resources.</li>
+    <li><code>UMQ</code> provides message-queue APIs and backends, with UB, IPC, and UBMM source paths.</li>
+    <li><code>DLOCK</code> links against URMA and URMA common utilities for distributed lock and object services.</li>
+    <li><code>UMS</code> is a socket-compatible path with both kernel and user-space pieces.</li>
+    <li><code>CAM</code> is separate from the main RPM path and targets Ascend operator/Python deployment.</li>
+  </ul>
+
+  <h2>Where To Start</h2>
+  <table>
+    <thead>
+      <tr>
+        <th>If You Want To Understand</th>
+        <th>Start With</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>Overall repo purpose and install flow</td>
+        <td><code>README.md</code>, <code>umdk.spec</code>, <code>RELEASE-NOTES.md</code></td>
+      </tr>
+      <tr>
+        <td>Base UB memory API</td>
+        <td><code>doc/en/urma</code>, <code>src/urma/lib/urma/core/include/urma_api.h</code>, <code>src/urma/lib/urma/core</code></td>
+      </tr>
+      <tr>
+        <td>UDMA provider behavior</td>
+        <td><code>src/urma/hw/udma</code>, especially resource files for Jetty, JFS, JFR, JFC, segment, and control queue TP.</td>
+      </tr>
+      <tr>
+        <td>URPC RPC flow</td>
+        <td><code>doc/en/urpc/URPC Framework API.md</code>, <code>src/urpc/include/framework</code>, <code>src/urpc/framework</code>, and <code>UMDK-codex/urpc_how_it_works.html</code>.</td>
+      </tr>
+      <tr>
+        <td>UMQ queue flow</td>
+        <td><code>doc/en/urpc/UMQ IO.md</code>, <code>src/urpc/include/umq</code>, <code>src/urpc/umq</code>, and <code>UMDK-codex/umq_how_it_works.html</code>.</td>
+      </tr>
+      <tr>
+        <td>Socket compatibility</td>
+        <td><code>src/usock/ums/kmod/ums</code>, <code>src/usock/ums/tools</code>, <code>src/usock/ums/ums_agent</code>.</td>
+      </tr>
+      <tr>
+        <td>DLOCK</td>
+        <td><code>src/ulock/dlock/lib/include</code>, <code>src/ulock/dlock/lib/client</code>, <code>src/ulock/dlock/lib/server</code>, <code>test/ulock/dlock</code>.</td>
+      </tr>
+      <tr>
+        <td>CAM</td>
+        <td><code>src/cam/README.md</code>, <code>src/cam/comm_operator</code>, <code>build/cam</code>, <code>test/cam</code>.</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <h2>Source Anchors</h2>
+  <ul class="source-list">
+    <li><code>README.md</code> - UMDK component introduction and build/install commands.</li>
+    <li><code>RELEASE-NOTES.md</code> - feature list for URMA, URPC, DLOCK, and UMS.</li>
+    <li><code>umdk.spec</code> - RPM package split, CMake options, dependencies, and installed file lists.</li>
+    <li><code>src/CMakeLists.txt</code> - main CMake component selection.</li>
+    <li><code>src/urma/CMakeLists.txt</code> - URMA common/lib/examples/tools/hw build layout.</li>
+    <li><code>src/urma/lib/urma/core/include/urma_api.h</code> - public URMA API.</li>
+    <li><code>src/urma/hw/udma</code> - user-space UDMA provider.</li>
+    <li><code>src/urma/lib/uvs/core/include/uvs_api.h</code> - UVS public API.</li>
+    <li><code>src/urpc/CMakeLists.txt</code> - URPC framework, UMQ, util, tool, and example build layout.</li>
+    <li><code>src/urpc/include/framework/urpc_framework_api.h</code> - public URPC framework API.</li>
+    <li><code>src/urpc/include/umq/umq_api.h</code> - public UMQ API.</li>
+    <li><code>src/ulock/dlock/lib/include</code> - public DLOCK API headers.</li>
+    <li><code>src/usock/ums/kmod/ums</code> - UMS kernel module source.</li>
+    <li><code>src/usock/ums/ums_agent</code> - UMS agent daemon source and systemd/config files.</li>
+    <li><code>src/cam/README.md</code> - CAM purpose, roadmap, structure, and build instructions.</li>
+    <li><code>doc/en</code>, <code>doc/ch</code> - shipped English and Chinese documentation.</li>
+    <li><code>test</code> - component unit and integration tests.</li>
+  </ul>
+</main>
+</body>
+</html>

@@ -1,0 +1,905 @@
+[info] 0 [REG_FREE_BUF.RESET], reg type:V, reg_free_buf_size:15, reg_cycle_free_num:5
+[info] 0 [REG_FREE_BUF.RESET], reg type:P, reg_free_buf_size:15, reg_cycle_free_num:5
+[info] [PERF] [0000001589] OOO_RECV instr_name RV_VLDI instr_id 84 PC 10d0d200
+[info] 1589 [REG_FREE_BUF.RESET], reg type:V, reg_free_buf_size:15, reg_cycle_free_num:5
+[info] 1589 [REG_FREE_BUF.RESET], reg type:P, reg_free_buf_size:15, reg_cycle_free_num:5
+[info] [PERF] [0000001589] OOO_RECV instr_name RV_VLDI instr_id 85 PC 10d0d204
+[info] [PERF] [0000001589] OOO_RECV instr_name RV_PSET instr_id 86 PC 10d0d208
+[info] [PERF] [0000001589] OOO_RECV instr_name RV_VDUPS instr_id 87 PC 10d0d20c
+[info] [PERF] [0000001589] OOO_RECV instr_name RV_PSET instr_id 88 PC 10d0d210
+[info] [PERF] [0000001589] OOO_SEND instr_name RV_VLDI instr_id 84 PC 10d0d200
+[info] [PERF] [0000001589] OOO_SEND instr_name RV_VLDI instr_id 85 PC 10d0d204
+[info] [PERF] [0000001589] OOO_SEND instr_name RV_PSET instr_id 86 PC 10d0d208
+[info] [PERF] [0000001589] OOO_SEND instr_name RV_VDUPS instr_id 87 PC 10d0d20c
+[info] [PERF] [0000001589] OOO_SEND instr_name RV_PSET instr_id 88 PC 10d0d210
+[info] [PERF] [0000001590] OOO_RECV instr_name RV_PSET instr_id 89 PC 10d0d214
+[info] [PERF] [0000001590] OOO_RECV instr_name RV_VDUPS instr_id 91 PC 10d0d21c
+[info] [PERF] [0000001590] OOO_SEND instr_name RV_PSET instr_id 89 PC 10d0d214
+[info] [PERF] [0000001590] OOO_SEND instr_name RV_VDUPS instr_id 91 PC 10d0d21c
+[info] [PERF] [0000001593] OOO_RECV instr_name RV_VCMP_EQ instr_id 94 PC 10d0d228
+[info] [PERF] [0000001593] OOO_RECV instr_name RV_PXOR instr_id 95 PC 10d0d22c
+[info] [PERF] [0000001593] OOO_SEND instr_name RV_VCMP_EQ instr_id 94 PC 10d0d228
+[info] [PERF] [0000001593] OOO_SEND instr_name RV_PXOR instr_id 95 PC 10d0d22c
+[info] [PERF] [0000001594] OOO_RECV instr_name RV_VLDI instr_id 97 PC 10d0d234
+[info] [PERF] [0000001594] OOO_RECV instr_name RV_VLDI instr_id 98 PC 10d0d238
+[info] [PERF] [0000001594] OOO_RECV instr_name RV_VCMP_EQ instr_id 99 PC 10d0d23c
+[info] [PERF] [0000001594] OOO_RECV instr_name RV_POR instr_id 100 PC 10d0d240
+[info] [PERF] [0000001594] OOO_SEND instr_name RV_VLDI instr_id 97 PC 10d0d234
+[info] [PERF] [0000001594] OOO_SEND instr_name RV_VLDI instr_id 98 PC 10d0d238
+[info] [PERF] [0000001594] OOO_SEND instr_name RV_VCMP_EQ instr_id 99 PC 10d0d23c
+[info] [PERF] [0000001594] OOO_SEND instr_name RV_POR instr_id 100 PC 10d0d240
+[info] [PERF] [0000001595] OOO_RECV instr_name RV_VCMP_LE instr_id 101 PC 10d0d244
+[info] [PERF] [0000001595] OOO_RECV instr_name RV_VCMP_EQ instr_id 102 PC 10d0d248
+[info] [PERF] [0000001595] OOO_RECV instr_name RV_PAND instr_id 103 PC 10d0d24c
+[info] [PERF] [0000001595] OOO_SEND instr_name RV_VCMP_LE instr_id 101 PC 10d0d244
+[info] [PERF] [0000001595] OOO_SEND instr_name RV_VCMP_EQ instr_id 102 PC 10d0d248
+[info] [PERF] [0000001595] OOO_SEND instr_name RV_PAND instr_id 103 PC 10d0d24c
+[info] [PERF] [0000001596] OOO_RECV instr_name RV_POR instr_id 104 PC 10d0d250
+[info] [PERF] [0000001596] OOO_SEND instr_name RV_POR instr_id 104 PC 10d0d250
+[info] [PERF] [0000001597] OOO_RECV instr_name RV_VSEL instr_id 105 PC 10d0d254
+[info] [PERF] [0000001597] OOO_RECV instr_name RV_VCVT_I2I instr_id 107 PC 10d0d258
+[info] [PERF] [0000001597] OOO_RECV instr_name RV_VSTI instr_id 108 PC 10d0d25c
+[info] [PERF] [0000001597] OOO_RECV instr_name RV_VLDI instr_id 109 PC 10d0d234
+[info] [PERF] [0000001597] OOO_RECV instr_name RV_VLDI instr_id 110 PC 10d0d238
+[info] [PERF] [0000001597] OOO_SEND instr_name RV_VSEL instr_id 105 PC 10d0d254
+[info] [PERF] [0000001597] OOO_SEND instr_name RV_VCVT_I2I instr_id 107 PC 10d0d258
+[info] [PERF] [0000001597] OOO_SEND instr_name RV_VSTI instr_id 108 PC 10d0d25c
+[info] [PERF] [0000001597] OOO_SEND instr_name RV_VLDI instr_id 109 PC 10d0d234
+[info] [PERF] [0000001597] OOO_SEND instr_name RV_VLDI instr_id 110 PC 10d0d238
+[info] 1598 send_stat_to_idu, ooo_stat=(preg freed num:1, vreg freed num:0) preg avail num:22 vreg avail num:58
+[info] [PERF] [0000001598] OOO_RECV instr_name RV_VCMP_EQ instr_id 111 PC 10d0d23c
+[info] [PERF] [0000001598] OOO_RECV instr_name RV_POR instr_id 112 PC 10d0d240
+[info] [PERF] [0000001598] OOO_SEND instr_name RV_VCMP_EQ instr_id 111 PC 10d0d23c
+[info] [PERF] [0000001598] OOO_SEND instr_name RV_POR instr_id 112 PC 10d0d240
+[info] [PERF] [0000001599] OOO_RECV instr_name RV_VCMP_LE instr_id 113 PC 10d0d244
+[info] [PERF] [0000001599] OOO_RECV instr_name RV_VCMP_EQ instr_id 115 PC 10d0d248
+[info] [PERF] [0000001599] OOO_RECV instr_name RV_PAND instr_id 116 PC 10d0d24c
+[info] [PERF] [0000001599] OOO_SEND instr_name RV_VCMP_LE instr_id 113 PC 10d0d244
+[info] [PERF] [0000001599] OOO_SEND instr_name RV_VCMP_EQ instr_id 115 PC 10d0d248
+[info] [PERF] [0000001599] OOO_SEND instr_name RV_PAND instr_id 116 PC 10d0d24c
+[info] [PERF] [0000001600] OOO_RECV instr_name RV_POR instr_id 117 PC 10d0d250
+[info] [PERF] [0000001600] OOO_SEND instr_name RV_POR instr_id 117 PC 10d0d250
+[info] [PERF] [0000001601] OOO_RECV instr_name RV_VSEL instr_id 119 PC 10d0d254
+[info] [PERF] [0000001601] OOO_RECV instr_name RV_VCVT_I2I instr_id 121 PC 10d0d258
+[info] [PERF] [0000001601] OOO_RECV instr_name RV_VSTI instr_id 122 PC 10d0d25c
+[info] [PERF] [0000001601] OOO_RECV instr_name RV_VLDI instr_id 123 PC 10d0d234
+[info] [PERF] [0000001601] OOO_RECV instr_name RV_VLDI instr_id 124 PC 10d0d238
+[info] [PERF] [0000001601] OOO_SEND instr_name RV_VSEL instr_id 119 PC 10d0d254
+[info] [PERF] [0000001601] OOO_SEND instr_name RV_VCVT_I2I instr_id 121 PC 10d0d258
+[info] [PERF] [0000001601] OOO_SEND instr_name RV_VSTI instr_id 122 PC 10d0d25c
+[info] [PERF] [0000001601] OOO_SEND instr_name RV_VLDI instr_id 123 PC 10d0d234
+[info] [PERF] [0000001601] OOO_SEND instr_name RV_VLDI instr_id 124 PC 10d0d238
+[info] [PERF] [0000001602] OOO_RECV instr_name RV_VCMP_EQ instr_id 125 PC 10d0d23c
+[info] [PERF] [0000001602] OOO_RECV instr_name RV_POR instr_id 127 PC 10d0d240
+[info] [PERF] [0000001602] OOO_SEND instr_name RV_VCMP_EQ instr_id 125 PC 10d0d23c
+[info] [PERF] [0000001602] OOO_SEND instr_name RV_POR instr_id 127 PC 10d0d240
+[info] 1603 send_stat_to_idu, ooo_stat=(preg freed num:2, vreg freed num:0) preg avail num:16 vreg avail num:54
+[info] [PERF] [0000001603] OOO_RECV instr_name RV_VCMP_LE instr_id 128 PC 10d0d244
+[info] [PERF] [0000001603] OOO_RECV instr_name RV_VCMP_EQ instr_id 130 PC 10d0d248
+[info] [PERF] [0000001603] OOO_RECV instr_name RV_PAND instr_id 131 PC 10d0d24c
+[info] [PERF] [0000001603] OOO_SEND instr_name RV_VCMP_LE instr_id 128 PC 10d0d244
+[info] [PERF] [0000001603] OOO_SEND instr_name RV_VCMP_EQ instr_id 130 PC 10d0d248
+[info] [PERF] [0000001603] OOO_SEND instr_name RV_PAND instr_id 131 PC 10d0d24c
+[info] [PERF] [0000001604] OOO_RECV instr_name RV_POR instr_id 132 PC 10d0d250
+[info] [PERF] [0000001604] OOO_SEND instr_name RV_POR instr_id 132 PC 10d0d250
+[info] [PERF] [0000001605] OOO_RECV instr_name RV_VSEL instr_id 134 PC 10d0d254
+[info] [PERF] [0000001605] OOO_RECV instr_name RV_VCVT_I2I instr_id 136 PC 10d0d258
+[info] [PERF] [0000001605] OOO_RECV instr_name RV_VSTI instr_id 137 PC 10d0d25c
+[info] [PERF] [0000001605] OOO_RECV instr_name RV_VLDI instr_id 138 PC 10d0d234
+[info] [PERF] [0000001605] OOO_RECV instr_name RV_VLDI instr_id 139 PC 10d0d238
+[info] [PERF] [0000001605] OOO_SEND instr_name RV_VSEL instr_id 134 PC 10d0d254
+[info] [PERF] [0000001605] OOO_SEND instr_name RV_VCVT_I2I instr_id 136 PC 10d0d258
+[info] [PERF] [0000001605] OOO_SEND instr_name RV_VSTI instr_id 137 PC 10d0d25c
+[info] [PERF] [0000001605] OOO_SEND instr_name RV_VLDI instr_id 138 PC 10d0d234
+[info] [PERF] [0000001605] OOO_SEND instr_name RV_VLDI instr_id 139 PC 10d0d238
+[info] 1606 send_stat_to_idu, ooo_stat=(preg freed num:0, vreg freed num:1) preg avail num:12 vreg avail num:51
+[info] [PERF] [0000001606] OOO_RECV instr_name RV_VCMP_EQ instr_id 140 PC 10d0d23c
+[info] [PERF] [0000001606] OOO_RECV instr_name RV_POR instr_id 142 PC 10d0d240
+[info] [PERF] [0000001606] OOO_SEND instr_name RV_VCMP_EQ instr_id 140 PC 10d0d23c
+[info] [PERF] [0000001606] OOO_SEND instr_name RV_POR instr_id 142 PC 10d0d240
+[info] 1607 send_stat_to_idu, ooo_stat=(preg freed num:0, vreg freed num:1) preg avail num:10 vreg avail num:52
+[info] [PERF] [0000001607] OOO_RECV instr_name RV_VCMP_LE instr_id 143 PC 10d0d244
+[info] [PERF] [0000001607] OOO_RECV instr_name RV_VCMP_EQ instr_id 145 PC 10d0d248
+[info] [PERF] [0000001607] OOO_RECV instr_name RV_PAND instr_id 146 PC 10d0d24c
+[info] [PERF] [0000001607] OOO_SEND instr_name RV_VCMP_LE instr_id 143 PC 10d0d244
+[info] [PERF] [0000001607] OOO_SEND instr_name RV_VCMP_EQ instr_id 145 PC 10d0d248
+[info] [PERF] [0000001607] OOO_SEND instr_name RV_PAND instr_id 146 PC 10d0d24c
+[info] 1608 send_stat_to_idu, ooo_stat=(preg freed num:1, vreg freed num:0) preg avail num:8 vreg avail num:52
+[info] [PERF] [0000001608] OOO_RECV instr_name RV_POR instr_id 147 PC 10d0d250
+[info] [PERF] [0000001608] OOO_SEND instr_name RV_POR instr_id 147 PC 10d0d250
+[info] 1609 send_stat_to_idu, ooo_stat=(preg freed num:0, vreg freed num:1) preg avail num:7 vreg avail num:53
+[info] [PERF] [0000001609] OOO_RECV instr_name RV_VSEL instr_id 149 PC 10d0d254
+[info] [PERF] [0000001609] OOO_RECV instr_name RV_VCVT_I2I instr_id 151 PC 10d0d258
+[info] [PERF] [0000001609] OOO_RECV instr_name RV_VSTI instr_id 152 PC 10d0d25c
+[info] [PERF] [0000001609] OOO_RECV instr_name RV_VLDI instr_id 153 PC 10d0d234
+[info] [PERF] [0000001609] OOO_RECV instr_name RV_VLDI instr_id 154 PC 10d0d238
+[info] [PERF] [0000001609] OOO_SEND instr_name RV_VSEL instr_id 149 PC 10d0d254
+[info] [PERF] [0000001609] OOO_SEND instr_name RV_VCVT_I2I instr_id 151 PC 10d0d258
+[info] [PERF] [0000001609] OOO_SEND instr_name RV_VSTI instr_id 152 PC 10d0d25c
+[info] [PERF] [0000001609] OOO_SEND instr_name RV_VLDI instr_id 153 PC 10d0d234
+[info] [PERF] [0000001609] OOO_SEND instr_name RV_VLDI instr_id 154 PC 10d0d238
+[info] [PERF] [0000001610] OOO_RECV instr_name RV_VCMP_EQ instr_id 155 PC 10d0d23c
+[info] [PERF] [0000001610] OOO_RECV instr_name RV_POR instr_id 157 PC 10d0d240
+[info] [PERF] [0000001610] OOO_SEND instr_name RV_VCMP_EQ instr_id 155 PC 10d0d23c
+[info] [PERF] [0000001610] OOO_SEND instr_name RV_POR instr_id 157 PC 10d0d240
+[info] 1611 send_stat_to_idu, ooo_stat=(preg freed num:3, vreg freed num:0) preg avail num:8 vreg avail num:49
+[info] [PERF] [0000001611] OOO_RECV instr_name RV_VCMP_LE instr_id 158 PC 10d0d244
+[info] [PERF] [0000001611] OOO_RECV instr_name RV_VCMP_EQ instr_id 160 PC 10d0d248
+[info] [PERF] [0000001611] OOO_RECV instr_name RV_PAND instr_id 161 PC 10d0d24c
+[info] [PERF] [0000001611] OOO_SEND instr_name RV_VCMP_LE instr_id 158 PC 10d0d244
+[info] [PERF] [0000001611] OOO_SEND instr_name RV_VCMP_EQ instr_id 160 PC 10d0d248
+[info] [PERF] [0000001611] OOO_SEND instr_name RV_PAND instr_id 161 PC 10d0d24c
+[info] [PERF] [0000001612] OOO_RECV instr_name RV_POR instr_id 162 PC 10d0d250
+[info] [PERF] [0000001612] OOO_SEND instr_name RV_POR instr_id 162 PC 10d0d250
+[info] 1613 send_stat_to_idu, ooo_stat=(preg freed num:0, vreg freed num:1) preg avail num:4 vreg avail num:50
+[info] [PERF] [0000001613] OOO_RECV instr_name RV_VSEL instr_id 164 PC 10d0d254
+[info] [PERF] [0000001613] OOO_RECV instr_name RV_VCVT_I2I instr_id 166 PC 10d0d258
+[info] [PERF] [0000001613] OOO_RECV instr_name RV_VSTI instr_id 167 PC 10d0d25c
+[info] [PERF] [0000001613] OOO_RECV instr_name RV_VLDI instr_id 168 PC 10d0d234
+[info] [PERF] [0000001613] OOO_RECV instr_name RV_VLDI instr_id 169 PC 10d0d238
+[info] [PERF] [0000001613] OOO_SEND instr_name RV_VSEL instr_id 164 PC 10d0d254
+[info] [PERF] [0000001613] OOO_SEND instr_name RV_VCVT_I2I instr_id 166 PC 10d0d258
+[info] [PERF] [0000001613] OOO_SEND instr_name RV_VSTI instr_id 167 PC 10d0d25c
+[info] [PERF] [0000001613] OOO_SEND instr_name RV_VLDI instr_id 168 PC 10d0d234
+[info] [PERF] [0000001613] OOO_SEND instr_name RV_VLDI instr_id 169 PC 10d0d238
+[info] 1614 send_stat_to_idu, ooo_stat=(preg freed num:4, vreg freed num:0) preg avail num:8 vreg avail num:46
+[info] [PERF] [0000001614] OOO_RECV instr_name RV_VCMP_EQ instr_id 170 PC 10d0d23c
+[info] [PERF] [0000001614] OOO_RECV instr_name RV_POR instr_id 172 PC 10d0d240
+[info] [PERF] [0000001614] OOO_SEND instr_name RV_VCMP_EQ instr_id 170 PC 10d0d23c
+[info] [PERF] [0000001614] OOO_SEND instr_name RV_POR instr_id 172 PC 10d0d240
+[info] [PERF] [0000001615] OOO_RECV instr_name RV_VCMP_LE instr_id 173 PC 10d0d244
+[info] [PERF] [0000001615] OOO_RECV instr_name RV_VCMP_EQ instr_id 175 PC 10d0d248
+[info] [PERF] [0000001615] OOO_SEND instr_name RV_VCMP_LE instr_id 173 PC 10d0d244
+[info] [PERF] [0000001615] OOO_SEND instr_name RV_VCMP_EQ instr_id 175 PC 10d0d248
+[info] 1616 send_stat_to_idu, ooo_stat=(preg freed num:0, vreg freed num:1) preg avail num:4 vreg avail num:47
+[info] [PERF] [0000001616] OOO_RECV instr_name RV_PAND instr_id 176 PC 10d0d24c
+[info] [PERF] [0000001616] OOO_SEND instr_name RV_PAND instr_id 176 PC 10d0d24c
+[info] 1617 send_stat_to_idu, ooo_stat=(preg freed num:3, vreg freed num:0) preg avail num:6 vreg avail num:47
+[info] [PERF] [0000001617] OOO_RECV instr_name RV_POR instr_id 177 PC 10d0d250
+[info] [PERF] [0000001617] OOO_SEND instr_name RV_POR instr_id 177 PC 10d0d250
+[info] 1618 send_stat_to_idu, ooo_stat=(preg freed num:0, vreg freed num:1) preg avail num:5 vreg avail num:48
+[info] [PERF] [0000001618] OOO_RECV instr_name RV_VSEL instr_id 179 PC 10d0d254
+[info] [PERF] [0000001618] OOO_RECV instr_name RV_VCVT_I2I instr_id 181 PC 10d0d258
+[info] [PERF] [0000001618] OOO_RECV instr_name RV_VSTI instr_id 182 PC 10d0d25c
+[info] [PERF] [0000001618] OOO_RECV instr_name RV_VLDI instr_id 183 PC 10d0d234
+[info] [PERF] [0000001618] OOO_RECV instr_name RV_VLDI instr_id 184 PC 10d0d238
+[info] [PERF] [0000001618] OOO_SEND instr_name RV_VSEL instr_id 179 PC 10d0d254
+[info] [PERF] [0000001618] OOO_SEND instr_name RV_VCVT_I2I instr_id 181 PC 10d0d258
+[info] [PERF] [0000001618] OOO_SEND instr_name RV_VSTI instr_id 182 PC 10d0d25c
+[info] [PERF] [0000001618] OOO_SEND instr_name RV_VLDI instr_id 183 PC 10d0d234
+[info] [PERF] [0000001618] OOO_SEND instr_name RV_VLDI instr_id 184 PC 10d0d238
+[info] 1619 send_stat_to_idu, ooo_stat=(preg freed num:0, vreg freed num:2) preg avail num:5 vreg avail num:46
+[info] [PERF] [0000001619] OOO_RECV instr_name RV_VCMP_EQ instr_id 185 PC 10d0d23c
+[info] [PERF] [0000001619] OOO_RECV instr_name RV_POR instr_id 187 PC 10d0d240
+[info] [PERF] [0000001619] OOO_SEND instr_name RV_VCMP_EQ instr_id 185 PC 10d0d23c
+[info] [PERF] [0000001619] OOO_SEND instr_name RV_POR instr_id 187 PC 10d0d240
+[info] 1620 send_stat_to_idu, ooo_stat=(preg freed num:2, vreg freed num:0) preg avail num:5 vreg avail num:46
+[info] [PERF] [0000001620] OOO_RECV instr_name RV_VCMP_LE instr_id 188 PC 10d0d244
+[info] [PERF] [0000001620] OOO_RECV instr_name RV_VCMP_EQ instr_id 190 PC 10d0d248
+[info] [PERF] [0000001620] OOO_RECV instr_name RV_PAND instr_id 191 PC 10d0d24c
+[info] [PERF] [0000001620] OOO_SEND instr_name RV_VCMP_LE instr_id 188 PC 10d0d244
+[info] [PERF] [0000001620] OOO_SEND instr_name RV_VCMP_EQ instr_id 190 PC 10d0d248
+[info] [PERF] [0000001620] OOO_SEND instr_name RV_PAND instr_id 191 PC 10d0d24c
+[info] 1622 send_stat_to_idu, ooo_stat=(preg freed num:0, vreg freed num:2) preg avail num:2 vreg avail num:48
+[info] [PERF] [0000001622] OOO_RECV instr_name RV_POR instr_id 193 PC 10d0d250
+[info] [PERF] [0000001622] OOO_SEND instr_name RV_POR instr_id 193 PC 10d0d250
+[info] 1623 send_stat_to_idu, ooo_stat=(preg freed num:2, vreg freed num:1) preg avail num:3 vreg avail num:49
+[info] [PERF] [0000001623] OOO_RECV instr_name RV_VSEL instr_id 195 PC 10d0d254
+[info] [PERF] [0000001623] OOO_RECV instr_name RV_VCVT_I2I instr_id 197 PC 10d0d258
+[info] [PERF] [0000001623] OOO_RECV instr_name RV_VSTI instr_id 198 PC 10d0d25c
+[info] [PERF] [0000001623] OOO_RECV instr_name RV_VLDI instr_id 199 PC 10d0d234
+[info] [PERF] [0000001623] OOO_RECV instr_name RV_VLDI instr_id 200 PC 10d0d238
+[info] [PERF] [0000001623] OOO_SEND instr_name RV_VSEL instr_id 195 PC 10d0d254
+[info] [PERF] [0000001623] OOO_SEND instr_name RV_VCVT_I2I instr_id 197 PC 10d0d258
+[info] [PERF] [0000001623] OOO_SEND instr_name RV_VSTI instr_id 198 PC 10d0d25c
+[info] [PERF] [0000001623] OOO_SEND instr_name RV_VLDI instr_id 199 PC 10d0d234
+[info] [PERF] [0000001623] OOO_SEND instr_name RV_VLDI instr_id 200 PC 10d0d238
+[info] 1624 send_stat_to_idu, ooo_stat=(preg freed num:1, vreg freed num:1) preg avail num:4 vreg avail num:46
+[info] [PERF] [0000001624] OOO_RECV instr_name RV_VCMP_EQ instr_id 201 PC 10d0d23c
+[info] [PERF] [0000001624] OOO_SEND instr_name RV_VCMP_EQ instr_id 201 PC 10d0d23c
+[info] [PERF] [0000001625] OOO_RECV instr_name RV_POR instr_id 203 PC 10d0d240
+[info] [PERF] [0000001625] OOO_SEND instr_name RV_POR instr_id 203 PC 10d0d240
+[info] 1626 send_stat_to_idu, ooo_stat=(preg freed num:2, vreg freed num:0) preg avail num:4 vreg avail num:46
+[info] [PERF] [0000001626] OOO_RECV instr_name RV_VCMP_LE instr_id 204 PC 10d0d244
+[info] [PERF] [0000001626] OOO_RECV instr_name RV_VCMP_EQ instr_id 206 PC 10d0d248
+[info] [PERF] [0000001626] OOO_SEND instr_name RV_VCMP_LE instr_id 204 PC 10d0d244
+[info] [PERF] [0000001626] OOO_SEND instr_name RV_VCMP_EQ instr_id 206 PC 10d0d248
+[info] 1627 send_stat_to_idu, ooo_stat=(preg freed num:2, vreg freed num:0) preg avail num:4 vreg avail num:46
+[info] 1628 send_stat_to_idu, ooo_stat=(preg freed num:0, vreg freed num:2) preg avail num:4 vreg avail num:48
+[info] [PERF] [0000001628] OOO_RECV instr_name RV_PAND instr_id 207 PC 10d0d24c
+[info] [PERF] [0000001628] OOO_SEND instr_name RV_PAND instr_id 207 PC 10d0d24c
+[info] 1629 send_stat_to_idu, ooo_stat=(preg freed num:2, vreg freed num:0) preg avail num:5 vreg avail num:48
+[info] [PERF] [0000001629] OOO_RECV instr_name RV_POR instr_id 208 PC 10d0d250
+[info] [PERF] [0000001629] OOO_SEND instr_name RV_POR instr_id 208 PC 10d0d250
+[info] 1630 send_stat_to_idu, ooo_stat=(preg freed num:0, vreg freed num:1) preg avail num:4 vreg avail num:49
+[info] [PERF] [0000001630] OOO_RECV instr_name RV_VSEL instr_id 211 PC 10d0d254
+[info] [PERF] [0000001630] OOO_RECV instr_name RV_VCVT_I2I instr_id 213 PC 10d0d258
+[info] [PERF] [0000001630] OOO_RECV instr_name RV_VSTI instr_id 214 PC 10d0d25c
+[info] [PERF] [0000001630] OOO_RECV instr_name RV_VLDI instr_id 215 PC 10d0d234
+[info] [PERF] [0000001630] OOO_RECV instr_name RV_VLDI instr_id 216 PC 10d0d238
+[info] [PERF] [0000001630] OOO_SEND instr_name RV_VSEL instr_id 211 PC 10d0d254
+[info] [PERF] [0000001630] OOO_SEND instr_name RV_VCVT_I2I instr_id 213 PC 10d0d258
+[info] [PERF] [0000001630] OOO_SEND instr_name RV_VSTI instr_id 214 PC 10d0d25c
+[info] [PERF] [0000001630] OOO_SEND instr_name RV_VLDI instr_id 215 PC 10d0d234
+[info] [PERF] [0000001630] OOO_SEND instr_name RV_VLDI instr_id 216 PC 10d0d238
+[info] 1631 send_stat_to_idu, ooo_stat=(preg freed num:2, vreg freed num:0) preg avail num:6 vreg avail num:45
+[info] [PERF] [0000001631] OOO_RECV instr_name RV_VCMP_EQ instr_id 217 PC 10d0d23c
+[info] [PERF] [0000001631] OOO_RECV instr_name RV_POR instr_id 219 PC 10d0d240
+[info] [PERF] [0000001631] OOO_SEND instr_name RV_VCMP_EQ instr_id 217 PC 10d0d23c
+[info] [PERF] [0000001631] OOO_SEND instr_name RV_POR instr_id 219 PC 10d0d240
+[info] 1632 send_stat_to_idu, ooo_stat=(preg freed num:2, vreg freed num:1) preg avail num:6 vreg avail num:46
+[info] [PERF] [0000001632] OOO_RECV instr_name RV_VCMP_LE instr_id 221 PC 10d0d244
+[info] [PERF] [0000001632] OOO_RECV instr_name RV_VCMP_EQ instr_id 223 PC 10d0d248
+[info] [PERF] [0000001632] OOO_SEND instr_name RV_VCMP_LE instr_id 221 PC 10d0d244
+[info] [PERF] [0000001632] OOO_SEND instr_name RV_VCMP_EQ instr_id 223 PC 10d0d248
+[info] 1633 send_stat_to_idu, ooo_stat=(preg freed num:1, vreg freed num:0) preg avail num:5 vreg avail num:46
+[info] [PERF] [0000001633] OOO_RECV instr_name RV_PAND instr_id 224 PC 10d0d24c
+[info] [PERF] [0000001633] OOO_SEND instr_name RV_PAND instr_id 224 PC 10d0d24c
+[info] 1634 send_stat_to_idu, ooo_stat=(preg freed num:1, vreg freed num:0) preg avail num:5 vreg avail num:46
+[info] [PERF] [0000001634] OOO_RECV instr_name RV_POR instr_id 227 PC 10d0d250
+[info] [PERF] [0000001634] OOO_SEND instr_name RV_POR instr_id 227 PC 10d0d250
+[info] 1635 send_stat_to_idu, ooo_stat=(preg freed num:0, vreg freed num:2) preg avail num:4 vreg avail num:48
+[info] [PERF] [0000001635] OOO_RECV instr_name RV_VSEL instr_id 229 PC 10d0d254
+[info] [PERF] [0000001635] OOO_RECV instr_name RV_VCVT_I2I instr_id 231 PC 10d0d258
+[info] [PERF] [0000001635] OOO_RECV instr_name RV_VSTI instr_id 232 PC 10d0d25c
+[info] [PERF] [0000001635] OOO_RECV instr_name RV_VLDI instr_id 233 PC 10d0d234
+[info] [PERF] [0000001635] OOO_RECV instr_name RV_VLDI instr_id 234 PC 10d0d238
+[info] [PERF] [0000001635] OOO_SEND instr_name RV_VSEL instr_id 229 PC 10d0d254
+[info] [PERF] [0000001635] OOO_SEND instr_name RV_VCVT_I2I instr_id 231 PC 10d0d258
+[info] [PERF] [0000001635] OOO_SEND instr_name RV_VSTI instr_id 232 PC 10d0d25c
+[info] [PERF] [0000001635] OOO_SEND instr_name RV_VLDI instr_id 233 PC 10d0d234
+[info] [PERF] [0000001635] OOO_SEND instr_name RV_VLDI instr_id 234 PC 10d0d238
+[info] 1636 send_stat_to_idu, ooo_stat=(preg freed num:2, vreg freed num:0) preg avail num:6 vreg avail num:44
+[info] [PERF] [0000001636] OOO_RECV instr_name RV_VCMP_EQ instr_id 235 PC 10d0d23c
+[info] [PERF] [0000001636] OOO_RECV instr_name RV_POR instr_id 237 PC 10d0d240
+[info] [PERF] [0000001636] OOO_SEND instr_name RV_VCMP_EQ instr_id 235 PC 10d0d23c
+[info] [PERF] [0000001636] OOO_SEND instr_name RV_POR instr_id 237 PC 10d0d240
+[info] 1637 send_stat_to_idu, ooo_stat=(preg freed num:2, vreg freed num:2) preg avail num:6 vreg avail num:46
+[info] [PERF] [0000001637] OOO_RECV instr_name RV_VCMP_LE instr_id 238 PC 10d0d244
+[info] [PERF] [0000001637] OOO_RECV instr_name RV_VCMP_EQ instr_id 240 PC 10d0d248
+[info] [PERF] [0000001637] OOO_SEND instr_name RV_VCMP_LE instr_id 238 PC 10d0d244
+[info] [PERF] [0000001637] OOO_SEND instr_name RV_VCMP_EQ instr_id 240 PC 10d0d248
+[info] 1638 send_stat_to_idu, ooo_stat=(preg freed num:1, vreg freed num:0) preg avail num:5 vreg avail num:46
+[info] [PERF] [0000001638] OOO_RECV instr_name RV_PAND instr_id 241 PC 10d0d24c
+[info] [PERF] [0000001638] OOO_SEND instr_name RV_PAND instr_id 241 PC 10d0d24c
+[info] 1639 send_stat_to_idu, ooo_stat=(preg freed num:1, vreg freed num:0) preg avail num:5 vreg avail num:46
+[info] [PERF] [0000001639] OOO_RECV instr_name RV_POR instr_id 243 PC 10d0d250
+[info] [PERF] [0000001639] OOO_SEND instr_name RV_POR instr_id 243 PC 10d0d250
+[info] 1640 send_stat_to_idu, ooo_stat=(preg freed num:2, vreg freed num:1) preg avail num:6 vreg avail num:47
+[info] [PERF] [0000001640] OOO_RECV instr_name RV_VSEL instr_id 245 PC 10d0d254
+[info] [PERF] [0000001640] OOO_RECV instr_name RV_VCVT_I2I instr_id 247 PC 10d0d258
+[info] [PERF] [0000001640] OOO_RECV instr_name RV_VSTI instr_id 248 PC 10d0d25c
+[info] [PERF] [0000001640] OOO_RECV instr_name RV_VLDI instr_id 249 PC 10d0d234
+[info] [PERF] [0000001640] OOO_RECV instr_name RV_VLDI instr_id 250 PC 10d0d238
+[info] [PERF] [0000001640] OOO_SEND instr_name RV_VSEL instr_id 245 PC 10d0d254
+[info] [PERF] [0000001640] OOO_SEND instr_name RV_VCVT_I2I instr_id 247 PC 10d0d258
+[info] [PERF] [0000001640] OOO_SEND instr_name RV_VSTI instr_id 248 PC 10d0d25c
+[info] [PERF] [0000001640] OOO_SEND instr_name RV_VLDI instr_id 249 PC 10d0d234
+[info] [PERF] [0000001640] OOO_SEND instr_name RV_VLDI instr_id 250 PC 10d0d238
+[info] 1641 send_stat_to_idu, ooo_stat=(preg freed num:0, vreg freed num:1) preg avail num:6 vreg avail num:44
+[info] [PERF] [0000001641] OOO_RECV instr_name RV_VCMP_EQ instr_id 251 PC 10d0d23c
+[info] [PERF] [0000001641] OOO_RECV instr_name RV_POR instr_id 253 PC 10d0d240
+[info] [PERF] [0000001641] OOO_SEND instr_name RV_VCMP_EQ instr_id 251 PC 10d0d23c
+[info] [PERF] [0000001641] OOO_SEND instr_name RV_POR instr_id 253 PC 10d0d240
+[info] 1642 send_stat_to_idu, ooo_stat=(preg freed num:1, vreg freed num:2) preg avail num:5 vreg avail num:46
+[info] [PERF] [0000001642] OOO_RECV instr_name RV_VCMP_LE instr_id 254 PC 10d0d244
+[info] [PERF] [0000001642] OOO_RECV instr_name RV_VCMP_EQ instr_id 256 PC 10d0d248
+[info] [PERF] [0000001642] OOO_RECV instr_name RV_PAND instr_id 257 PC 10d0d24c
+[info] [PERF] [0000001642] OOO_SEND instr_name RV_VCMP_LE instr_id 254 PC 10d0d244
+[info] [PERF] [0000001642] OOO_SEND instr_name RV_VCMP_EQ instr_id 256 PC 10d0d248
+[info] [PERF] [0000001642] OOO_SEND instr_name RV_PAND instr_id 257 PC 10d0d24c
+[info] 1643 send_stat_to_idu, ooo_stat=(preg freed num:1, vreg freed num:0) preg avail num:3 vreg avail num:46
+[info] [PERF] [0000001643] OOO_RECV instr_name RV_POR instr_id 259 PC 10d0d250
+[info] [PERF] [0000001643] OOO_SEND instr_name RV_POR instr_id 259 PC 10d0d250
+[info] 1644 send_stat_to_idu, ooo_stat=(preg freed num:0, vreg freed num:1) preg avail num:2 vreg avail num:47
+[info] [PERF] [0000001644] OOO_RECV instr_name RV_VSEL instr_id 261 PC 10d0d254
+[info] [PERF] [0000001644] OOO_RECV instr_name RV_VCVT_I2I instr_id 263 PC 10d0d258
+[info] [PERF] [0000001644] OOO_RECV instr_name RV_VSTI instr_id 264 PC 10d0d25c
+[info] [PERF] [0000001644] OOO_RECV instr_name RV_VLDI instr_id 265 PC 10d0d234
+[info] [PERF] [0000001644] OOO_RECV instr_name RV_VLDI instr_id 266 PC 10d0d238
+[info] [PERF] [0000001644] OOO_SEND instr_name RV_VSEL instr_id 261 PC 10d0d254
+[info] [PERF] [0000001644] OOO_SEND instr_name RV_VCVT_I2I instr_id 263 PC 10d0d258
+[info] [PERF] [0000001644] OOO_SEND instr_name RV_VSTI instr_id 264 PC 10d0d25c
+[info] [PERF] [0000001644] OOO_SEND instr_name RV_VLDI instr_id 265 PC 10d0d234
+[info] [PERF] [0000001644] OOO_SEND instr_name RV_VLDI instr_id 266 PC 10d0d238
+[info] 1645 send_stat_to_idu, ooo_stat=(preg freed num:0, vreg freed num:1) preg avail num:2 vreg avail num:44
+[info] [PERF] [0000001645] OOO_RECV instr_name RV_VCMP_EQ instr_id 267 PC 10d0d23c
+[info] [PERF] [0000001645] OOO_RECV instr_name RV_POR instr_id 269 PC 10d0d240
+[info] [PERF] [0000001645] OOO_SEND instr_name RV_VCMP_EQ instr_id 267 PC 10d0d23c
+[info] [PERF] [0000001645] OOO_SEND instr_name RV_POR instr_id 269 PC 10d0d240
+[info] 1646 send_stat_to_idu, ooo_stat=(preg freed num:2, vreg freed num:2) preg avail num:2 vreg avail num:46
+[info] 1647 send_stat_to_idu, ooo_stat=(preg freed num:1, vreg freed num:0) preg avail num:3 vreg avail num:46
+[info] 1648 send_stat_to_idu, ooo_stat=(preg freed num:2, vreg freed num:0) preg avail num:5 vreg avail num:46
+[info] [PERF] [0000001648] OOO_RECV instr_name RV_VCMP_LE instr_id 270 PC 10d0d244
+[info] [PERF] [0000001648] OOO_RECV instr_name RV_VCMP_EQ instr_id 272 PC 10d0d248
+[info] [PERF] [0000001648] OOO_SEND instr_name RV_VCMP_LE instr_id 270 PC 10d0d244
+[info] [PERF] [0000001648] OOO_SEND instr_name RV_VCMP_EQ instr_id 272 PC 10d0d248
+[info] 1649 send_stat_to_idu, ooo_stat=(preg freed num:2, vreg freed num:0) preg avail num:5 vreg avail num:46
+[info] [PERF] [0000001649] OOO_RECV instr_name RV_PAND instr_id 273 PC 10d0d24c
+[info] [PERF] [0000001649] OOO_SEND instr_name RV_PAND instr_id 273 PC 10d0d24c
+[info] 1650 send_stat_to_idu, ooo_stat=(preg freed num:0, vreg freed num:1) preg avail num:4 vreg avail num:47
+[info] [PERF] [0000001650] OOO_RECV instr_name RV_POR instr_id 274 PC 10d0d250
+[info] [PERF] [0000001650] OOO_SEND instr_name RV_POR instr_id 274 PC 10d0d250
+[info] 1651 send_stat_to_idu, ooo_stat=(preg freed num:2, vreg freed num:1) preg avail num:5 vreg avail num:48
+[info] [PERF] [0000001651] OOO_RECV instr_name RV_VSEL instr_id 276 PC 10d0d254
+[info] [PERF] [0000001651] OOO_RECV instr_name RV_VCVT_I2I instr_id 278 PC 10d0d258
+[info] [PERF] [0000001651] OOO_RECV instr_name RV_VSTI instr_id 279 PC 10d0d25c
+[info] [PERF] [0000001651] OOO_RECV instr_name RV_VLDI instr_id 280 PC 10d0d234
+[info] [PERF] [0000001651] OOO_RECV instr_name RV_VLDI instr_id 281 PC 10d0d238
+[info] [PERF] [0000001651] OOO_SEND instr_name RV_VSEL instr_id 276 PC 10d0d254
+[info] [PERF] [0000001651] OOO_SEND instr_name RV_VCVT_I2I instr_id 278 PC 10d0d258
+[info] [PERF] [0000001651] OOO_SEND instr_name RV_VSTI instr_id 279 PC 10d0d25c
+[info] [PERF] [0000001651] OOO_SEND instr_name RV_VLDI instr_id 280 PC 10d0d234
+[info] [PERF] [0000001651] OOO_SEND instr_name RV_VLDI instr_id 281 PC 10d0d238
+[info] 1652 send_stat_to_idu, ooo_stat=(preg freed num:1, vreg freed num:0) preg avail num:6 vreg avail num:44
+[info] [PERF] [0000001652] OOO_RECV instr_name RV_VCMP_EQ instr_id 282 PC 10d0d23c
+[info] [PERF] [0000001652] OOO_RECV instr_name RV_POR instr_id 284 PC 10d0d240
+[info] [PERF] [0000001652] OOO_SEND instr_name RV_VCMP_EQ instr_id 282 PC 10d0d23c
+[info] [PERF] [0000001652] OOO_SEND instr_name RV_POR instr_id 284 PC 10d0d240
+[info] 1653 send_stat_to_idu, ooo_stat=(preg freed num:0, vreg freed num:2) preg avail num:4 vreg avail num:46
+[info] [PERF] [0000001653] OOO_RECV instr_name RV_VCMP_LE instr_id 285 PC 10d0d244
+[info] [PERF] [0000001653] OOO_RECV instr_name RV_VCMP_EQ instr_id 289 PC 10d0d248
+[info] [PERF] [0000001653] OOO_RECV instr_name RV_PAND instr_id 290 PC 10d0d24c
+[info] [PERF] [0000001653] OOO_SEND instr_name RV_VCMP_LE instr_id 285 PC 10d0d244
+[info] [PERF] [0000001653] OOO_SEND instr_name RV_VCMP_EQ instr_id 289 PC 10d0d248
+[info] [PERF] [0000001653] OOO_SEND instr_name RV_PAND instr_id 290 PC 10d0d24c
+[info] 1654 send_stat_to_idu, ooo_stat=(preg freed num:1, vreg freed num:1) preg avail num:2 vreg avail num:47
+[info] [PERF] [0000001654] OOO_RECV instr_name RV_POR instr_id 292 PC 10d0d250
+[info] [PERF] [0000001654] OOO_SEND instr_name RV_POR instr_id 292 PC 10d0d250
+[info] 1655 send_stat_to_idu, ooo_stat=(preg freed num:3, vreg freed num:0) preg avail num:4 vreg avail num:47
+[info] [PERF] [0000001655] OOO_RECV instr_name RV_VSEL instr_id 294 PC 10d0d254
+[info] [PERF] [0000001655] OOO_RECV instr_name RV_VCVT_I2I instr_id 296 PC 10d0d258
+[info] [PERF] [0000001655] OOO_RECV instr_name RV_VSTI instr_id 297 PC 10d0d25c
+[info] [PERF] [0000001655] OOO_RECV instr_name RV_VLDI instr_id 298 PC 10d0d234
+[info] [PERF] [0000001655] OOO_RECV instr_name RV_VLDI instr_id 299 PC 10d0d238
+[info] [PERF] [0000001655] OOO_SEND instr_name RV_VSEL instr_id 294 PC 10d0d254
+[info] [PERF] [0000001655] OOO_SEND instr_name RV_VCVT_I2I instr_id 296 PC 10d0d258
+[info] [PERF] [0000001655] OOO_SEND instr_name RV_VSTI instr_id 297 PC 10d0d25c
+[info] [PERF] [0000001655] OOO_SEND instr_name RV_VLDI instr_id 298 PC 10d0d234
+[info] [PERF] [0000001655] OOO_SEND instr_name RV_VLDI instr_id 299 PC 10d0d238
+[info] 1656 send_stat_to_idu, ooo_stat=(preg freed num:0, vreg freed num:1) preg avail num:4 vreg avail num:44
+[info] [PERF] [0000001656] OOO_RECV instr_name RV_VCMP_EQ instr_id 300 PC 10d0d23c
+[info] [PERF] [0000001656] OOO_SEND instr_name RV_VCMP_EQ instr_id 300 PC 10d0d23c
+[info] 1657 send_stat_to_idu, ooo_stat=(preg freed num:1, vreg freed num:0) preg avail num:4 vreg avail num:44
+[info] [PERF] [0000001657] OOO_RECV instr_name RV_POR instr_id 302 PC 10d0d240
+[info] [PERF] [0000001657] OOO_SEND instr_name RV_POR instr_id 302 PC 10d0d240
+[info] 1658 send_stat_to_idu, ooo_stat=(preg freed num:0, vreg freed num:1) preg avail num:3 vreg avail num:45
+[info] [PERF] [0000001658] OOO_RECV instr_name RV_VCMP_LE instr_id 303 PC 10d0d244
+[info] [PERF] [0000001658] OOO_RECV instr_name RV_VCMP_EQ instr_id 305 PC 10d0d248
+[info] [PERF] [0000001658] OOO_SEND instr_name RV_VCMP_LE instr_id 303 PC 10d0d244
+[info] [PERF] [0000001658] OOO_SEND instr_name RV_VCMP_EQ instr_id 305 PC 10d0d248
+[info] 1659 send_stat_to_idu, ooo_stat=(preg freed num:2, vreg freed num:1) preg avail num:3 vreg avail num:46
+[info] [PERF] [0000001659] OOO_RECV instr_name RV_PAND instr_id 306 PC 10d0d24c
+[info] [PERF] [0000001659] OOO_SEND instr_name RV_PAND instr_id 306 PC 10d0d24c
+[info] 1661 send_stat_to_idu, ooo_stat=(preg freed num:0, vreg freed num:2) preg avail num:2 vreg avail num:48
+[info] [PERF] [0000001661] OOO_RECV instr_name RV_POR instr_id 307 PC 10d0d250
+[info] [PERF] [0000001661] OOO_SEND instr_name RV_POR instr_id 307 PC 10d0d250
+[info] 1662 send_stat_to_idu, ooo_stat=(preg freed num:1, vreg freed num:1) preg avail num:2 vreg avail num:49
+[info] [PERF] [0000001662] OOO_RECV instr_name RV_VSEL instr_id 309 PC 10d0d254
+[info] [PERF] [0000001662] OOO_RECV instr_name RV_VCVT_I2I instr_id 311 PC 10d0d258
+[info] [PERF] [0000001662] OOO_RECV instr_name RV_VSTI instr_id 312 PC 10d0d25c
+[info] [PERF] [0000001662] OOO_RECV instr_name RV_VLDI instr_id 313 PC 10d0d234
+[info] [PERF] [0000001662] OOO_RECV instr_name RV_VLDI instr_id 314 PC 10d0d238
+[info] [PERF] [0000001662] OOO_SEND instr_name RV_VSEL instr_id 309 PC 10d0d254
+[info] [PERF] [0000001662] OOO_SEND instr_name RV_VCVT_I2I instr_id 311 PC 10d0d258
+[info] [PERF] [0000001662] OOO_SEND instr_name RV_VSTI instr_id 312 PC 10d0d25c
+[info] [PERF] [0000001662] OOO_SEND instr_name RV_VLDI instr_id 313 PC 10d0d234
+[info] [PERF] [0000001662] OOO_SEND instr_name RV_VLDI instr_id 314 PC 10d0d238
+[info] 1663 send_stat_to_idu, ooo_stat=(preg freed num:2, vreg freed num:1) preg avail num:4 vreg avail num:46
+[info] [PERF] [0000001663] OOO_RECV instr_name RV_VCMP_EQ instr_id 315 PC 10d0d23c
+[info] [PERF] [0000001663] OOO_SEND instr_name RV_VCMP_EQ instr_id 315 PC 10d0d23c
+[info] 1664 send_stat_to_idu, ooo_stat=(preg freed num:0, vreg freed num:1) preg avail num:3 vreg avail num:47
+[info] [PERF] [0000001664] OOO_RECV instr_name RV_POR instr_id 317 PC 10d0d240
+[info] [PERF] [0000001664] OOO_SEND instr_name RV_POR instr_id 317 PC 10d0d240
+[info] 1665 send_stat_to_idu, ooo_stat=(preg freed num:3, vreg freed num:0) preg avail num:5 vreg avail num:47
+[info] [PERF] [0000001665] OOO_RECV instr_name RV_VCMP_LE instr_id 319 PC 10d0d244
+[info] [PERF] [0000001665] OOO_RECV instr_name RV_VCMP_EQ instr_id 321 PC 10d0d248
+[info] [PERF] [0000001665] OOO_SEND instr_name RV_VCMP_LE instr_id 319 PC 10d0d244
+[info] [PERF] [0000001665] OOO_SEND instr_name RV_VCMP_EQ instr_id 321 PC 10d0d248
+[info] 1667 send_stat_to_idu, ooo_stat=(preg freed num:2, vreg freed num:1) preg avail num:5 vreg avail num:48
+[info] [PERF] [0000001667] OOO_RECV instr_name RV_PAND instr_id 322 PC 10d0d24c
+[info] [PERF] [0000001667] OOO_SEND instr_name RV_PAND instr_id 322 PC 10d0d24c
+[info] 1668 send_stat_to_idu, ooo_stat=(preg freed num:2, vreg freed num:0) preg avail num:6 vreg avail num:48
+[info] [PERF] [0000001668] OOO_RECV instr_name RV_POR instr_id 324 PC 10d0d250
+[info] [PERF] [0000001668] OOO_SEND instr_name RV_POR instr_id 324 PC 10d0d250
+[info] 1669 send_stat_to_idu, ooo_stat=(preg freed num:2, vreg freed num:1) preg avail num:7 vreg avail num:49
+[info] [PERF] [0000001669] OOO_RECV instr_name RV_VSEL instr_id 327 PC 10d0d254
+[info] [PERF] [0000001669] OOO_RECV instr_name RV_VCVT_I2I instr_id 329 PC 10d0d258
+[info] [PERF] [0000001669] OOO_RECV instr_name RV_VSTI instr_id 330 PC 10d0d25c
+[info] [PERF] [0000001669] OOO_RECV instr_name RV_VLDI instr_id 331 PC 10d0d234
+[info] [PERF] [0000001669] OOO_RECV instr_name RV_VLDI instr_id 332 PC 10d0d238
+[info] [PERF] [0000001669] OOO_SEND instr_name RV_VSEL instr_id 327 PC 10d0d254
+[info] [PERF] [0000001669] OOO_SEND instr_name RV_VCVT_I2I instr_id 329 PC 10d0d258
+[info] [PERF] [0000001669] OOO_SEND instr_name RV_VSTI instr_id 330 PC 10d0d25c
+[info] [PERF] [0000001669] OOO_SEND instr_name RV_VLDI instr_id 331 PC 10d0d234
+[info] [PERF] [0000001669] OOO_SEND instr_name RV_VLDI instr_id 332 PC 10d0d238
+[info] 1670 send_stat_to_idu, ooo_stat=(preg freed num:1, vreg freed num:0) preg avail num:8 vreg avail num:45
+[info] [PERF] [0000001670] OOO_RECV instr_name RV_VCMP_EQ instr_id 333 PC 10d0d23c
+[info] [PERF] [0000001670] OOO_RECV instr_name RV_POR instr_id 335 PC 10d0d240
+[info] [PERF] [0000001670] OOO_SEND instr_name RV_VCMP_EQ instr_id 333 PC 10d0d23c
+[info] [PERF] [0000001670] OOO_SEND instr_name RV_POR instr_id 335 PC 10d0d240
+[info] 1671 send_stat_to_idu, ooo_stat=(preg freed num:2, vreg freed num:0) preg avail num:8 vreg avail num:45
+[info] [PERF] [0000001671] OOO_RECV instr_name RV_VCMP_LE instr_id 337 PC 10d0d244
+[info] [PERF] [0000001671] OOO_RECV instr_name RV_VCMP_EQ instr_id 339 PC 10d0d248
+[info] [PERF] [0000001671] OOO_RECV instr_name RV_PAND instr_id 340 PC 10d0d24c
+[info] [PERF] [0000001671] OOO_SEND instr_name RV_VCMP_LE instr_id 337 PC 10d0d244
+[info] [PERF] [0000001671] OOO_SEND instr_name RV_VCMP_EQ instr_id 339 PC 10d0d248
+[info] [PERF] [0000001671] OOO_SEND instr_name RV_PAND instr_id 340 PC 10d0d24c
+[info] 1672 send_stat_to_idu, ooo_stat=(preg freed num:1, vreg freed num:1) preg avail num:6 vreg avail num:46
+[info] [PERF] [0000001672] OOO_RECV instr_name RV_POR instr_id 343 PC 10d0d250
+[info] [PERF] [0000001672] OOO_SEND instr_name RV_POR instr_id 343 PC 10d0d250
+[info] 1673 send_stat_to_idu, ooo_stat=(preg freed num:1, vreg freed num:1) preg avail num:6 vreg avail num:47
+[info] [PERF] [0000001673] OOO_RECV instr_name RV_VSEL instr_id 345 PC 10d0d254
+[info] [PERF] [0000001673] OOO_RECV instr_name RV_VCVT_I2I instr_id 347 PC 10d0d258
+[info] [PERF] [0000001673] OOO_RECV instr_name RV_VSTI instr_id 348 PC 10d0d25c
+[info] [PERF] [0000001673] OOO_RECV instr_name RV_VLDI instr_id 349 PC 10d0d234
+[info] [PERF] [0000001673] OOO_RECV instr_name RV_VLDI instr_id 350 PC 10d0d238
+[info] [PERF] [0000001673] OOO_SEND instr_name RV_VSEL instr_id 345 PC 10d0d254
+[info] [PERF] [0000001673] OOO_SEND instr_name RV_VCVT_I2I instr_id 347 PC 10d0d258
+[info] [PERF] [0000001673] OOO_SEND instr_name RV_VSTI instr_id 348 PC 10d0d25c
+[info] [PERF] [0000001673] OOO_SEND instr_name RV_VLDI instr_id 349 PC 10d0d234
+[info] [PERF] [0000001673] OOO_SEND instr_name RV_VLDI instr_id 350 PC 10d0d238
+[info] 1674 send_stat_to_idu, ooo_stat=(preg freed num:1, vreg freed num:1) preg avail num:7 vreg avail num:44
+[info] [PERF] [0000001674] OOO_RECV instr_name RV_VCMP_EQ instr_id 351 PC 10d0d23c
+[info] [PERF] [0000001674] OOO_RECV instr_name RV_POR instr_id 353 PC 10d0d240
+[info] [PERF] [0000001674] OOO_SEND instr_name RV_VCMP_EQ instr_id 351 PC 10d0d23c
+[info] [PERF] [0000001674] OOO_SEND instr_name RV_POR instr_id 353 PC 10d0d240
+[info] 1675 send_stat_to_idu, ooo_stat=(preg freed num:1, vreg freed num:0) preg avail num:6 vreg avail num:44
+[info] [PERF] [0000001675] OOO_RECV instr_name RV_VCMP_LE instr_id 354 PC 10d0d244
+[info] [PERF] [0000001675] OOO_RECV instr_name RV_VCMP_EQ instr_id 356 PC 10d0d248
+[info] [PERF] [0000001675] OOO_RECV instr_name RV_PAND instr_id 357 PC 10d0d24c
+[info] [PERF] [0000001675] OOO_SEND instr_name RV_VCMP_LE instr_id 354 PC 10d0d244
+[info] [PERF] [0000001675] OOO_SEND instr_name RV_VCMP_EQ instr_id 356 PC 10d0d248
+[info] [PERF] [0000001675] OOO_SEND instr_name RV_PAND instr_id 357 PC 10d0d24c
+[info] 1676 send_stat_to_idu, ooo_stat=(preg freed num:0, vreg freed num:2) preg avail num:3 vreg avail num:46
+[info] [PERF] [0000001676] OOO_RECV instr_name RV_POR instr_id 358 PC 10d0d250
+[info] [PERF] [0000001676] OOO_SEND instr_name RV_POR instr_id 358 PC 10d0d250
+[info] 1677 send_stat_to_idu, ooo_stat=(preg freed num:0, vreg freed num:1) preg avail num:2 vreg avail num:47
+[info] [PERF] [0000001677] OOO_RECV instr_name RV_VSEL instr_id 360 PC 10d0d254
+[info] [PERF] [0000001677] OOO_RECV instr_name RV_VCVT_I2I instr_id 362 PC 10d0d258
+[info] [PERF] [0000001677] OOO_RECV instr_name RV_VSTI instr_id 363 PC 10d0d25c
+[info] [PERF] [0000001677] OOO_RECV instr_name RV_VLDI instr_id 364 PC 10d0d234
+[info] [PERF] [0000001677] OOO_RECV instr_name RV_VLDI instr_id 365 PC 10d0d238
+[info] [PERF] [0000001677] OOO_SEND instr_name RV_VSEL instr_id 360 PC 10d0d254
+[info] [PERF] [0000001677] OOO_SEND instr_name RV_VCVT_I2I instr_id 362 PC 10d0d258
+[info] [PERF] [0000001677] OOO_SEND instr_name RV_VSTI instr_id 363 PC 10d0d25c
+[info] [PERF] [0000001677] OOO_SEND instr_name RV_VLDI instr_id 364 PC 10d0d234
+[info] [PERF] [0000001677] OOO_SEND instr_name RV_VLDI instr_id 365 PC 10d0d238
+[info] 1678 send_stat_to_idu, ooo_stat=(preg freed num:0, vreg freed num:1) preg avail num:2 vreg avail num:44
+[info] [PERF] [0000001678] OOO_RECV instr_name RV_VCMP_EQ instr_id 366 PC 10d0d23c
+[info] [PERF] [0000001678] OOO_RECV instr_name RV_POR instr_id 368 PC 10d0d240
+[info] [PERF] [0000001678] OOO_SEND instr_name RV_VCMP_EQ instr_id 366 PC 10d0d23c
+[info] [PERF] [0000001678] OOO_SEND instr_name RV_POR instr_id 368 PC 10d0d240
+[info] 1679 send_stat_to_idu, ooo_stat=(preg freed num:0, vreg freed num:2) preg avail num:0 vreg avail num:46
+[info] 1680 send_stat_to_idu, ooo_stat=(preg freed num:2, vreg freed num:1) preg avail num:2 vreg avail num:47
+[info] 1681 send_stat_to_idu, ooo_stat=(preg freed num:1, vreg freed num:1) preg avail num:3 vreg avail num:48
+[info] 1682 send_stat_to_idu, ooo_stat=(preg freed num:2, vreg freed num:0) preg avail num:5 vreg avail num:48
+[info] [PERF] [0000001682] OOO_RECV instr_name RV_VCMP_LE instr_id 369 PC 10d0d244
+[info] [PERF] [0000001682] OOO_RECV instr_name RV_VCMP_EQ instr_id 371 PC 10d0d248
+[info] [PERF] [0000001682] OOO_SEND instr_name RV_VCMP_LE instr_id 369 PC 10d0d244
+[info] [PERF] [0000001682] OOO_SEND instr_name RV_VCMP_EQ instr_id 371 PC 10d0d248
+[info] 1683 send_stat_to_idu, ooo_stat=(preg freed num:2, vreg freed num:0) preg avail num:5 vreg avail num:48
+[info] [PERF] [0000001683] OOO_RECV instr_name RV_PAND instr_id 372 PC 10d0d24c
+[info] [PERF] [0000001683] OOO_SEND instr_name RV_PAND instr_id 372 PC 10d0d24c
+[info] 1684 send_stat_to_idu, ooo_stat=(preg freed num:2, vreg freed num:0) preg avail num:6 vreg avail num:48
+[info] [PERF] [0000001684] OOO_RECV instr_name RV_POR instr_id 373 PC 10d0d250
+[info] [PERF] [0000001684] OOO_SEND instr_name RV_POR instr_id 373 PC 10d0d250
+[info] 1685 send_stat_to_idu, ooo_stat=(preg freed num:2, vreg freed num:0) preg avail num:7 vreg avail num:48
+[info] [PERF] [0000001685] OOO_RECV instr_name RV_VSEL instr_id 375 PC 10d0d254
+[info] [PERF] [0000001685] OOO_RECV instr_name RV_VCVT_I2I instr_id 377 PC 10d0d258
+[info] [PERF] [0000001685] OOO_RECV instr_name RV_VSTI instr_id 378 PC 10d0d25c
+[info] [PERF] [0000001685] OOO_RECV instr_name RV_VLDI instr_id 379 PC 10d0d234
+[info] [PERF] [0000001685] OOO_RECV instr_name RV_VLDI instr_id 380 PC 10d0d238
+[info] [PERF] [0000001685] OOO_SEND instr_name RV_VSEL instr_id 375 PC 10d0d254
+[info] [PERF] [0000001685] OOO_SEND instr_name RV_VCVT_I2I instr_id 377 PC 10d0d258
+[info] [PERF] [0000001685] OOO_SEND instr_name RV_VSTI instr_id 378 PC 10d0d25c
+[info] [PERF] [0000001685] OOO_SEND instr_name RV_VLDI instr_id 379 PC 10d0d234
+[info] [PERF] [0000001685] OOO_SEND instr_name RV_VLDI instr_id 380 PC 10d0d238
+[info] 1686 send_stat_to_idu, ooo_stat=(preg freed num:1, vreg freed num:0) preg avail num:8 vreg avail num:44
+[info] [PERF] [0000001686] OOO_RECV instr_name RV_VCMP_EQ instr_id 381 PC 10d0d23c
+[info] [PERF] [0000001686] OOO_RECV instr_name RV_POR instr_id 383 PC 10d0d240
+[info] [PERF] [0000001686] OOO_SEND instr_name RV_VCMP_EQ instr_id 381 PC 10d0d23c
+[info] [PERF] [0000001686] OOO_SEND instr_name RV_POR instr_id 383 PC 10d0d240
+[info] 1687 send_stat_to_idu, ooo_stat=(preg freed num:2, vreg freed num:1) preg avail num:8 vreg avail num:45
+[info] [PERF] [0000001687] OOO_RECV instr_name RV_VCMP_LE instr_id 384 PC 10d0d244
+[info] [PERF] [0000001687] OOO_RECV instr_name RV_VCMP_EQ instr_id 389 PC 10d0d248
+[info] [PERF] [0000001687] OOO_RECV instr_name RV_PAND instr_id 390 PC 10d0d24c
+[info] [PERF] [0000001687] OOO_SEND instr_name RV_VCMP_LE instr_id 384 PC 10d0d244
+[info] [PERF] [0000001687] OOO_SEND instr_name RV_VCMP_EQ instr_id 389 PC 10d0d248
+[info] [PERF] [0000001687] OOO_SEND instr_name RV_PAND instr_id 390 PC 10d0d24c
+[info] 1688 send_stat_to_idu, ooo_stat=(preg freed num:1, vreg freed num:1) preg avail num:6 vreg avail num:46
+[info] [PERF] [0000001688] OOO_RECV instr_name RV_POR instr_id 392 PC 10d0d250
+[info] [PERF] [0000001688] OOO_SEND instr_name RV_POR instr_id 392 PC 10d0d250
+[info] 1689 send_stat_to_idu, ooo_stat=(preg freed num:1, vreg freed num:0) preg avail num:6 vreg avail num:46
+[info] [PERF] [0000001689] OOO_RECV instr_name RV_VSEL instr_id 394 PC 10d0d254
+[info] [PERF] [0000001689] OOO_RECV instr_name RV_VCVT_I2I instr_id 396 PC 10d0d258
+[info] [PERF] [0000001689] OOO_RECV instr_name RV_VSTI instr_id 397 PC 10d0d25c
+[info] [PERF] [0000001689] OOO_RECV instr_name RV_VLDI instr_id 398 PC 10d0d234
+[info] [PERF] [0000001689] OOO_RECV instr_name RV_VLDI instr_id 399 PC 10d0d238
+[info] [PERF] [0000001689] OOO_SEND instr_name RV_VSEL instr_id 394 PC 10d0d254
+[info] [PERF] [0000001689] OOO_SEND instr_name RV_VCVT_I2I instr_id 396 PC 10d0d258
+[info] [PERF] [0000001689] OOO_SEND instr_name RV_VSTI instr_id 397 PC 10d0d25c
+[info] [PERF] [0000001689] OOO_SEND instr_name RV_VLDI instr_id 398 PC 10d0d234
+[info] [PERF] [0000001689] OOO_SEND instr_name RV_VLDI instr_id 399 PC 10d0d238
+[info] 1690 send_stat_to_idu, ooo_stat=(preg freed num:1, vreg freed num:1) preg avail num:7 vreg avail num:43
+[info] [PERF] [0000001690] OOO_RECV instr_name RV_VCMP_EQ instr_id 400 PC 10d0d23c
+[info] [PERF] [0000001690] OOO_RECV instr_name RV_POR instr_id 402 PC 10d0d240
+[info] [PERF] [0000001690] OOO_SEND instr_name RV_VCMP_EQ instr_id 400 PC 10d0d23c
+[info] [PERF] [0000001690] OOO_SEND instr_name RV_POR instr_id 402 PC 10d0d240
+[info] 1691 send_stat_to_idu, ooo_stat=(preg freed num:0, vreg freed num:1) preg avail num:5 vreg avail num:44
+[info] [PERF] [0000001691] OOO_RECV instr_name RV_VCMP_LE instr_id 403 PC 10d0d244
+[info] [PERF] [0000001691] OOO_RECV instr_name RV_VCMP_EQ instr_id 405 PC 10d0d248
+[info] [PERF] [0000001691] OOO_RECV instr_name RV_PAND instr_id 406 PC 10d0d24c
+[info] [PERF] [0000001691] OOO_SEND instr_name RV_VCMP_LE instr_id 403 PC 10d0d244
+[info] [PERF] [0000001691] OOO_SEND instr_name RV_VCMP_EQ instr_id 405 PC 10d0d248
+[info] [PERF] [0000001691] OOO_SEND instr_name RV_PAND instr_id 406 PC 10d0d24c
+[info] 1692 send_stat_to_idu, ooo_stat=(preg freed num:0, vreg freed num:1) preg avail num:2 vreg avail num:45
+[info] [PERF] [0000001692] OOO_RECV instr_name RV_POR instr_id 407 PC 10d0d250
+[info] [PERF] [0000001692] OOO_SEND instr_name RV_POR instr_id 407 PC 10d0d250
+[info] 1693 send_stat_to_idu, ooo_stat=(preg freed num:0, vreg freed num:3) preg avail num:1 vreg avail num:48
+[info] [PERF] [0000001693] OOO_RECV instr_name RV_VSEL instr_id 409 PC 10d0d254
+[info] [PERF] [0000001693] OOO_RECV instr_name RV_VCVT_I2I instr_id 411 PC 10d0d258
+[info] [PERF] [0000001693] OOO_RECV instr_name RV_VSTI instr_id 412 PC 10d0d25c
+[info] [PERF] [0000001693] OOO_RECV instr_name RV_VLDI instr_id 413 PC 10d0d234
+[info] [PERF] [0000001693] OOO_RECV instr_name RV_VLDI instr_id 414 PC 10d0d238
+[info] [PERF] [0000001693] OOO_SEND instr_name RV_VSEL instr_id 409 PC 10d0d254
+[info] [PERF] [0000001693] OOO_SEND instr_name RV_VCVT_I2I instr_id 411 PC 10d0d258
+[info] [PERF] [0000001693] OOO_SEND instr_name RV_VSTI instr_id 412 PC 10d0d25c
+[info] [PERF] [0000001693] OOO_SEND instr_name RV_VLDI instr_id 413 PC 10d0d234
+[info] [PERF] [0000001693] OOO_SEND instr_name RV_VLDI instr_id 414 PC 10d0d238
+[info] 1694 send_stat_to_idu, ooo_stat=(preg freed num:3, vreg freed num:0) preg avail num:4 vreg avail num:44
+[info] [PERF] [0000001694] OOO_RECV instr_name RV_VCMP_EQ instr_id 415 PC 10d0d23c
+[info] [PERF] [0000001694] OOO_SEND instr_name RV_VCMP_EQ instr_id 415 PC 10d0d23c
+[info] 1695 send_stat_to_idu, ooo_stat=(preg freed num:0, vreg freed num:1) preg avail num:3 vreg avail num:45
+[info] 1696 send_stat_to_idu, ooo_stat=(preg freed num:0, vreg freed num:1) preg avail num:3 vreg avail num:46
+[info] [PERF] [0000001696] OOO_RECV instr_name RV_POR instr_id 417 PC 10d0d240
+[info] [PERF] [0000001696] OOO_SEND instr_name RV_POR instr_id 417 PC 10d0d240
+[info] 1697 send_stat_to_idu, ooo_stat=(preg freed num:2, vreg freed num:0) preg avail num:4 vreg avail num:46
+[info] [PERF] [0000001697] OOO_RECV instr_name RV_VCMP_LE instr_id 418 PC 10d0d244
+[info] [PERF] [0000001697] OOO_RECV instr_name RV_VCMP_EQ instr_id 420 PC 10d0d248
+[info] [PERF] [0000001697] OOO_SEND instr_name RV_VCMP_LE instr_id 418 PC 10d0d244
+[info] [PERF] [0000001697] OOO_SEND instr_name RV_VCMP_EQ instr_id 420 PC 10d0d248
+[info] 1698 send_stat_to_idu, ooo_stat=(preg freed num:2, vreg freed num:1) preg avail num:4 vreg avail num:47
+[info] 1699 send_stat_to_idu, ooo_stat=(preg freed num:0, vreg freed num:1) preg avail num:4 vreg avail num:48
+[info] [PERF] [0000001699] OOO_RECV instr_name RV_PAND instr_id 421 PC 10d0d24c
+[info] [PERF] [0000001699] OOO_SEND instr_name RV_PAND instr_id 421 PC 10d0d24c
+[info] 1700 send_stat_to_idu, ooo_stat=(preg freed num:2, vreg freed num:0) preg avail num:5 vreg avail num:48
+[info] [PERF] [0000001700] OOO_RECV instr_name RV_POR instr_id 422 PC 10d0d250
+[info] [PERF] [0000001700] OOO_SEND instr_name RV_POR instr_id 422 PC 10d0d250
+[info] 1701 send_stat_to_idu, ooo_stat=(preg freed num:0, vreg freed num:1) preg avail num:4 vreg avail num:49
+[info] [PERF] [0000001701] OOO_RECV instr_name RV_VSEL instr_id 424 PC 10d0d254
+[info] [PERF] [0000001701] OOO_RECV instr_name RV_VCVT_I2I instr_id 426 PC 10d0d258
+[info] [PERF] [0000001701] OOO_RECV instr_name RV_VSTI instr_id 427 PC 10d0d25c
+[info] [PERF] [0000001701] OOO_RECV instr_name RV_VLDI instr_id 428 PC 10d0d234
+[info] [PERF] [0000001701] OOO_RECV instr_name RV_VLDI instr_id 429 PC 10d0d238
+[info] [PERF] [0000001701] OOO_SEND instr_name RV_VSEL instr_id 424 PC 10d0d254
+[info] [PERF] [0000001701] OOO_SEND instr_name RV_VCVT_I2I instr_id 426 PC 10d0d258
+[info] [PERF] [0000001701] OOO_SEND instr_name RV_VSTI instr_id 427 PC 10d0d25c
+[info] [PERF] [0000001701] OOO_SEND instr_name RV_VLDI instr_id 428 PC 10d0d234
+[info] [PERF] [0000001701] OOO_SEND instr_name RV_VLDI instr_id 429 PC 10d0d238
+[info] 1702 send_stat_to_idu, ooo_stat=(preg freed num:0, vreg freed num:1) preg avail num:4 vreg avail num:46
+[info] [PERF] [0000001702] OOO_RECV instr_name RV_VCMP_EQ instr_id 430 PC 10d0d23c
+[info] [PERF] [0000001702] OOO_RECV instr_name RV_POR instr_id 432 PC 10d0d240
+[info] [PERF] [0000001702] OOO_SEND instr_name RV_VCMP_EQ instr_id 430 PC 10d0d23c
+[info] [PERF] [0000001702] OOO_SEND instr_name RV_POR instr_id 432 PC 10d0d240
+[info] 1703 send_stat_to_idu, ooo_stat=(preg freed num:4, vreg freed num:0) preg avail num:6 vreg avail num:46
+[info] [PERF] [0000001703] OOO_RECV instr_name RV_VCMP_LE instr_id 435 PC 10d0d244
+[info] [PERF] [0000001703] OOO_RECV instr_name RV_VCMP_EQ instr_id 437 PC 10d0d248
+[info] [PERF] [0000001703] OOO_SEND instr_name RV_VCMP_LE instr_id 435 PC 10d0d244
+[info] [PERF] [0000001703] OOO_SEND instr_name RV_VCMP_EQ instr_id 437 PC 10d0d248
+[info] 1705 send_stat_to_idu, ooo_stat=(preg freed num:0, vreg freed num:2) preg avail num:4 vreg avail num:48
+[info] [PERF] [0000001705] OOO_RECV instr_name RV_PAND instr_id 438 PC 10d0d24c
+[info] [PERF] [0000001705] OOO_SEND instr_name RV_PAND instr_id 438 PC 10d0d24c
+[info] 1706 send_stat_to_idu, ooo_stat=(preg freed num:3, vreg freed num:0) preg avail num:6 vreg avail num:48
+[info] [PERF] [0000001706] OOO_RECV instr_name RV_POR instr_id 441 PC 10d0d250
+[info] [PERF] [0000001706] OOO_SEND instr_name RV_POR instr_id 441 PC 10d0d250
+[info] 1707 send_stat_to_idu, ooo_stat=(preg freed num:0, vreg freed num:1) preg avail num:5 vreg avail num:49
+[info] [PERF] [0000001707] OOO_RECV instr_name RV_VSEL instr_id 443 PC 10d0d254
+[info] [PERF] [0000001707] OOO_RECV instr_name RV_VCVT_I2I instr_id 445 PC 10d0d258
+[info] [PERF] [0000001707] OOO_RECV instr_name RV_VSTI instr_id 446 PC 10d0d25c
+[info] [PERF] [0000001707] OOO_RECV instr_name RV_VLDI instr_id 447 PC 10d0d234
+[info] [PERF] [0000001707] OOO_RECV instr_name RV_VLDI instr_id 448 PC 10d0d238
+[info] [PERF] [0000001707] OOO_SEND instr_name RV_VSEL instr_id 443 PC 10d0d254
+[info] [PERF] [0000001707] OOO_SEND instr_name RV_VCVT_I2I instr_id 445 PC 10d0d258
+[info] [PERF] [0000001707] OOO_SEND instr_name RV_VSTI instr_id 446 PC 10d0d25c
+[info] [PERF] [0000001707] OOO_SEND instr_name RV_VLDI instr_id 447 PC 10d0d234
+[info] [PERF] [0000001707] OOO_SEND instr_name RV_VLDI instr_id 448 PC 10d0d238
+[info] 1708 send_stat_to_idu, ooo_stat=(preg freed num:0, vreg freed num:2) preg avail num:5 vreg avail num:47
+[info] [PERF] [0000001708] OOO_RECV instr_name RV_VCMP_EQ instr_id 449 PC 10d0d23c
+[info] [PERF] [0000001708] OOO_RECV instr_name RV_POR instr_id 451 PC 10d0d240
+[info] [PERF] [0000001708] OOO_SEND instr_name RV_VCMP_EQ instr_id 449 PC 10d0d23c
+[info] [PERF] [0000001708] OOO_SEND instr_name RV_POR instr_id 451 PC 10d0d240
+[info] 1709 send_stat_to_idu, ooo_stat=(preg freed num:2, vreg freed num:0) preg avail num:5 vreg avail num:47
+[info] [PERF] [0000001709] OOO_RECV instr_name RV_VCMP_LE instr_id 452 PC 10d0d244
+[info] [PERF] [0000001709] OOO_RECV instr_name RV_VCMP_EQ instr_id 454 PC 10d0d248
+[info] [PERF] [0000001709] OOO_RECV instr_name RV_PAND instr_id 455 PC 10d0d24c
+[info] [PERF] [0000001709] OOO_SEND instr_name RV_VCMP_LE instr_id 452 PC 10d0d244
+[info] [PERF] [0000001709] OOO_SEND instr_name RV_VCMP_EQ instr_id 454 PC 10d0d248
+[info] [PERF] [0000001709] OOO_SEND instr_name RV_PAND instr_id 455 PC 10d0d24c
+[info] 1711 send_stat_to_idu, ooo_stat=(preg freed num:0, vreg freed num:1) preg avail num:2 vreg avail num:48
+[info] [PERF] [0000001711] OOO_RECV instr_name RV_POR instr_id 458 PC 10d0d250
+[info] [PERF] [0000001711] OOO_SEND instr_name RV_POR instr_id 458 PC 10d0d250
+[info] 1712 send_stat_to_idu, ooo_stat=(preg freed num:3, vreg freed num:0) preg avail num:4 vreg avail num:48
+[info] [PERF] [0000001712] OOO_RECV instr_name RV_VSEL instr_id 460 PC 10d0d254
+[info] [PERF] [0000001712] OOO_RECV instr_name RV_VCVT_I2I instr_id 462 PC 10d0d258
+[info] [PERF] [0000001712] OOO_RECV instr_name RV_VSTI instr_id 463 PC 10d0d25c
+[info] [PERF] [0000001712] OOO_RECV instr_name RV_VLDI instr_id 464 PC 10d0d234
+[info] [PERF] [0000001712] OOO_RECV instr_name RV_VLDI instr_id 465 PC 10d0d238
+[info] [PERF] [0000001712] OOO_SEND instr_name RV_VSEL instr_id 460 PC 10d0d254
+[info] [PERF] [0000001712] OOO_SEND instr_name RV_VCVT_I2I instr_id 462 PC 10d0d258
+[info] [PERF] [0000001712] OOO_SEND instr_name RV_VSTI instr_id 463 PC 10d0d25c
+[info] [PERF] [0000001712] OOO_SEND instr_name RV_VLDI instr_id 464 PC 10d0d234
+[info] [PERF] [0000001712] OOO_SEND instr_name RV_VLDI instr_id 465 PC 10d0d238
+[info] 1713 send_stat_to_idu, ooo_stat=(preg freed num:0, vreg freed num:1) preg avail num:4 vreg avail num:45
+[info] [PERF] [0000001713] OOO_RECV instr_name RV_VCMP_EQ instr_id 466 PC 10d0d23c
+[info] [PERF] [0000001713] OOO_SEND instr_name RV_VCMP_EQ instr_id 466 PC 10d0d23c
+[info] 1714 send_stat_to_idu, ooo_stat=(preg freed num:0, vreg freed num:2) preg avail num:3 vreg avail num:47
+[info] [PERF] [0000001714] OOO_RECV instr_name RV_POR instr_id 468 PC 10d0d240
+[info] [PERF] [0000001714] OOO_SEND instr_name RV_POR instr_id 468 PC 10d0d240
+[info] 1715 send_stat_to_idu, ooo_stat=(preg freed num:2, vreg freed num:0) preg avail num:4 vreg avail num:47
+[info] [PERF] [0000001715] OOO_RECV instr_name RV_VCMP_LE instr_id 469 PC 10d0d244
+[info] [PERF] [0000001715] OOO_RECV instr_name RV_VCMP_EQ instr_id 471 PC 10d0d248
+[info] [PERF] [0000001715] OOO_SEND instr_name RV_VCMP_LE instr_id 469 PC 10d0d244
+[info] [PERF] [0000001715] OOO_SEND instr_name RV_VCMP_EQ instr_id 471 PC 10d0d248
+[info] 1716 send_stat_to_idu, ooo_stat=(preg freed num:2, vreg freed num:1) preg avail num:4 vreg avail num:48
+[info] 1717 send_stat_to_idu, ooo_stat=(preg freed num:0, vreg freed num:1) preg avail num:4 vreg avail num:49
+[info] [PERF] [0000001717] OOO_RECV instr_name RV_PAND instr_id 472 PC 10d0d24c
+[info] [PERF] [0000001717] OOO_SEND instr_name RV_PAND instr_id 472 PC 10d0d24c
+[info] 1718 send_stat_to_idu, ooo_stat=(preg freed num:2, vreg freed num:0) preg avail num:5 vreg avail num:49
+[info] [PERF] [0000001718] OOO_RECV instr_name RV_POR instr_id 473 PC 10d0d250
+[info] [PERF] [0000001718] OOO_SEND instr_name RV_POR instr_id 473 PC 10d0d250
+[info] 1719 send_stat_to_idu, ooo_stat=(preg freed num:0, vreg freed num:1) preg avail num:4 vreg avail num:50
+[info] [PERF] [0000001719] OOO_RECV instr_name RV_VSEL instr_id 476 PC 10d0d254
+[info] [PERF] [0000001719] OOO_RECV instr_name RV_VCVT_I2I instr_id 478 PC 10d0d258
+[info] [PERF] [0000001719] OOO_RECV instr_name RV_VSTI instr_id 479 PC 10d0d25c
+[info] [PERF] [0000001719] OOO_RECV instr_name RV_VLDI instr_id 480 PC 10d0d234
+[info] [PERF] [0000001719] OOO_RECV instr_name RV_VLDI instr_id 481 PC 10d0d238
+[info] [PERF] [0000001719] OOO_SEND instr_name RV_VSEL instr_id 476 PC 10d0d254
+[info] [PERF] [0000001719] OOO_SEND instr_name RV_VCVT_I2I instr_id 478 PC 10d0d258
+[info] [PERF] [0000001719] OOO_SEND instr_name RV_VSTI instr_id 479 PC 10d0d25c
+[info] [PERF] [0000001719] OOO_SEND instr_name RV_VLDI instr_id 480 PC 10d0d234
+[info] [PERF] [0000001719] OOO_SEND instr_name RV_VLDI instr_id 481 PC 10d0d238
+[info] 1720 send_stat_to_idu, ooo_stat=(preg freed num:2, vreg freed num:0) preg avail num:6 vreg avail num:46
+[info] [PERF] [0000001720] OOO_RECV instr_name RV_VCMP_EQ instr_id 482 PC 10d0d23c
+[info] [PERF] [0000001720] OOO_RECV instr_name RV_POR instr_id 484 PC 10d0d240
+[info] [PERF] [0000001720] OOO_SEND instr_name RV_VCMP_EQ instr_id 482 PC 10d0d23c
+[info] [PERF] [0000001720] OOO_SEND instr_name RV_POR instr_id 484 PC 10d0d240
+[info] 1721 send_stat_to_idu, ooo_stat=(preg freed num:2, vreg freed num:1) preg avail num:6 vreg avail num:47
+[info] [PERF] [0000001721] OOO_RECV instr_name RV_VCMP_LE instr_id 486 PC 10d0d244
+[info] [PERF] [0000001721] OOO_RECV instr_name RV_VCMP_EQ instr_id 488 PC 10d0d248
+[info] [PERF] [0000001721] OOO_SEND instr_name RV_VCMP_LE instr_id 486 PC 10d0d244
+[info] [PERF] [0000001721] OOO_SEND instr_name RV_VCMP_EQ instr_id 488 PC 10d0d248
+[info] 1722 send_stat_to_idu, ooo_stat=(preg freed num:1, vreg freed num:0) preg avail num:5 vreg avail num:47
+[info] [PERF] [0000001722] OOO_RECV instr_name RV_PAND instr_id 489 PC 10d0d24c
+[info] [PERF] [0000001722] OOO_SEND instr_name RV_PAND instr_id 489 PC 10d0d24c
+[info] 1723 send_stat_to_idu, ooo_stat=(preg freed num:1, vreg freed num:0) preg avail num:5 vreg avail num:47
+[info] [PERF] [0000001723] OOO_RECV instr_name RV_POR instr_id 492 PC 10d0d250
+[info] [PERF] [0000001723] OOO_SEND instr_name RV_POR instr_id 492 PC 10d0d250
+[info] 1724 send_stat_to_idu, ooo_stat=(preg freed num:0, vreg freed num:1) preg avail num:4 vreg avail num:48
+[info] [PERF] [0000001724] OOO_RECV instr_name RV_VSEL instr_id 494 PC 10d0d254
+[info] [PERF] [0000001724] OOO_RECV instr_name RV_VCVT_I2I instr_id 496 PC 10d0d258
+[info] [PERF] [0000001724] OOO_RECV instr_name RV_VSTI instr_id 497 PC 10d0d25c
+[info] [PERF] [0000001724] OOO_RECV instr_name RV_VLDI instr_id 498 PC 10d0d234
+[info] [PERF] [0000001724] OOO_RECV instr_name RV_VLDI instr_id 499 PC 10d0d238
+[info] [PERF] [0000001724] OOO_SEND instr_name RV_VSEL instr_id 494 PC 10d0d254
+[info] [PERF] [0000001724] OOO_SEND instr_name RV_VCVT_I2I instr_id 496 PC 10d0d258
+[info] [PERF] [0000001724] OOO_SEND instr_name RV_VSTI instr_id 497 PC 10d0d25c
+[info] [PERF] [0000001724] OOO_SEND instr_name RV_VLDI instr_id 498 PC 10d0d234
+[info] [PERF] [0000001724] OOO_SEND instr_name RV_VLDI instr_id 499 PC 10d0d238
+[info] 1725 send_stat_to_idu, ooo_stat=(preg freed num:0, vreg freed num:2) preg avail num:4 vreg avail num:46
+[info] [PERF] [0000001725] OOO_RECV instr_name RV_VCMP_EQ instr_id 500 PC 10d0d23c
+[info] [PERF] [0000001725] OOO_RECV instr_name RV_POR instr_id 502 PC 10d0d240
+[info] [PERF] [0000001725] OOO_SEND instr_name RV_VCMP_EQ instr_id 500 PC 10d0d23c
+[info] [PERF] [0000001725] OOO_SEND instr_name RV_POR instr_id 502 PC 10d0d240
+[info] 1726 send_stat_to_idu, ooo_stat=(preg freed num:4, vreg freed num:1) preg avail num:6 vreg avail num:47
+[info] [PERF] [0000001726] OOO_RECV instr_name RV_VCMP_LE instr_id 503 PC 10d0d244
+[info] [PERF] [0000001726] OOO_RECV instr_name RV_VCMP_EQ instr_id 505 PC 10d0d248
+[info] [PERF] [0000001726] OOO_SEND instr_name RV_VCMP_LE instr_id 503 PC 10d0d244
+[info] [PERF] [0000001726] OOO_SEND instr_name RV_VCMP_EQ instr_id 505 PC 10d0d248
+[info] 1728 send_stat_to_idu, ooo_stat=(preg freed num:0, vreg freed num:1) preg avail num:4 vreg avail num:48
+[info] [PERF] [0000001728] OOO_RECV instr_name RV_PAND instr_id 506 PC 10d0d24c
+[info] [PERF] [0000001728] OOO_SEND instr_name RV_PAND instr_id 506 PC 10d0d24c
+[info] 1729 send_stat_to_idu, ooo_stat=(preg freed num:3, vreg freed num:0) preg avail num:6 vreg avail num:48
+[info] [PERF] [0000001729] OOO_RECV instr_name RV_POR instr_id 508 PC 10d0d250
+[info] [PERF] [0000001729] OOO_SEND instr_name RV_POR instr_id 508 PC 10d0d250
+[info] 1730 send_stat_to_idu, ooo_stat=(preg freed num:0, vreg freed num:1) preg avail num:5 vreg avail num:49
+[info] [PERF] [0000001730] OOO_RECV instr_name RV_VSEL instr_id 510 PC 10d0d254
+[info] [PERF] [0000001730] OOO_RECV instr_name RV_VCVT_I2I instr_id 512 PC 10d0d258
+[info] [PERF] [0000001730] OOO_RECV instr_name RV_VSTI instr_id 513 PC 10d0d25c
+[info] [PERF] [0000001730] OOO_RECV instr_name RV_VLDI instr_id 514 PC 10d0d234
+[info] [PERF] [0000001730] OOO_RECV instr_name RV_VLDI instr_id 515 PC 10d0d238
+[info] [PERF] [0000001730] OOO_SEND instr_name RV_VSEL instr_id 510 PC 10d0d254
+[info] [PERF] [0000001730] OOO_SEND instr_name RV_VCVT_I2I instr_id 512 PC 10d0d258
+[info] [PERF] [0000001730] OOO_SEND instr_name RV_VSTI instr_id 513 PC 10d0d25c
+[info] [PERF] [0000001730] OOO_SEND instr_name RV_VLDI instr_id 514 PC 10d0d234
+[info] [PERF] [0000001730] OOO_SEND instr_name RV_VLDI instr_id 515 PC 10d0d238
+[info] 1731 send_stat_to_idu, ooo_stat=(preg freed num:0, vreg freed num:2) preg avail num:5 vreg avail num:47
+[info] [PERF] [0000001731] OOO_RECV instr_name RV_VCMP_EQ instr_id 516 PC 10d0d23c
+[info] [PERF] [0000001731] OOO_RECV instr_name RV_POR instr_id 518 PC 10d0d240
+[info] [PERF] [0000001731] OOO_SEND instr_name RV_VCMP_EQ instr_id 516 PC 10d0d23c
+[info] [PERF] [0000001731] OOO_SEND instr_name RV_POR instr_id 518 PC 10d0d240
+[info] 1732 send_stat_to_idu, ooo_stat=(preg freed num:2, vreg freed num:0) preg avail num:5 vreg avail num:47
+[info] [PERF] [0000001732] OOO_RECV instr_name RV_VCMP_LE instr_id 519 PC 10d0d244
+[info] [PERF] [0000001732] OOO_RECV instr_name RV_VCMP_EQ instr_id 521 PC 10d0d248
+[info] [PERF] [0000001732] OOO_RECV instr_name RV_PAND instr_id 522 PC 10d0d24c
+[info] [PERF] [0000001732] OOO_SEND instr_name RV_VCMP_LE instr_id 519 PC 10d0d244
+[info] [PERF] [0000001732] OOO_SEND instr_name RV_VCMP_EQ instr_id 521 PC 10d0d248
+[info] [PERF] [0000001732] OOO_SEND instr_name RV_PAND instr_id 522 PC 10d0d24c
+[info] 1734 send_stat_to_idu, ooo_stat=(preg freed num:0, vreg freed num:1) preg avail num:2 vreg avail num:48
+[info] [PERF] [0000001734] OOO_RECV instr_name RV_POR instr_id 525 PC 10d0d250
+[info] [PERF] [0000001734] OOO_SEND instr_name RV_POR instr_id 525 PC 10d0d250
+[info] 1735 send_stat_to_idu, ooo_stat=(preg freed num:3, vreg freed num:0) preg avail num:4 vreg avail num:48
+[info] [PERF] [0000001735] OOO_RECV instr_name RV_VSEL instr_id 527 PC 10d0d254
+[info] [PERF] [0000001735] OOO_RECV instr_name RV_VCVT_I2I instr_id 529 PC 10d0d258
+[info] [PERF] [0000001735] OOO_RECV instr_name RV_VSTI instr_id 530 PC 10d0d25c
+[info] [PERF] [0000001735] OOO_RECV instr_name RV_VLDI instr_id 531 PC 10d0d234
+[info] [PERF] [0000001735] OOO_RECV instr_name RV_VLDI instr_id 532 PC 10d0d238
+[info] [PERF] [0000001735] OOO_SEND instr_name RV_VSEL instr_id 527 PC 10d0d254
+[info] [PERF] [0000001735] OOO_SEND instr_name RV_VCVT_I2I instr_id 529 PC 10d0d258
+[info] [PERF] [0000001735] OOO_SEND instr_name RV_VSTI instr_id 530 PC 10d0d25c
+[info] [PERF] [0000001735] OOO_SEND instr_name RV_VLDI instr_id 531 PC 10d0d234
+[info] [PERF] [0000001735] OOO_SEND instr_name RV_VLDI instr_id 532 PC 10d0d238
+[info] 1736 send_stat_to_idu, ooo_stat=(preg freed num:0, vreg freed num:1) preg avail num:4 vreg avail num:45
+[info] [PERF] [0000001736] OOO_RECV instr_name RV_VCMP_EQ instr_id 533 PC 10d0d23c
+[info] [PERF] [0000001736] OOO_SEND instr_name RV_VCMP_EQ instr_id 533 PC 10d0d23c
+[info] 1737 send_stat_to_idu, ooo_stat=(preg freed num:0, vreg freed num:2) preg avail num:3 vreg avail num:47
+[info] [PERF] [0000001737] OOO_RECV instr_name RV_POR instr_id 535 PC 10d0d240
+[info] [PERF] [0000001737] OOO_SEND instr_name RV_POR instr_id 535 PC 10d0d240
+[info] 1738 send_stat_to_idu, ooo_stat=(preg freed num:2, vreg freed num:0) preg avail num:4 vreg avail num:47
+[info] [PERF] [0000001738] OOO_RECV instr_name RV_VCMP_LE instr_id 536 PC 10d0d244
+[info] [PERF] [0000001738] OOO_RECV instr_name RV_VCMP_EQ instr_id 538 PC 10d0d248
+[info] [PERF] [0000001738] OOO_SEND instr_name RV_VCMP_LE instr_id 536 PC 10d0d244
+[info] [PERF] [0000001738] OOO_SEND instr_name RV_VCMP_EQ instr_id 538 PC 10d0d248
+[info] 1739 send_stat_to_idu, ooo_stat=(preg freed num:2, vreg freed num:1) preg avail num:4 vreg avail num:48
+[info] 1740 send_stat_to_idu, ooo_stat=(preg freed num:1, vreg freed num:0) preg avail num:5 vreg avail num:48
+[info] [PERF] [0000001740] OOO_RECV instr_name RV_PAND instr_id 539 PC 10d0d24c
+[info] [PERF] [0000001740] OOO_SEND instr_name RV_PAND instr_id 539 PC 10d0d24c
+[info] 1741 send_stat_to_idu, ooo_stat=(preg freed num:1, vreg freed num:0) preg avail num:5 vreg avail num:48
+[info] [PERF] [0000001741] OOO_RECV instr_name RV_POR instr_id 540 PC 10d0d250
+[info] [PERF] [0000001741] OOO_SEND instr_name RV_POR instr_id 540 PC 10d0d250
+[info] 1742 send_stat_to_idu, ooo_stat=(preg freed num:2, vreg freed num:1) preg avail num:6 vreg avail num:49
+[info] [PERF] [0000001742] OOO_RECV instr_name RV_VSEL instr_id 543 PC 10d0d254
+[info] [PERF] [0000001742] OOO_RECV instr_name RV_VCVT_I2I instr_id 545 PC 10d0d258
+[info] [PERF] [0000001742] OOO_RECV instr_name RV_VSTI instr_id 546 PC 10d0d25c
+[info] [PERF] [0000001742] OOO_RECV instr_name RV_VLDI instr_id 547 PC 10d0d234
+[info] [PERF] [0000001742] OOO_RECV instr_name RV_VLDI instr_id 548 PC 10d0d238
+[info] [PERF] [0000001742] OOO_SEND instr_name RV_VSEL instr_id 543 PC 10d0d254
+[info] [PERF] [0000001742] OOO_SEND instr_name RV_VCVT_I2I instr_id 545 PC 10d0d258
+[info] [PERF] [0000001742] OOO_SEND instr_name RV_VSTI instr_id 546 PC 10d0d25c
+[info] [PERF] [0000001742] OOO_SEND instr_name RV_VLDI instr_id 547 PC 10d0d234
+[info] [PERF] [0000001742] OOO_SEND instr_name RV_VLDI instr_id 548 PC 10d0d238
+[info] 1743 send_stat_to_idu, ooo_stat=(preg freed num:0, vreg freed num:1) preg avail num:6 vreg avail num:46
+[info] [PERF] [0000001743] OOO_RECV instr_name RV_VCMP_EQ instr_id 549 PC 10d0d23c
+[info] [PERF] [0000001743] OOO_RECV instr_name RV_POR instr_id 551 PC 10d0d240
+[info] [PERF] [0000001743] OOO_SEND instr_name RV_VCMP_EQ instr_id 549 PC 10d0d23c
+[info] [PERF] [0000001743] OOO_SEND instr_name RV_POR instr_id 551 PC 10d0d240
+[info] 1744 send_stat_to_idu, ooo_stat=(preg freed num:1, vreg freed num:0) preg avail num:5 vreg avail num:46
+[info] [PERF] [0000001744] OOO_RECV instr_name RV_VCMP_LE instr_id 553 PC 10d0d244
+[info] [PERF] [0000001744] OOO_RECV instr_name RV_VCMP_EQ instr_id 555 PC 10d0d248
+[info] [PERF] [0000001744] OOO_RECV instr_name RV_PAND instr_id 556 PC 10d0d24c
+[info] [PERF] [0000001744] OOO_SEND instr_name RV_VCMP_LE instr_id 553 PC 10d0d244
+[info] [PERF] [0000001744] OOO_SEND instr_name RV_VCMP_EQ instr_id 555 PC 10d0d248
+[info] [PERF] [0000001744] OOO_SEND instr_name RV_PAND instr_id 556 PC 10d0d24c
+[info] 1745 send_stat_to_idu, ooo_stat=(preg freed num:1, vreg freed num:0) preg avail num:3 vreg avail num:46
+[info] [PERF] [0000001745] OOO_RECV instr_name RV_POR instr_id 559 PC 10d0d250
+[info] [PERF] [0000001745] OOO_SEND instr_name RV_POR instr_id 559 PC 10d0d250
+[info] 1746 send_stat_to_idu, ooo_stat=(preg freed num:0, vreg freed num:1) preg avail num:2 vreg avail num:47
+[info] [PERF] [0000001746] OOO_RECV instr_name RV_VSEL instr_id 561 PC 10d0d254
+[info] [PERF] [0000001746] OOO_RECV instr_name RV_VCVT_I2I instr_id 563 PC 10d0d258
+[info] [PERF] [0000001746] OOO_RECV instr_name RV_VSTI instr_id 564 PC 10d0d25c
+[info] [PERF] [0000001746] OOO_RECV instr_name RV_VLDI instr_id 565 PC 10d0d234
+[info] [PERF] [0000001746] OOO_RECV instr_name RV_VLDI instr_id 566 PC 10d0d238
+[info] [PERF] [0000001746] OOO_SEND instr_name RV_VSEL instr_id 561 PC 10d0d254
+[info] [PERF] [0000001746] OOO_SEND instr_name RV_VCVT_I2I instr_id 563 PC 10d0d258
+[info] [PERF] [0000001746] OOO_SEND instr_name RV_VSTI instr_id 564 PC 10d0d25c
+[info] [PERF] [0000001746] OOO_SEND instr_name RV_VLDI instr_id 565 PC 10d0d234
+[info] [PERF] [0000001746] OOO_SEND instr_name RV_VLDI instr_id 566 PC 10d0d238
+[info] 1747 send_stat_to_idu, ooo_stat=(preg freed num:0, vreg freed num:1) preg avail num:2 vreg avail num:44
+[info] [PERF] [0000001747] OOO_RECV instr_name RV_VCMP_EQ instr_id 567 PC 10d0d23c
+[info] [PERF] [0000001747] OOO_RECV instr_name RV_POR instr_id 569 PC 10d0d240
+[info] [PERF] [0000001747] OOO_SEND instr_name RV_VCMP_EQ instr_id 567 PC 10d0d23c
+[info] [PERF] [0000001747] OOO_SEND instr_name RV_POR instr_id 569 PC 10d0d240
+[info] 1748 send_stat_to_idu, ooo_stat=(preg freed num:3, vreg freed num:1) preg avail num:3 vreg avail num:45
+[info] 1750 send_stat_to_idu, ooo_stat=(preg freed num:0, vreg freed num:2) preg avail num:3 vreg avail num:47
+[info] [PERF] [0000001750] OOO_RECV instr_name RV_VCMP_LE instr_id 570 PC 10d0d244
+[info] [PERF] [0000001750] OOO_RECV instr_name RV_VCMP_EQ instr_id 572 PC 10d0d248
+[info] [PERF] [0000001750] OOO_RECV instr_name RV_PAND instr_id 573 PC 10d0d24c
+[info] [PERF] [0000001750] OOO_SEND instr_name RV_VCMP_LE instr_id 570 PC 10d0d244
+[info] [PERF] [0000001750] OOO_SEND instr_name RV_VCMP_EQ instr_id 572 PC 10d0d248
+[info] [PERF] [0000001750] OOO_SEND instr_name RV_PAND instr_id 573 PC 10d0d24c
+[info] 1751 send_stat_to_idu, ooo_stat=(preg freed num:2, vreg freed num:0) preg avail num:2 vreg avail num:47
+[info] 1752 send_stat_to_idu, ooo_stat=(preg freed num:2, vreg freed num:1) preg avail num:4 vreg avail num:48
+[info] 1753 send_stat_to_idu, ooo_stat=(preg freed num:0, vreg freed num:1) preg avail num:4 vreg avail num:49
+[info] [PERF] [0000001753] OOO_RECV instr_name RV_POR instr_id 574 PC 10d0d250
+[info] [PERF] [0000001753] OOO_SEND instr_name RV_POR instr_id 574 PC 10d0d250
+[info] 1754 send_stat_to_idu, ooo_stat=(preg freed num:1, vreg freed num:1) preg avail num:4 vreg avail num:50
+[info] [PERF] [0000001754] OOO_RECV instr_name RV_VSEL instr_id 576 PC 10d0d254
+[info] [PERF] [0000001754] OOO_RECV instr_name RV_VCVT_I2I instr_id 578 PC 10d0d258
+[info] [PERF] [0000001754] OOO_RECV instr_name RV_VSTI instr_id 579 PC 10d0d25c
+[info] [PERF] [0000001754] OOO_RECV instr_name RV_VLDI instr_id 580 PC 10d0d234
+[info] [PERF] [0000001754] OOO_RECV instr_name RV_VLDI instr_id 581 PC 10d0d238
+[info] [PERF] [0000001754] OOO_SEND instr_name RV_VSEL instr_id 576 PC 10d0d254
+[info] [PERF] [0000001754] OOO_SEND instr_name RV_VCVT_I2I instr_id 578 PC 10d0d258
+[info] [PERF] [0000001754] OOO_SEND instr_name RV_VSTI instr_id 579 PC 10d0d25c
+[info] [PERF] [0000001754] OOO_SEND instr_name RV_VLDI instr_id 580 PC 10d0d234
+[info] [PERF] [0000001754] OOO_SEND instr_name RV_VLDI instr_id 581 PC 10d0d238
+[info] 1755 send_stat_to_idu, ooo_stat=(preg freed num:4, vreg freed num:0) preg avail num:8 vreg avail num:46
+[info] [PERF] [0000001755] OOO_RECV instr_name RV_VCMP_EQ instr_id 582 PC 10d0d23c
+[info] [PERF] [0000001755] OOO_RECV instr_name RV_POR instr_id 584 PC 10d0d240
+[info] [PERF] [0000001755] OOO_SEND instr_name RV_VCMP_EQ instr_id 582 PC 10d0d23c
+[info] [PERF] [0000001755] OOO_SEND instr_name RV_POR instr_id 584 PC 10d0d240
+[info] 1756 send_stat_to_idu, ooo_stat=(preg freed num:0, vreg freed num:1) preg avail num:6 vreg avail num:47
+[info] [PERF] [0000001756] OOO_RECV instr_name RV_VCMP_LE instr_id 585 PC 10d0d244
+[info] [PERF] [0000001756] OOO_RECV instr_name RV_VCMP_EQ instr_id 589 PC 10d0d248
+[info] [PERF] [0000001756] OOO_SEND instr_name RV_VCMP_LE instr_id 585 PC 10d0d244
+[info] [PERF] [0000001756] OOO_SEND instr_name RV_VCMP_EQ instr_id 589 PC 10d0d248
+[info] 1757 send_stat_to_idu, ooo_stat=(preg freed num:1, vreg freed num:1) preg avail num:5 vreg avail num:48
+[info] [PERF] [0000001757] OOO_RECV instr_name RV_PAND instr_id 590 PC 10d0d24c
+[info] [PERF] [0000001757] OOO_SEND instr_name RV_PAND instr_id 590 PC 10d0d24c
+[info] 1758 send_stat_to_idu, ooo_stat=(preg freed num:1, vreg freed num:0) preg avail num:5 vreg avail num:48
+[info] [PERF] [0000001758] OOO_RECV instr_name RV_POR instr_id 591 PC 10d0d250
+[info] [PERF] [0000001758] OOO_SEND instr_name RV_POR instr_id 591 PC 10d0d250
+[info] 1759 send_stat_to_idu, ooo_stat=(preg freed num:2, vreg freed num:0) preg avail num:6 vreg avail num:48
+[info] [PERF] [0000001759] OOO_RECV instr_name RV_VSEL instr_id 595 PC 10d0d254
+[info] [PERF] [0000001759] OOO_RECV instr_name RV_VCVT_I2I instr_id 597 PC 10d0d258
+[info] [PERF] [0000001759] OOO_RECV instr_name RV_VSTI instr_id 598 PC 10d0d25c
+[info] [PERF] [0000001759] OOO_RECV instr_name RV_VLDI instr_id 599 PC 10d0d234
+[info] [PERF] [0000001759] OOO_RECV instr_name RV_VLDI instr_id 600 PC 10d0d238
+[info] [PERF] [0000001759] OOO_SEND instr_name RV_VSEL instr_id 595 PC 10d0d254
+[info] [PERF] [0000001759] OOO_SEND instr_name RV_VCVT_I2I instr_id 597 PC 10d0d258
+[info] [PERF] [0000001759] OOO_SEND instr_name RV_VSTI instr_id 598 PC 10d0d25c
+[info] [PERF] [0000001759] OOO_SEND instr_name RV_VLDI instr_id 599 PC 10d0d234
+[info] [PERF] [0000001759] OOO_SEND instr_name RV_VLDI instr_id 600 PC 10d0d238
+[info] 1760 send_stat_to_idu, ooo_stat=(preg freed num:2, vreg freed num:1) preg avail num:8 vreg avail num:45
+[info] [PERF] [0000001760] OOO_RECV instr_name RV_VCMP_EQ instr_id 601 PC 10d0d23c
+[info] [PERF] [0000001760] OOO_RECV instr_name RV_POR instr_id 603 PC 10d0d240
+[info] [PERF] [0000001760] OOO_SEND instr_name RV_VCMP_EQ instr_id 601 PC 10d0d23c
+[info] [PERF] [0000001760] OOO_SEND instr_name RV_POR instr_id 603 PC 10d0d240
+[info] 1761 send_stat_to_idu, ooo_stat=(preg freed num:1, vreg freed num:1) preg avail num:7 vreg avail num:46
+[info] [PERF] [0000001761] OOO_RECV instr_name RV_VCMP_LE instr_id 604 PC 10d0d244
+[info] [PERF] [0000001761] OOO_RECV instr_name RV_VCMP_EQ instr_id 606 PC 10d0d248
+[info] [PERF] [0000001761] OOO_RECV instr_name RV_PAND instr_id 607 PC 10d0d24c
+[info] [PERF] [0000001761] OOO_SEND instr_name RV_VCMP_LE instr_id 604 PC 10d0d244
+[info] [PERF] [0000001761] OOO_SEND instr_name RV_VCMP_EQ instr_id 606 PC 10d0d248
+[info] [PERF] [0000001761] OOO_SEND instr_name RV_PAND instr_id 607 PC 10d0d24c
+[info] 1762 send_stat_to_idu, ooo_stat=(preg freed num:1, vreg freed num:0) preg avail num:5 vreg avail num:46
+[info] [PERF] [0000001762] OOO_RECV instr_name RV_POR instr_id 609 PC 10d0d250
+[info] [PERF] [0000001762] OOO_SEND instr_name RV_POR instr_id 609 PC 10d0d250
+[info] 1763 send_stat_to_idu, ooo_stat=(preg freed num:2, vreg freed num:1) preg avail num:6 vreg avail num:47
+[info] [PERF] [0000001763] OOO_RECV instr_name RV_VSEL instr_id 611 PC 10d0d254
+[info] [PERF] [0000001763] OOO_RECV instr_name RV_VCVT_I2I instr_id 613 PC 10d0d258
+[info] [PERF] [0000001763] OOO_RECV instr_name RV_VSTI instr_id 614 PC 10d0d25c
+[info] [PERF] [0000001763] OOO_RECV instr_name RV_SEND instr_id 615 PC 10d0d260
+[info] [PERF] [0000001763] OOO_RECV instr_name RV_SEND instr_id 615 PC 10d0d260
+[info] [PERF] [0000001763] OOO_SEND instr_name RV_VSEL instr_id 611 PC 10d0d254
+[info] [PERF] [0000001763] OOO_SEND instr_name RV_VCVT_I2I instr_id 613 PC 10d0d258
+[info] [PERF] [0000001763] OOO_SEND instr_name RV_VSTI instr_id 614 PC 10d0d25c
+[info] [PERF] [0000001763] OOO_SEND instr_name RV_SEND instr_id 615 PC 10d0d260
+[info] [PERF] [0000001763] OOO_SEND instr_name RV_SEND instr_id 615 PC 10d0d260
+[info] 1764 send_stat_to_idu, ooo_stat=(preg freed num:0, vreg freed num:1) preg avail num:6 vreg avail num:46
+[info] 1765 send_stat_to_idu, ooo_stat=(preg freed num:1, vreg freed num:1) preg avail num:7 vreg avail num:47
+[info] 1766 send_stat_to_idu, ooo_stat=(preg freed num:1, vreg freed num:0) preg avail num:8 vreg avail num:47
+[info] 1767 send_stat_to_idu, ooo_stat=(preg freed num:0, vreg freed num:2) preg avail num:8 vreg avail num:49
+[info] 1768 send_stat_to_idu, ooo_stat=(preg freed num:0, vreg freed num:1) preg avail num:8 vreg avail num:50
+[info] 1769 send_stat_to_idu, ooo_stat=(preg freed num:2, vreg freed num:2) preg avail num:10 vreg avail num:52
+[info] 1770 send_stat_to_idu, ooo_stat=(preg freed num:1, vreg freed num:0) preg avail num:11 vreg avail num:52
+[info] 1771 send_stat_to_idu, ooo_stat=(preg freed num:2, vreg freed num:0) preg avail num:13 vreg avail num:52
+[info] 1772 send_stat_to_idu, ooo_stat=(preg freed num:2, vreg freed num:0) preg avail num:15 vreg avail num:52
+[info] 1773 send_stat_to_idu, ooo_stat=(preg freed num:0, vreg freed num:1) preg avail num:15 vreg avail num:53
+[info] 1774 send_stat_to_idu, ooo_stat=(preg freed num:2, vreg freed num:1) preg avail num:17 vreg avail num:54
+[info] 1775 send_stat_to_idu, ooo_stat=(preg freed num:1, vreg freed num:0) preg avail num:18 vreg avail num:54
+[info] 1776 send_stat_to_idu, ooo_stat=(preg freed num:0, vreg freed num:1) preg avail num:18 vreg avail num:55
+[info] 1777 send_stat_to_idu, ooo_stat=(preg freed num:1, vreg freed num:1) preg avail num:19 vreg avail num:56
+[info] 1778 send_stat_to_idu, ooo_stat=(preg freed num:3, vreg freed num:0) preg avail num:22 vreg avail num:56
+[info] 1779 send_stat_to_idu, ooo_stat=(preg freed num:0, vreg freed num:1) preg avail num:22 vreg avail num:57
+[info] 1781 send_stat_to_idu, ooo_stat=(preg freed num:2, vreg freed num:0) preg avail num:24 vreg avail num:57
+[info] 1782 send_stat_to_idu, ooo_stat=(preg freed num:0, vreg freed num:1) preg avail num:24 vreg avail num:58
+[info] 1784 send_stat_to_idu, ooo_stat=(preg freed num:1, vreg freed num:1) preg avail num:25 vreg avail num:59
+[info] 1785 send_stat_to_idu, ooo_stat=(preg freed num:1, vreg freed num:0) preg avail num:26 vreg avail num:59
+[info] 1786 send_stat_to_idu, ooo_stat=(preg freed num:0, vreg freed num:1) preg avail num:26 vreg avail num:60
+[info] 1788 send_stat_to_idu, ooo_stat=(preg freed num:1, vreg freed num:0) preg avail num:27 vreg avail num:60
+[info] 1791 send_stat_to_idu, ooo_stat=(preg freed num:0, vreg freed num:1) preg avail num:27 vreg avail num:61
+[info] 1793 send_stat_to_idu, ooo_stat=(preg freed num:0, vreg freed num:1) preg avail num:27 vreg avail num:62
+[info] 1814 [REG_FREE_BUF.RESET], reg type:V, reg_free_buf_size:15, reg_cycle_free_num:5
+[info] 1814 [REG_FREE_BUF.RESET], reg type:P, reg_free_buf_size:15, reg_cycle_free_num:5
+[info] ++++++++++++++++++++++core: 0, subcore: 1, start: 216, tick: 2232, kernelId: 0, blkID: 0, blkDim: 1, rtsqId: 1, streamId: 0, taskId: 0, subtaskId: 0, threadId: 0, done++++++++++++++++++++++.

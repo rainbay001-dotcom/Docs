@@ -1,0 +1,3 @@
+[info] [00000000][TagRam] SetShmemSz, dcacheBase_:131072
+[info] [00000000][Line] SetShmemSz, shmemSz:131072
+[info] [00000000][Line] AutoReset, dcacheSize_:131072, cacheLineNum_:1024

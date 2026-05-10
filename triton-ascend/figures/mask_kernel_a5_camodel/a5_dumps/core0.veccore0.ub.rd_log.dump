@@ -1,0 +1,230 @@
+[info] [0000001587] RV_VLDI, pc: 0x10d0d200, id: 84
+[info] Address 00000180 = [00000000]	Address 00000184 = [00000000]	Address 00000188 = [00000000]	Address 0000018c = [00000000]	
+       Address 00000190 = [00000000]	Address 00000194 = [00000000]	Address 00000198 = [00000000]	Address 0000019c = [00000000]	
+       Address 000001a0 = [00000000]	Address 000001a4 = [00000000]	Address 000001a8 = [00000000]	Address 000001ac = [00000000]	
+       Address 000001b0 = [00000000]	Address 000001b4 = [00000000]	Address 000001b8 = [00000000]	Address 000001bc = [00000000]	
+       Address 000001c0 = [00000000]	Address 000001c4 = [00000000]	Address 000001c8 = [00000000]	Address 000001cc = [00000000]	
+       Address 000001d0 = [00000000]	Address 000001d4 = [00000000]	Address 000001d8 = [00000000]	Address 000001dc = [00000000]	
+       Address 000001e0 = [00000000]	Address 000001e4 = [00000000]	Address 000001e8 = [00000000]	Address 000001ec = [00000000]	
+       Address 000001f0 = [00000000]	Address 000001f4 = [00000000]	Address 000001f8 = [00000000]	Address 000001fc = [00000000]	
+       Address 00000200 = [00000000]	Address 00000204 = [00000000]	Address 00000208 = [00000000]	Address 0000020c = [00000000]	
+       Address 00000210 = [00000000]	Address 00000214 = [00000000]	Address 00000218 = [00000000]	Address 0000021c = [00000000]	
+       Address 00000220 = [00000000]	Address 00000224 = [00000000]	Address 00000228 = [00000000]	Address 0000022c = [00000000]	
+       Address 00000230 = [00000000]	Address 00000234 = [00000000]	Address 00000238 = [00000000]	Address 0000023c = [00000000]	
+       Address 00000240 = [00000000]	Address 00000244 = [00000000]	Address 00000248 = [00000000]	Address 0000024c = [00000000]	
+       Address 00000250 = [00000000]	Address 00000254 = [00000000]	Address 00000258 = [00000000]	Address 0000025c = [00000000]	
+       Address 00000260 = [00000000]	Address 00000264 = [00000000]	Address 00000268 = [00000000]	Address 0000026c = [00000000]	
+       Address 00000270 = [00000000]	Address 00000274 = [00000000]	Address 00000278 = [00000000]	Address 0000027c = [00000000]	
+[info] [0000001587] RV_VLDI, pc: 0x10d0d204, id: 85
+[info] Address 00000080 = [00000000]	Address 00000084 = [00000000]	Address 00000088 = [00000000]	Address 0000008c = [00000000]	
+       Address 00000090 = [00000000]	Address 00000094 = [00000000]	Address 00000098 = [00000000]	Address 0000009c = [00000000]	
+       Address 000000a0 = [00000000]	Address 000000a4 = [00000000]	Address 000000a8 = [00000000]	Address 000000ac = [00000000]	
+       Address 000000b0 = [00000000]	Address 000000b4 = [00000000]	Address 000000b8 = [00000000]	Address 000000bc = [00000000]	
+       Address 000000c0 = [00000000]	Address 000000c4 = [00000000]	Address 000000c8 = [00000000]	Address 000000cc = [00000000]	
+       Address 000000d0 = [00000000]	Address 000000d4 = [00000000]	Address 000000d8 = [00000000]	Address 000000dc = [00000000]	
+       Address 000000e0 = [00000000]	Address 000000e4 = [00000000]	Address 000000e8 = [00000000]	Address 000000ec = [00000000]	
+       Address 000000f0 = [00000000]	Address 000000f4 = [00000000]	Address 000000f8 = [00000000]	Address 000000fc = [00000000]	
+       Address 00000100 = [00000000]	Address 00000104 = [00000001]	Address 00000108 = [00000002]	Address 0000010c = [00000003]	
+       Address 00000110 = [00000004]	Address 00000114 = [00000005]	Address 00000118 = [00000006]	Address 0000011c = [00000007]	
+       Address 00000120 = [00000008]	Address 00000124 = [00000009]	Address 00000128 = [0000000a]	Address 0000012c = [0000000b]	
+       Address 00000130 = [0000000c]	Address 00000134 = [0000000d]	Address 00000138 = [0000000e]	Address 0000013c = [0000000f]	
+       Address 00000140 = [00000010]	Address 00000144 = [00000011]	Address 00000148 = [00000012]	Address 0000014c = [00000013]	
+       Address 00000150 = [00000014]	Address 00000154 = [00000015]	Address 00000158 = [00000016]	Address 0000015c = [00000017]	
+       Address 00000160 = [00000018]	Address 00000164 = [00000019]	Address 00000168 = [0000001a]	Address 0000016c = [0000001b]	
+       Address 00000170 = [0000001c]	Address 00000174 = [0000001d]	Address 00000178 = [0000001e]	Address 0000017c = [0000001f]	
+[info] [0000001591] RV_VLDI, pc: 0x10d0d234, id: 97
+[info] Address 00000100 = [00000000]	
+[info] [0000001591] RV_VLDI, pc: 0x10d0d238, id: 98
+[info] Address 00000000 = [00000000]	
+[info] [0000001594] RV_VLDI, pc: 0x10d0d234, id: 109
+[info] Address 00000104 = [00000001]	
+[info] [0000001594] RV_VLDI, pc: 0x10d0d238, id: 110
+[info] Address 00000004 = [00000000]	
+[info] [0000001597] RV_VLDI, pc: 0x10d0d234, id: 123
+[info] Address 00000108 = [00000002]	
+[info] [0000001597] RV_VLDI, pc: 0x10d0d238, id: 124
+[info] Address 00000008 = [00000000]	
+[info] [0000001601] RV_VLDI, pc: 0x10d0d234, id: 138
+[info] Address 0000010c = [00000003]	
+[info] [0000001601] RV_VLDI, pc: 0x10d0d238, id: 139
+[info] Address 0000000c = [00000000]	
+[info] [0000001605] RV_VLDI, pc: 0x10d0d234, id: 153
+[info] Address 00000110 = [00000004]	
+[info] [0000001605] RV_VLDI, pc: 0x10d0d238, id: 154
+[info] Address 00000010 = [00000000]	
+[info] [0000001609] RV_VLDI, pc: 0x10d0d234, id: 168
+[info] Address 00000114 = [00000005]	
+[info] [0000001609] RV_VLDI, pc: 0x10d0d238, id: 169
+[info] Address 00000014 = [00000000]	
+[info] [0000001613] RV_VLDI, pc: 0x10d0d234, id: 183
+[info] Address 00000118 = [00000006]	
+[info] [0000001613] RV_VLDI, pc: 0x10d0d238, id: 184
+[info] Address 00000018 = [00000000]	
+[info] [0000001618] RV_VLDI, pc: 0x10d0d234, id: 199
+[info] Address 0000011c = [00000007]	
+[info] [0000001618] RV_VLDI, pc: 0x10d0d238, id: 200
+[info] Address 0000001c = [00000000]	
+[info] [0000001623] RV_VLDI, pc: 0x10d0d234, id: 215
+[info] Address 00000120 = [00000008]	
+[info] [0000001623] RV_VLDI, pc: 0x10d0d238, id: 216
+[info] Address 00000020 = [00000000]	
+[info] [0000001630] RV_VLDI, pc: 0x10d0d234, id: 233
+[info] Address 00000124 = [00000009]	
+[info] [0000001630] RV_VLDI, pc: 0x10d0d238, id: 234
+[info] Address 00000024 = [00000000]	
+[info] [0000001635] RV_VLDI, pc: 0x10d0d234, id: 249
+[info] Address 00000128 = [0000000a]	
+[info] [0000001635] RV_VLDI, pc: 0x10d0d238, id: 250
+[info] Address 00000028 = [00000000]	
+[info] [0000001640] RV_VLDI, pc: 0x10d0d234, id: 265
+[info] Address 0000012c = [0000000b]	
+[info] [0000001640] RV_VLDI, pc: 0x10d0d238, id: 266
+[info] Address 0000002c = [00000000]	
+[info] [0000001644] RV_VLDI, pc: 0x10d0d234, id: 280
+[info] Address 00000130 = [0000000c]	
+[info] [0000001644] RV_VLDI, pc: 0x10d0d238, id: 281
+[info] Address 00000030 = [00000000]	
+[info] [0000001651] RV_VLDI, pc: 0x10d0d234, id: 298
+[info] Address 00000134 = [0000000d]	
+[info] [0000001651] RV_VLDI, pc: 0x10d0d238, id: 299
+[info] Address 00000034 = [00000000]	
+[info] [0000001655] RV_VLDI, pc: 0x10d0d234, id: 313
+[info] Address 00000138 = [0000000e]	
+[info] [0000001655] RV_VLDI, pc: 0x10d0d238, id: 314
+[info] Address 00000038 = [00000000]	
+[info] [0000001662] RV_VLDI, pc: 0x10d0d234, id: 331
+[info] Address 0000013c = [0000000f]	
+[info] [0000001662] RV_VLDI, pc: 0x10d0d238, id: 332
+[info] Address 0000003c = [00000000]	
+[info] [0000001669] RV_VLDI, pc: 0x10d0d234, id: 349
+[info] Address 00000140 = [00000010]	
+[info] [0000001669] RV_VLDI, pc: 0x10d0d238, id: 350
+[info] Address 00000040 = [00000000]	
+[info] [0000001673] RV_VLDI, pc: 0x10d0d234, id: 364
+[info] Address 00000144 = [00000011]	
+[info] [0000001673] RV_VLDI, pc: 0x10d0d238, id: 365
+[info] Address 00000044 = [00000000]	
+[info] [0000001677] RV_VLDI, pc: 0x10d0d234, id: 379
+[info] Address 00000148 = [00000012]	
+[info] [0000001677] RV_VLDI, pc: 0x10d0d238, id: 380
+[info] Address 00000048 = [00000000]	
+[info] [0000001685] RV_VLDI, pc: 0x10d0d234, id: 398
+[info] Address 0000014c = [00000013]	
+[info] [0000001685] RV_VLDI, pc: 0x10d0d238, id: 399
+[info] Address 0000004c = [00000000]	
+[info] [0000001689] RV_VLDI, pc: 0x10d0d234, id: 413
+[info] Address 00000150 = [00000014]	
+[info] [0000001689] RV_VLDI, pc: 0x10d0d238, id: 414
+[info] Address 00000050 = [00000000]	
+[info] [0000001693] RV_VLDI, pc: 0x10d0d234, id: 428
+[info] Address 00000154 = [00000015]	
+[info] [0000001693] RV_VLDI, pc: 0x10d0d238, id: 429
+[info] Address 00000054 = [00000000]	
+[info] [0000001701] RV_VLDI, pc: 0x10d0d234, id: 447
+[info] Address 00000158 = [00000016]	
+[info] [0000001701] RV_VLDI, pc: 0x10d0d238, id: 448
+[info] Address 00000058 = [00000000]	
+[info] [0000001707] RV_VLDI, pc: 0x10d0d234, id: 464
+[info] Address 0000015c = [00000017]	
+[info] [0000001707] RV_VLDI, pc: 0x10d0d238, id: 465
+[info] Address 0000005c = [00000000]	
+[info] [0000001712] RV_VLDI, pc: 0x10d0d234, id: 480
+[info] Address 00000160 = [00000018]	
+[info] [0000001712] RV_VLDI, pc: 0x10d0d238, id: 481
+[info] Address 00000060 = [00000000]	
+[info] [0000001719] RV_VLDI, pc: 0x10d0d234, id: 498
+[info] Address 00000164 = [00000019]	
+[info] [0000001719] RV_VLDI, pc: 0x10d0d238, id: 499
+[info] Address 00000064 = [00000000]	
+[info] [0000001724] RV_VLDI, pc: 0x10d0d234, id: 514
+[info] Address 00000168 = [0000001a]	
+[info] [0000001724] RV_VLDI, pc: 0x10d0d238, id: 515
+[info] Address 00000068 = [00000000]	
+[info] [0000001730] RV_VLDI, pc: 0x10d0d234, id: 531
+[info] Address 0000016c = [0000001b]	
+[info] [0000001730] RV_VLDI, pc: 0x10d0d238, id: 532
+[info] Address 0000006c = [00000000]	
+[info] [0000001735] RV_VLDI, pc: 0x10d0d234, id: 547
+[info] Address 00000170 = [0000001c]	
+[info] [0000001735] RV_VLDI, pc: 0x10d0d238, id: 548
+[info] Address 00000070 = [00000000]	
+[info] [0000001742] RV_VLDI, pc: 0x10d0d234, id: 565
+[info] Address 00000174 = [0000001d]	
+[info] [0000001742] RV_VLDI, pc: 0x10d0d238, id: 566
+[info] Address 00000074 = [00000000]	
+[info] [0000001746] RV_VLDI, pc: 0x10d0d234, id: 580
+[info] Address 00000178 = [0000001e]	
+[info] [0000001746] RV_VLDI, pc: 0x10d0d238, id: 581
+[info] Address 00000078 = [00000000]	
+[info] [0000001754] RV_VLDI, pc: 0x10d0d234, id: 599
+[info] Address 0000017c = [0000001f]	
+[info] [0000001754] RV_VLDI, pc: 0x10d0d238, id: 600
+[info] Address 0000007c = [00000000]	
+[info] [0000002129] MOV_SRC_TO_DST_ALIGNv2, pc: 0x10d0d13c, id: 79
+[info] Address 00000200 = [01010101]	Address 00000204 = [01010101]	Address 00000208 = [01010101]	Address 0000020c = [01010101]	
+       Address 00000210 = [01010101]	Address 00000214 = [01010101]	Address 00000218 = [01010101]	Address 0000021c = [01010101]	
+       Address 00000220 = [01010101]	Address 00000224 = [01010101]	Address 00000228 = [01010101]	Address 0000022c = [01010101]	
+       Address 00000230 = [01010101]	Address 00000234 = [01010101]	Address 00000238 = [01010101]	Address 0000023c = [01010101]	
+       Address 00000240 = [01010101]	Address 00000244 = [01010101]	Address 00000248 = [01010101]	Address 0000024c = [01010101]	
+       Address 00000250 = [01010101]	Address 00000254 = [01010101]	Address 00000258 = [01010101]	Address 0000025c = [01010101]	
+       Address 00000260 = [01010101]	Address 00000264 = [01010101]	Address 00000268 = [01010101]	Address 0000026c = [01010101]	
+       Address 00000270 = [01010101]	Address 00000274 = [01010101]	Address 00000278 = [01010101]	Address 0000027c = [01010101]	
+       Address 00000280 = [01010101]	Address 00000284 = [01010101]	Address 00000288 = [01010101]	Address 0000028c = [01010101]	
+       Address 00000290 = [01010101]	Address 00000294 = [01010101]	Address 00000298 = [01010101]	Address 0000029c = [01010101]	
+       Address 000002a0 = [01010101]	Address 000002a4 = [01010101]	Address 000002a8 = [01010101]	Address 000002ac = [01010101]	
+       Address 000002b0 = [01010101]	Address 000002b4 = [01010101]	Address 000002b8 = [01010101]	Address 000002bc = [01010101]	
+       Address 000002c0 = [01010101]	Address 000002c4 = [01010101]	Address 000002c8 = [01010101]	Address 000002cc = [01010101]	
+       Address 000002d0 = [01010101]	Address 000002d4 = [01010101]	Address 000002d8 = [01010101]	Address 000002dc = [01010101]	
+       Address 000002e0 = [01010101]	Address 000002e4 = [01010101]	Address 000002e8 = [01010101]	Address 000002ec = [01010101]	
+       Address 000002f0 = [01010101]	Address 000002f4 = [01010101]	Address 000002f8 = [01010101]	Address 000002fc = [01010101]	
+       Address 00000300 = [01010101]	Address 00000304 = [01010101]	Address 00000308 = [01010101]	Address 0000030c = [01010101]	
+       Address 00000310 = [01010101]	Address 00000314 = [01010101]	Address 00000318 = [01010101]	Address 0000031c = [01010101]	
+       Address 00000320 = [01010101]	Address 00000324 = [01010101]	Address 00000328 = [01010101]	Address 0000032c = [01010101]	
+       Address 00000330 = [01010101]	Address 00000334 = [01010101]	Address 00000338 = [01010101]	Address 0000033c = [01010101]	
+       Address 00000340 = [01010101]	Address 00000344 = [01010101]	Address 00000348 = [01010101]	Address 0000034c = [01010101]	
+       Address 00000350 = [01010101]	Address 00000354 = [01010101]	Address 00000358 = [01010101]	Address 0000035c = [01010101]	
+       Address 00000360 = [01010101]	Address 00000364 = [01010101]	Address 00000368 = [01010101]	Address 0000036c = [01010101]	
+       Address 00000370 = [01010101]	Address 00000374 = [01010101]	Address 00000378 = [01010101]	Address 0000037c = [01010101]	
+       Address 00000380 = [01010101]	Address 00000384 = [01010101]	Address 00000388 = [01010101]	Address 0000038c = [01010101]	
+       Address 00000390 = [01010101]	Address 00000394 = [01010101]	Address 00000398 = [01010101]	Address 0000039c = [01010101]	
+       Address 000003a0 = [01010101]	Address 000003a4 = [01010101]	Address 000003a8 = [01010101]	Address 000003ac = [01010101]	
+       Address 000003b0 = [01010101]	Address 000003b4 = [01010101]	Address 000003b8 = [01010101]	Address 000003bc = [01010101]	
+       Address 000003c0 = [01010101]	Address 000003c4 = [01010101]	Address 000003c8 = [01010101]	Address 000003cc = [01010101]	
+       Address 000003d0 = [01010101]	Address 000003d4 = [01010101]	Address 000003d8 = [01010101]	Address 000003dc = [01010101]	
+       Address 000003e0 = [01010101]	Address 000003e4 = [01010101]	Address 000003e8 = [01010101]	Address 000003ec = [01010101]	
+       Address 000003f0 = [01010101]	Address 000003f4 = [01010101]	Address 000003f8 = [01010101]	Address 000003fc = [01010101]	
+       Address 00000400 = [01010101]	Address 00000404 = [01010101]	Address 00000408 = [01010101]	Address 0000040c = [01010101]	
+       Address 00000410 = [01010101]	Address 00000414 = [01010101]	Address 00000418 = [01010101]	Address 0000041c = [01010101]	
+       Address 00000420 = [01010101]	Address 00000424 = [01010101]	Address 00000428 = [01010101]	Address 0000042c = [01010101]	
+       Address 00000430 = [01010101]	Address 00000434 = [01010101]	Address 00000438 = [01010101]	Address 0000043c = [01010101]	
+       Address 00000440 = [01010101]	Address 00000444 = [01010101]	Address 00000448 = [01010101]	Address 0000044c = [01010101]	
+       Address 00000450 = [01010101]	Address 00000454 = [01010101]	Address 00000458 = [01010101]	Address 0000045c = [01010101]	
+       Address 00000460 = [01010101]	Address 00000464 = [01010101]	Address 00000468 = [01010101]	Address 0000046c = [01010101]	
+       Address 00000470 = [01010101]	Address 00000474 = [01010101]	Address 00000478 = [01010101]	Address 0000047c = [01010101]	
+       Address 00000480 = [01010101]	Address 00000484 = [01010101]	Address 00000488 = [01010101]	Address 0000048c = [01010101]	
+       Address 00000490 = [01010101]	Address 00000494 = [01010101]	Address 00000498 = [01010101]	Address 0000049c = [01010101]	
+       Address 000004a0 = [01010101]	Address 000004a4 = [01010101]	Address 000004a8 = [01010101]	Address 000004ac = [01010101]	
+       Address 000004b0 = [01010101]	Address 000004b4 = [01010101]	Address 000004b8 = [01010101]	Address 000004bc = [01010101]	
+       Address 000004c0 = [01010101]	Address 000004c4 = [01010101]	Address 000004c8 = [01010101]	Address 000004cc = [01010101]	
+       Address 000004d0 = [01010101]	Address 000004d4 = [01010101]	Address 000004d8 = [01010101]	Address 000004dc = [01010101]	
+       Address 000004e0 = [01010101]	Address 000004e4 = [01010101]	Address 000004e8 = [01010101]	Address 000004ec = [01010101]	
+       Address 000004f0 = [01010101]	Address 000004f4 = [01010101]	Address 000004f8 = [01010101]	Address 000004fc = [01010101]	
+       Address 00000500 = [01010101]	Address 00000504 = [01010101]	Address 00000508 = [01010101]	Address 0000050c = [01010101]	
+       Address 00000510 = [01010101]	Address 00000514 = [01010101]	Address 00000518 = [01010101]	Address 0000051c = [01010101]	
+       Address 00000520 = [01010101]	Address 00000524 = [01010101]	Address 00000528 = [01010101]	Address 0000052c = [01010101]	
+       Address 00000530 = [01010101]	Address 00000534 = [01010101]	Address 00000538 = [01010101]	Address 0000053c = [01010101]	
+       Address 00000540 = [01010101]	Address 00000544 = [01010101]	Address 00000548 = [01010101]	Address 0000054c = [01010101]	
+       Address 00000550 = [01010101]	Address 00000554 = [01010101]	Address 00000558 = [01010101]	Address 0000055c = [01010101]	
+       Address 00000560 = [01010101]	Address 00000564 = [01010101]	Address 00000568 = [01010101]	Address 0000056c = [01010101]	
+       Address 00000570 = [01010101]	Address 00000574 = [01010101]	Address 00000578 = [01010101]	Address 0000057c = [01010101]	
+       Address 00000580 = [01010101]	Address 00000584 = [01010101]	Address 00000588 = [01010101]	Address 0000058c = [01010101]	
+       Address 00000590 = [01010101]	Address 00000594 = [01010101]	Address 00000598 = [01010101]	Address 0000059c = [01010101]	
+       Address 000005a0 = [01010101]	Address 000005a4 = [01010101]	Address 000005a8 = [01010101]	Address 000005ac = [01010101]	
+       Address 000005b0 = [01010101]	Address 000005b4 = [01010101]	Address 000005b8 = [01010101]	Address 000005bc = [01010101]	
+       Address 000005c0 = [01010101]	Address 000005c4 = [01010101]	Address 000005c8 = [01010101]	Address 000005cc = [01010101]	
+       Address 000005d0 = [01010101]	Address 000005d4 = [01010101]	Address 000005d8 = [01010101]	Address 000005dc = [01010101]	
+       Address 000005e0 = [01010101]	Address 000005e4 = [01010101]	Address 000005e8 = [01010101]	Address 000005ec = [01010101]	
+       Address 000005f0 = [01010101]	Address 000005f4 = [01010101]	Address 000005f8 = [01010101]	Address 000005fc = [01010101]	
+[info] [0000002129] MOV_SRC_TO_DST_ALIGNv2, pc: 0x10d0d13c, id: 79
+[info] Address 00000200 = [01]      	
+[info] ++++++++++++++++++++++core: 0, subcore: 1, start: 216, tick: 2232, kernelId: 0, blkID: 0, blkDim: 1, rtsqId: 1, streamId: 0, taskId: 0, subtaskId: 0, threadId: 0, done++++++++++++++++++++++.

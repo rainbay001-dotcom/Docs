@@ -1,0 +1,561 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AIConfigurator Deep Dive: Profile-Driven Configuration Search for LLM Serving</title>
+<style>
+:root {
+    --bg: #0d1117;
+    --card: #161b22;
+    --border: #30363d;
+    --text: #c9d1d9;
+    --heading: #e6edf3;
+    --accent: #58a6ff;
+    --accent2: #7ee787;
+    --accent3: #d2a8ff;
+    --accent4: #ff7b72;
+    --accent5: #ffa657;
+    --code-bg: #0d1117;
+    --link: #58a6ff;
+}
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    line-height: 1.7;
+    padding: 2rem;
+    max-width: 1200px;
+    margin: 0 auto;
+}
+h1 { color: var(--heading); font-size: 2.2rem; margin-bottom: 0.5rem; border-bottom: 1px solid var(--border); padding-bottom: 1rem; }
+h2 { color: var(--accent); font-size: 1.6rem; margin-top: 2.5rem; margin-bottom: 1rem; border-bottom: 1px solid var(--border); padding-bottom: 0.5rem; }
+h3 { color: var(--accent2); font-size: 1.25rem; margin-top: 1.8rem; margin-bottom: 0.8rem; }
+h4 { color: var(--accent3); font-size: 1.05rem; margin-top: 1.2rem; margin-bottom: 0.5rem; }
+p { margin-bottom: 1rem; }
+a { color: var(--link); text-decoration: none; }
+a:hover { text-decoration: underline; }
+code {
+    font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
+    background: var(--code-bg);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 0.15em 0.4em;
+    font-size: 0.88em;
+    color: var(--accent5);
+}
+pre {
+    background: var(--code-bg);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 1.2rem;
+    overflow-x: auto;
+    margin-bottom: 1.2rem;
+    font-size: 0.85rem;
+    line-height: 1.5;
+}
+pre code { border: none; padding: 0; background: none; color: var(--text); }
+.card {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 1.5rem;
+    margin-bottom: 1.5rem;
+}
+.svg-container {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 1rem;
+    margin: 1.5rem 0;
+    overflow-x: auto;
+    text-align: center;
+}
+.svg-container svg { max-width: 100%; height: auto; }
+table { width: 100%; border-collapse: collapse; margin-bottom: 1.5rem; }
+th, td { padding: 0.6rem 0.8rem; border: 1px solid var(--border); text-align: left; font-size: 0.9rem; vertical-align: top; }
+th { background: #1c2128; color: var(--accent); font-weight: 600; }
+td { background: var(--card); }
+ul, ol { margin: 0.5rem 0 1rem 1.5rem; }
+li { margin-bottom: 0.3rem; }
+.tag {
+    display: inline-block;
+    padding: 0.1em 0.5em;
+    border-radius: 12px;
+    font-size: 0.78em;
+    font-weight: 600;
+    margin-right: 0.3em;
+}
+.tag-kernel { background: #3fb95020; color: #3fb950; border: 1px solid #3fb95040; }
+.tag-module { background: #d2a8ff20; color: #d2a8ff; border: 1px solid #d2a8ff40; }
+.tag-bench { background: #ffa65720; color: #ffa657; border: 1px solid #ffa65740; }
+.subtitle { color: #8b949e; font-size: 1.1rem; margin-bottom: 2rem; }
+.toc { background: var(--card); border: 1px solid var(--border); border-radius: 8px; padding: 1.5rem; margin: 1.5rem 0; }
+.toc h3 { margin-top: 0; color: var(--heading); }
+.toc ol { margin-bottom: 0; }
+.toc li { margin-bottom: 0.4rem; }
+.toc a { color: var(--accent); }
+.file-ref { color: #8b949e; font-size: 0.85em; font-style: italic; }
+.highlight { color: var(--accent5); font-weight: 600; }
+blockquote { border-left: 3px solid var(--accent5); padding: 0.5rem 1rem; margin: 1rem 0; background: var(--card); color: #8b949e; font-style: italic; }
+</style>
+</head>
+<body>
+
+<h1>AIConfigurator Deep Dive</h1>
+<p class="subtitle">How NVIDIA's configuration-optimization tool turns kernel microbenchmarks into a searchable LLM-serving cost model &mdash; with architecture, data organization, and granularity analysis</p>
+
+<p>AIConfigurator (<a href="https://github.com/ai-dynamo/aiconfigurator">ai-dynamo/aiconfigurator</a>, paper <a href="https://arxiv.org/abs/2601.06288">arXiv 2601.06288</a>, NVIDIA, January 2026) is an offline tool that searches the LLM-serving configuration space &mdash; parallelism degrees, worker counts, batch sizes, framework-specific flags &mdash; and picks a deployment config optimized for your model, GPU, and latency SLA. It's marketed as "lightning-fast" because it completes a search in <strong>~30 seconds</strong>, reporting up to 40% throughput gains on dense models (Qwen3-32B) and 50% on MoE (DeepSeek-V3) over manual tuning.</p>
+
+<p>The trick that makes 30-second search possible is a carefully-built <strong>kernel-level performance database</strong>, collected once per hardware/framework pair on real GPUs, and queried by a cost model at search time. No GPU is touched during search. This document analyzes the design of that database and the profiling pipeline that produces it, based on direct reading of <code>github.com/ai-dynamo/aiconfigurator</code> at commit <code>3a1612e</code>.</p>
+
+<div class="toc">
+<h3>Table of Contents</h3>
+<ol>
+<li><a href="#paper">Paper in One Screen</a></li>
+<li><a href="#pipeline">End-to-End Pipeline</a></li>
+<li><a href="#role">Role of Real-Machine Profiling</a></li>
+<li><a href="#data">How the Profile Data Is Organized</a></li>
+<li><a href="#granularity">Profiling Granularity: Kernel vs Module</a></li>
+<li><a href="#mechanics">Measurement Mechanics</a></li>
+<li><a href="#costmodel">At Search Time: Composing Predictions</a></li>
+<li><a href="#compare">Comparison to Related Work</a></li>
+<li><a href="#takeaways">Takeaways for xPU-simulator and SMAP</a></li>
+<li><a href="#refs">References</a></li>
+</ol>
+</div>
+
+<!-- ============================================================ -->
+<h2 id="paper">1. Paper in One Screen</h2>
+
+<p><strong>Title:</strong> AIConfigurator: Lightning-Fast Configuration Optimization for Multi-Framework LLM Serving &nbsp;&mdash;&nbsp; Xu et al., arXiv 2601.06288, 2026-01-09.</p>
+
+<p><strong>Authors:</strong> Tianhao Xu, Yiming Liu, Xianglong Lu, Yijia Zhao, Xuting Zhou, Aichen Feng, Yiyi Chen, Yi Shen, Qin Zhou, Xumeng Chen, Ilya Sherstyuk, Haorui Li, Rishi Thakkar, Ben Hamm, Yuanzhe Li, Xue Huang, Wenpeng Wu, Anish Shanbhag, Harry Kim, Chuan Chen, Junjie Lai. NVIDIA.</p>
+
+<p><strong>Three stated contributions:</strong></p>
+<ol>
+<li>A methodology that <strong>decomposes inference into analytically modelable primitives</strong> &mdash; GEMM, attention, communication, memory &mdash; while capturing framework-specific scheduling dynamics.</li>
+<li>A <strong>calibrated kernel-level performance database</strong> for these primitives across hardware (H100, H200, B200) and popular open-weight models (GPT-OSS, Qwen, DeepSeek, Llama, Mistral).</li>
+<li>An <strong>abstraction layer</strong> that resolves optimal launch parameters for the target backend (TRT-LLM, vLLM, SGLang), seamlessly integrating into production orchestration.</li>
+</ol>
+
+<p><strong>Headline numbers:</strong></p>
+<ul>
+<li>Up to <span class="highlight">+40%</span> performance for dense models (Qwen3-32B).</li>
+<li>Up to <span class="highlight">+50%</span> for MoE (DeepSeek-V3).</li>
+<li>Search completes in <span class="highlight">~30 seconds</span> on average.</li>
+<li>Accuracy stays within ~10&ndash;15% of real-machine measurements.</li>
+</ul>
+
+<!-- ============================================================ -->
+<h2 id="pipeline">2. End-to-End Pipeline</h2>
+
+<div class="svg-container">
+<svg viewBox="0 0 980 480" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <marker id="arr" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#58a6ff"/>
+    </marker>
+  </defs>
+  <rect width="980" height="480" fill="#0d1117"/>
+
+  <!-- Real hardware zone -->
+  <rect x="20" y="30" width="300" height="200" fill="#161b22" stroke="#ffa657" rx="8"/>
+  <text x="170" y="55" text-anchor="middle" fill="#ffa657" font-size="14" font-weight="bold">Real Hardware (one-time)</text>
+  <rect x="40" y="70" width="260" height="35" fill="#0d1117" stroke="#30363d" rx="4"/>
+  <text x="170" y="93" text-anchor="middle" fill="#c9d1d9" font-size="11">collector/collect.py + per-op collectors</text>
+  <rect x="40" y="115" width="260" height="35" fill="#0d1117" stroke="#30363d" rx="4"/>
+  <text x="170" y="138" text-anchor="middle" fill="#c9d1d9" font-size="11">nvidia-smi -pm 1 + -ac (lock clocks)</text>
+  <rect x="40" y="160" width="260" height="35" fill="#0d1117" stroke="#30363d" rx="4"/>
+  <text x="170" y="183" text-anchor="middle" fill="#c9d1d9" font-size="11">CUDA graph capture + torch.cuda.Event</text>
+  <text x="170" y="215" text-anchor="middle" fill="#8b949e" font-size="10" font-style="italic">~30 GPU-hours per (GPU, framework, version)</text>
+
+  <!-- CSV DB zone -->
+  <rect x="360" y="30" width="260" height="200" fill="#161b22" stroke="#7ee787" rx="8"/>
+  <text x="490" y="55" text-anchor="middle" fill="#7ee787" font-size="14" font-weight="bold">CSV Database (git-LFS)</text>
+  <rect x="380" y="75" width="220" height="30" fill="#0d1117" stroke="#30363d" rx="4"/>
+  <text x="490" y="95" text-anchor="middle" fill="#c9d1d9" font-size="10">gemm_perf.txt</text>
+  <rect x="380" y="110" width="220" height="30" fill="#0d1117" stroke="#30363d" rx="4"/>
+  <text x="490" y="130" text-anchor="middle" fill="#c9d1d9" font-size="10">context_attention_perf.txt</text>
+  <rect x="380" y="145" width="220" height="30" fill="#0d1117" stroke="#30363d" rx="4"/>
+  <text x="490" y="165" text-anchor="middle" fill="#c9d1d9" font-size="10">moe_perf.txt · mla_module_perf.txt</text>
+  <rect x="380" y="180" width="220" height="30" fill="#0d1117" stroke="#30363d" rx="4"/>
+  <text x="490" y="200" text-anchor="middle" fill="#c9d1d9" font-size="10">custom_allreduce · nccl_perf.txt</text>
+
+  <!-- Configurator zone -->
+  <rect x="660" y="30" width="300" height="200" fill="#161b22" stroke="#58a6ff" rx="8"/>
+  <text x="810" y="55" text-anchor="middle" fill="#58a6ff" font-size="14" font-weight="bold">Configurator (at search time)</text>
+  <rect x="680" y="70" width="260" height="35" fill="#0d1117" stroke="#30363d" rx="4"/>
+  <text x="810" y="93" text-anchor="middle" fill="#c9d1d9" font-size="11">load CSVs into nested-dict index</text>
+  <rect x="680" y="115" width="260" height="35" fill="#0d1117" stroke="#30363d" rx="4"/>
+  <text x="810" y="138" text-anchor="middle" fill="#c9d1d9" font-size="11">decompose config → op sequence</text>
+  <rect x="680" y="160" width="260" height="35" fill="#0d1117" stroke="#30363d" rx="4"/>
+  <text x="810" y="183" text-anchor="middle" fill="#c9d1d9" font-size="11">interpolate via scipy.griddata</text>
+  <text x="810" y="215" text-anchor="middle" fill="#8b949e" font-size="10" font-style="italic">~30 seconds, no GPU needed</text>
+
+  <!-- Arrows -->
+  <line x1="320" y1="130" x2="360" y2="130" stroke="#58a6ff" stroke-width="2" marker-end="url(#arr)"/>
+  <text x="340" y="122" text-anchor="middle" fill="#8b949e" font-size="10">emit</text>
+  <line x1="620" y1="130" x2="660" y2="130" stroke="#58a6ff" stroke-width="2" marker-end="url(#arr)"/>
+  <text x="640" y="122" text-anchor="middle" fill="#8b949e" font-size="10">query</text>
+
+  <!-- Output -->
+  <rect x="300" y="280" width="380" height="160" fill="#161b22" stroke="#d2a8ff" rx="8"/>
+  <text x="490" y="305" text-anchor="middle" fill="#d2a8ff" font-size="14" font-weight="bold">Output: Deployment Config</text>
+  <rect x="320" y="325" width="340" height="25" fill="#0d1117" stroke="#30363d" rx="4"/>
+  <text x="490" y="342" text-anchor="middle" fill="#c9d1d9" font-size="10">TP / PP / EP degrees · worker counts</text>
+  <rect x="320" y="355" width="340" height="25" fill="#0d1117" stroke="#30363d" rx="4"/>
+  <text x="490" y="372" text-anchor="middle" fill="#c9d1d9" font-size="10">batch sizes · KV-cache frac · max tokens</text>
+  <rect x="320" y="385" width="340" height="25" fill="#0d1117" stroke="#30363d" rx="4"/>
+  <text x="490" y="402" text-anchor="middle" fill="#c9d1d9" font-size="10">CUDA graph · prefill/decode split</text>
+  <text x="490" y="430" text-anchor="middle" fill="#8b949e" font-size="10" font-style="italic">fed directly to Dynamo orchestrator</text>
+
+  <!-- Arrow to output -->
+  <line x1="810" y1="230" x2="810" y2="360" stroke="#58a6ff" stroke-width="2"/>
+  <line x1="810" y1="360" x2="680" y2="360" stroke="#58a6ff" stroke-width="2" marker-end="url(#arr)"/>
+
+  <text x="975" y="470" text-anchor="end" fill="#8b949e" font-size="10" font-style="italic">aiconfigurator @ commit 3a1612e</text>
+</svg>
+</div>
+
+<p>Three temporally separate phases. The real-hardware phase runs once when a new GPU or framework version lands; the CSV artifacts ship in the repo via Git LFS (which is why a shallow clone still weighs 1.4 GB); the configurator only ever reads the CSVs.</p>
+
+<!-- ============================================================ -->
+<h2 id="role">3. Role of Real-Machine Profiling</h2>
+
+<p>Real-machine profiling plays <strong>three specific roles</strong>:</p>
+
+<h3>3.1 One-time calibration input</h3>
+
+<p>The CSVs are built once per (GPU model, framework, framework version) and shipped with the tool. End users <strong>never</strong> run profiling at search time. The repo README explicitly encourages reusing a nearby version (e.g. TRT-LLM 1.0.0rc3 data for deploying 1.0.0rc4) rather than re-profiling &mdash; small version drift doesn't move the cost model significantly.</p>
+
+<h3>3.2 Per-kernel primitive measurement</h3>
+
+<p>Each kernel category has a purpose-built collector that invokes the kernel directly, in isolation, with representative problem sizes:</p>
+
+<ul>
+<li><strong>GEMM</strong> across all quantization modes: fp16 / bf16 / fp8 / fp8_block / nvfp4 / int8_wo / int4_wo</li>
+<li><strong>Attention</strong> for both phases: context FMHA (prefill), generation FMHA (decode); MHA / GQA / MLA</li>
+<li><strong>MoE</strong> compute + dispatch/combine as separate ops</li>
+<li><strong>Communication</strong>: custom AllReduce, NCCL AllReduce/AllGather/ReduceScatter/AllToAll, P2P send/recv</li>
+<li><strong>Memory</strong>: scale-matrix ops, element-wise (embedding, layer-norm)</li>
+</ul>
+
+<p>Each row is indexed by problem-size dimensions: GEMM by <code>(m, n, k)</code>, attention by <code>(batch, seq_len, num_heads, head_size)</code>, communication by <code>(message_size, num_gpus)</code>. The DB is the closure of these primitives under a realistic problem-size grid.</p>
+
+<h3>3.3 Search-time composition &mdash; the cost model</h3>
+
+<p>Given a candidate configuration, the configurator:</p>
+<ol>
+<li>Decomposes the model's forward pass into its per-layer op sequence (forward = attention + MLP + norm + residual, MoE = per-expert routing + expert compute).</li>
+<li>Queries the profile DB for each op with the candidate config's problem dimensions.</li>
+<li><strong>Interpolates</strong> with <code>scipy.interpolate.griddata</code> (linear/cubic) when a specific <code>(m, n, k)</code> or <code>(batch, seq_len)</code> wasn't directly profiled.</li>
+<li>Sums op latencies, overlaying <strong>scheduling logic</strong>: in-flight batching for aggregated serving, prefill/decode split timing for disaggregated serving.</li>
+<li>Falls back to a <strong>roofline bound</strong> from the per-GPU YAML spec when the DB is too sparse at the query point.</li>
+</ol>
+
+<p>This is why the search is seconds rather than hours &mdash; the "execution" of a candidate config is a lookup-and-interpolate walk over the DB, not a launch-and-measure cycle on a real GPU.</p>
+
+<!-- ============================================================ -->
+<h2 id="data">4. How the Profile Data Is Organized</h2>
+
+<h3>4.1 Directory layout</h3>
+
+<pre><code>src/aiconfigurator/systems/
+├── h100_sxm.yaml                   ← hardware speed-of-light spec
+├── h200_sxm.yaml
+├── b200_sxm.yaml
+└── data/
+    ├── h100_sxm/
+    │   ├── trtllm/1.0.0rc3/
+    │   │   ├── gemm_perf.txt
+    │   │   ├── context_attention_perf.txt      (prefill attention)
+    │   │   ├── generation_attention_perf.txt   (decode attention)
+    │   │   ├── context_mla_perf.txt            (DeepSeek MLA prefill)
+    │   │   ├── generation_mla_perf.txt         (DeepSeek MLA decode)
+    │   │   ├── mla_bmm_perf.txt
+    │   │   ├── moe_perf.txt
+    │   │   ├── custom_allreduce_perf.txt
+    │   │   └── scale_matrix_perf.txt
+    │   ├── vllm/{0.12.0, 0.14.0, 0.19.0, ...}/
+    │   └── sglang/0.5.6.post2/
+    ├── nccl/2.27.3/                  ← framework-agnostic comms
+    ├── h200_sxm/, b200_sxm/, ...     ← other systems
+</code></pre>
+
+<p>Every leaf is a version-stamped directory so that framework updates don't invalidate prior profiles. The <code>nccl/</code> tree holds framework-independent communication measurements.</p>
+
+<h3>4.2 File format</h3>
+
+<p><strong>Plain CSV text</strong> &mdash; no binary, no parquet, no database. Each row is one kernel measurement.</p>
+
+<p>Representative GEMM row:</p>
+<pre><code>framework,version,device,op_name,kernel_source,gemm_dtype,m,n,k,latency[,power,power_limit]
+TRTLLM,1.0.0rc3,NVIDIA H100 80GB HBM3,gemm,trt_flow_/weight_only_quant_matmul_L257/...,int8_wo,8192,65536,4096,4.875</code></pre>
+
+<p>Representative attention row (context):</p>
+<pre><code>framework,version,device,op_name,attention_type,gemm_dtype,kv_cache_dtype,quant_mode,
+    num_heads,head_size,seq_len,batch_size,latency[,power,power_limit]</code></pre>
+
+<p>Representative communication row (custom all-reduce):</p>
+<pre><code>framework,version,device,op_name,comm_quant_mode,num_gpus,size_in_bytes,latency</code></pre>
+
+<p>Row counts per file: O(100)&ndash;O(500) for GEMM; O(50)&ndash;O(200) for attention; O(10)&ndash;O(50) for communication.</p>
+
+<h3>4.3 In-memory indexing</h3>
+
+<p>After CSV load, the code (<code>src/aiconfigurator/perf_database.py</code>) builds nested-dict lookup tables:</p>
+
+<pre><code>GEMM:          quant_mode &rarr; m &rarr; n &rarr; k &rarr; latency
+Attention:     quant_mode &rarr; kv_dtype &rarr; num_kv_heads &rarr; head_size &rarr;
+               window_size &rarr; seq_len &rarr; batch_size &rarr; latency
+Comm:          comm_quant_mode &rarr; num_gpus &rarr; message_size &rarr; latency
+MoE:           quant_mode &rarr; num_experts &rarr; top_k &rarr; num_tokens &rarr; latency</code></pre>
+
+<p>Multi-dimensional queries that fall between grid points go through <code>scipy.interpolate.griddata</code>. The nested-dict structure makes exact hits O(1) and interpolation lookups O(log n) in the dimension space.</p>
+
+<h3>4.4 Per-GPU YAML spec</h3>
+
+<p>Alongside the measurement data, each GPU has a YAML of hardware properties used for roofline bounds when the DB is sparse at a query point:</p>
+
+<pre><code># src/aiconfigurator/systems/h100_sxm.yaml
+gpu:
+  mem_bw: 3350000000000            # 3.35 TB/s
+  float16_tc_flops: 989000000000000  # 989 TFLOPS (fp16 TC)
+  power: 700                        # Watts max
+  sm_version: 90
+node:
+  num_gpus_per_node: 8
+  intra_node_bw: 450000000000       # bytes/s per GPU
+  inter_node_bw:  50000000000       # bytes/s per GPU (multi-node)
+misc:
+  nccl_version: "2.27.3"</code></pre>
+
+<h3>4.5 Version management</h3>
+
+<p>Each collector module declares <code>__compat__</code> metadata (e.g. <code>"trtllm&gt;=1.1.0"</code>), and the configurator at search time resolves the best matching dataset via <code>version_resolver.py</code> using <code>packaging.version</code>. When frameworks ship new kernels, a new sibling collector file <code>collect_&lt;op&gt;_v2.py</code> is added alongside the old one, each with its own version range.</p>
+
+<!-- ============================================================ -->
+<h2 id="granularity">5. Profiling Granularity: Kernel vs Module</h2>
+
+<p>The default is <strong>kernel-level microbenchmarking</strong> &mdash; every primitive is invoked in isolation with dummy weights and activations. One exception exists: MLA attention (DeepSeek), which is profiled at the module level because separating it into independent GEMMs would miss the projection/attention choreography.</p>
+
+<table>
+<tr>
+<th>Operation</th>
+<th>Granularity</th>
+<th>Collector file</th>
+<th>How it's profiled</th>
+</tr>
+<tr>
+<td>GEMM</td>
+<td><span class="tag tag-kernel">kernel</span></td>
+<td><code>collect_gemm.py</code></td>
+<td>Direct <code>tensorrt_llm._torch.modules.linear.Linear</code> call per (m, n, k, quant_mode)</td>
+</tr>
+<tr>
+<td>Attention (MHA/GQA)</td>
+<td><span class="tag tag-kernel">kernel</span></td>
+<td><code>collect_attn.py</code></td>
+<td>Standalone FMHA context / generation kernel per (batch, seq_len, num_heads, head_dim)</td>
+</tr>
+<tr>
+<td>MoE</td>
+<td><span class="tag tag-kernel">kernel</span></td>
+<td><code>collect_moe_v*.py</code></td>
+<td>Expert compute + dispatch/combine as separate primitives</td>
+</tr>
+<tr>
+<td>MLA / DSA (DeepSeek-V3)</td>
+<td><span class="tag tag-module">module</span></td>
+<td><code>collect_mla_module.py</code></td>
+<td>Mock single-layer <code>DeepseekV3DecoderLayer</code> with dummy weights; extract attention module; time forward pass</td>
+</tr>
+<tr>
+<td>Communication</td>
+<td><span class="tag tag-bench">micro-bench</span></td>
+<td><code>collect_comm.sh</code> + NCCL tests</td>
+<td>Standard nccl-tests + custom collective over (msg_size, num_gpus, quant_mode). Not run in model context.</td>
+</tr>
+<tr>
+<td>Memory / element-wise</td>
+<td><span class="tag tag-kernel">kernel</span></td>
+<td><code>collect_computescale.py</code>, <code>collect_gdn.py</code></td>
+<td>Per-op direct invocation</td>
+</tr>
+</table>
+
+<h3>5.1 Why mostly kernel-level</h3>
+
+<p>The cost model assumes you can <strong>sum per-kernel times</strong> (with a scheduling overlay). That holds if and only if each kernel's latency is reproducible <em>independent of model context</em>. Microbenchmarking guarantees independence: no neighboring kernel's cache state or DRAM contention contaminates the measurement. Trace-based profiling, by contrast, couples kernel time to surrounding state and breaks the sum-and-interpolate abstraction.</p>
+
+<h3>5.2 Why MLA is the exception</h3>
+
+<blockquote>
+From <code>collect_mla_module.py</code>: "Profiles the complete attention module forward pass (projections + attention + output), not just the bare attention kernel."
+</blockquote>
+
+<p>MLA has multi-stage down/up projections fused with FMHA; separating them into independent GEMMs loses accuracy because projection math + attention math share reshape/transpose choreography whose cost is not captured by the bare kernels. The MLA collector builds a mock single-layer DeepSeek decoder with dummy weights, extracts the attention module, and times <code>.forward()</code>. Same output format, coarser granularity.</p>
+
+<h3>5.3 Never end-to-end</h3>
+
+<p>No collector ever runs the full model and attributes time from traces. End-to-end profiling would be significantly more expensive, model-specific, and brittle to production variance. Every DB row is a standalone primitive.</p>
+
+<!-- ============================================================ -->
+<h2 id="mechanics">6. Measurement Mechanics</h2>
+
+<p>What makes the kernel microbenchmarks trustworthy enough to drive production config decisions:</p>
+
+<h3>6.1 Hardware preparation (from collector/README.md)</h3>
+<ul>
+<li><strong>Persistent mode:</strong> <code>sudo nvidia-smi -pm 1</code></li>
+<li><strong>Clock lock:</strong> <code>sudo nvidia-smi -ac &lt;mem_freq&gt;,&lt;sm_freq&gt;</code> to prevent frequency drift</li>
+<li><strong>Single-tenant node</strong> &mdash; no other workloads sharing the GPU</li>
+<li><strong>Adequate cooling</strong> &mdash; collector also detects throttle events post-hoc and flags the row</li>
+</ul>
+
+<h3>6.2 Runtime mechanics (from <code>helper.py</code>)</h3>
+<ul>
+<li><code>benchmark_with_power</code> wraps every measurement: <strong>3 warmup</strong> iterations, <strong>6 timed</strong> runs with <strong><code>repeat_n=5</code></strong> replays for GEMM.</li>
+<li><strong>CUDA graph capture</strong>: <code>torch.cuda.graph</code> captures the launch sequence once and replays it, eliminating launch overhead from each measurement.</li>
+<li><strong>Graceful fallback</strong>: <code>allow_graph_fail=True</code> for kernels that can't be graph-captured (e.g. dynamic-shape ops).</li>
+<li><strong>Event-based timing</strong>: <code>torch.cuda.Event</code> with <code>elapsed_time</code> for GPU-side precision (not CPU wall clock).</li>
+<li><strong>Optional power measurement</strong>: driven by <code>COLLECTOR_MEASURE_POWER=1</code>, reads via NVML; enables adaptive <code>num_runs</code> to guarantee min measurement duration.</li>
+<li><strong>Weight caching</strong>: <code>_weight_cache</code> keyed by <code>(gemm_type, n, k)</code> so all batch sizes for the same weight shape reuse the same <code>torch.randn</code> allocation &mdash; cold-cache noise removed, and the test cases are <strong>grouped by <code>(n, k)</code></strong> and sorted largest-first for cache reuse.</li>
+</ul>
+
+<h3>6.3 Concurrency</h3>
+<ul>
+<li>File-level locks on CSV outputs (<code>perf_filename + ".lock"</code>) allow parallel collector workers to write concurrently.</li>
+<li>One row at a time per worker; no partial-write corruption.</li>
+</ul>
+
+<!-- ============================================================ -->
+<h2 id="costmodel">7. At Search Time: Composing Predictions</h2>
+
+<p>The configurator's search loop for a given (model, GPU, SLA) target:</p>
+
+<ol>
+<li><strong>Enumerate candidate configs.</strong> Parallelism combinations (TP/PP/EP), worker counts, batch sizes, KV-cache allocations, CUDA-graph on/off, prefill/decode split ratios. The space is pruned by feasibility checks (memory fit, head divisibility).</li>
+<li><strong>Decompose each candidate into op calls.</strong> For a given model architecture, the per-layer op sequence is known statically: <code>[rmsnorm, qkv_gemm, rope, attention, o_gemm, rmsnorm, gate_gemm, up_gemm, activation, down_gemm, allreduce, residual]</code> &times; <code>num_layers</code>.</li>
+<li><strong>Look up each op in the DB.</strong> Build the problem-size key for this candidate, hit the nested dict, interpolate with <code>scipy.interpolate.griddata</code> if off-grid.</li>
+<li><strong>Compose total latency.</strong> Sum per-op times; layer in-flight batching overlap (comp-comm or comp-dispatch); for disaggregated serving, compute prefill / decode / KV-transfer components separately.</li>
+<li><strong>Apply roofline bound.</strong> Clamp predictions to the speed-of-light number derived from the YAML spec (memory BW / flops / power-limited).</li>
+<li><strong>Score against the SLA.</strong> Evaluate throughput at TTFT/TPOT targets; check latency percentile feasibility.</li>
+<li><strong>Return best config.</strong> Output YAML / JSON fed directly to Dynamo orchestrator.</li>
+</ol>
+
+<p>Published accuracy vs real measurement: <strong>~10&ndash;15%</strong> for the configurations the paper evaluated. Within the search, the <em>ranking</em> among candidates matters more than absolute accuracy, and ranking is more robust than point predictions.</p>
+
+<!-- ============================================================ -->
+<h2 id="compare">8. Comparison to Related Work</h2>
+
+<table>
+<tr>
+<th>System</th>
+<th>Input signal</th>
+<th>Cost model style</th>
+<th>Serving scope</th>
+</tr>
+<tr>
+<td><strong>AIConfigurator</strong></td>
+<td>Kernel-level microbench CSVs per (GPU, framework, version)</td>
+<td>Nested-dict lookup + scipy griddata interpolation + roofline fallback</td>
+<td>Full disaggregated / aggregated inference config</td>
+</tr>
+<tr>
+<td>SimAI (NSDI '25)</td>
+<td>ASTRA-sim + ns-3 discrete-event network simulation</td>
+<td>Event-driven simulator, NCCL latency floors + calbusbw formulas</td>
+<td>Training + (1.5) inference with Vidur scheduler</td>
+</tr>
+<tr>
+<td>xPU-simulator <code>ml_predictor.py</code></td>
+<td>Optional ProfilingDB, RandomForest per op category</td>
+<td>ML regression (matmul / attention / comm / elementwise)</td>
+<td>Single-node inference cost model</td>
+</tr>
+<tr>
+<td>Vidur (MLSys '24)</td>
+<td>Profile + predictor for LLM operator timings</td>
+<td>Similar spirit: profile-driven, per-op prediction</td>
+<td>Inference request scheduling</td>
+</tr>
+<tr>
+<td>Roofline</td>
+<td>Peak FLOPS + memory BW only</td>
+<td>Analytical min(compute, memory) bound</td>
+<td>Coarse capacity planning</td>
+</tr>
+</table>
+
+<p>AIConfigurator sits between roofline (too coarse) and full simulation (too slow). Its distinguishing move is the bet that a <em>dense</em> measured grid + <em>interpolation</em> beats both ML regression (needs training) and event-driven simulation (needs a simulator).</p>
+
+<!-- ============================================================ -->
+<h2 id="takeaways">9. Takeaways for xPU-simulator and SMAP</h2>
+
+<h3>9.1 For xPU-simulator's ML predictor</h3>
+
+<p>The existing <code>backends/ml_predictor.py</code> (absorbed from SimAI in 2026-04-14) trains RandomForests per op category. AIConfigurator's CSV + griddata design is a strong alternative:</p>
+
+<ul>
+<li><strong>Interpretable</strong> &mdash; each prediction traces back to nearby measured points.</li>
+<li><strong>No training step</strong> &mdash; the table <em>is</em> the model.</li>
+<li><strong>Framework version as a first-class key</strong> &mdash; captures kernel improvements across versions that RandomForest trained on pooled data would smooth over.</li>
+<li><strong>Cost:</strong> requires a disciplined collection pipeline (see &sect;6), which ML-from-historical-traces avoids.</li>
+</ul>
+
+<p>Hybrid worth considering: use AIConfigurator-style CSV lookup when the profile DB covers the query point, fall back to the ML predictor when out-of-distribution.</p>
+
+<h3>9.2 For SMAP's memory-tier decisions</h3>
+
+<p>Less directly applicable (AIConfigurator is a compute/latency tool, SMAP is a memory placement tool), but the design principle transfers: <strong>profile the primitives once, compose predictions cheaply.</strong> SMAP already does this in spirit with ACTC counter collection; the profile-DB idea could apply to page-migration cost (per-node, per-page-size, per-hotness-class) instead of re-running experiments every time a migration decision is needed.</p>
+
+<h3>9.3 Reusable design patterns</h3>
+
+<ul>
+<li><strong>Version-stamped data directories</strong> that survive framework upgrades.</li>
+<li><strong>YAML hardware specs alongside measurements</strong> for roofline fallback.</li>
+<li><strong>Plain CSV for human inspectability</strong> &mdash; debug and diff trivially.</li>
+<li><strong>One-time calibration + runtime composition</strong> as the core speedup.</li>
+<li><strong>Strict measurement hygiene</strong>: clock lock, CUDA graphs, weight cache, event-based timing.</li>
+</ul>
+
+<!-- ============================================================ -->
+<h2 id="refs">10. References</h2>
+
+<h3>Primary sources</h3>
+<ul>
+<li>Paper: <a href="https://arxiv.org/abs/2601.06288">AIConfigurator: Lightning-Fast Configuration Optimization for Multi-Framework LLM Serving</a>, Xu et al., NVIDIA, arXiv 2601.06288 (2026-01-09).</li>
+<li>Repo: <a href="https://github.com/ai-dynamo/aiconfigurator">github.com/ai-dynamo/aiconfigurator</a>, analyzed at commit <code>3a1612e</code>.</li>
+<li>DeepWiki: <a href="https://deepwiki.com/ai-dynamo/aiconfigurator">deepwiki.com/ai-dynamo/aiconfigurator</a>.</li>
+</ul>
+
+<h3>Local clone paths</h3>
+<ul>
+<li><code>/Users/ray/Documents/Repo/aiconfigurator</code> &mdash; shallow clone, 1.4 GB (LFS data).</li>
+<li>Key files referenced in this document:
+    <ul>
+    <li><code>collector/collect.py</code>, <code>collector/helper.py</code></li>
+    <li><code>collector/trtllm/collect_gemm.py</code>, <code>collect_attn.py</code>, <code>collect_mla_module.py</code></li>
+    <li><code>src/aiconfigurator/systems/data/&lt;system&gt;/&lt;backend&gt;/&lt;version&gt;/*_perf.txt</code></li>
+    <li><code>src/aiconfigurator/systems/h100_sxm.yaml</code> and siblings</li>
+    <li><code>src/aiconfigurator/perf_database.py</code> (nested-dict indexing + griddata interpolation)</li>
+    </ul>
+</li>
+</ul>
+
+<h3>Related systems with shared lineage</h3>
+<ul>
+<li>NVIDIA Dynamo (<a href="https://github.com/ai-dynamo">ai-dynamo</a>) &mdash; the disaggregated serving runtime AIConfigurator produces configs for.</li>
+<li>Microsoft Vidur (<a href="https://github.com/microsoft/vidur">microsoft/vidur</a>, MLSys '24) &mdash; profile-driven LLM inference scheduler; similar spirit, different scope.</li>
+<li>SimAI (<a href="https://github.com/aliyun/SimAI">aliyun/SimAI</a>, NSDI '25) &mdash; simulation-based, bundles Vidur as of 1.5.</li>
+</ul>
+
+<blockquote>
+This document reflects the state of <code>ai-dynamo/aiconfigurator</code> at commit <code>3a1612e</code> (2026-04-21). Kernel collectors and CSV schemas evolve; the paper's principles are more stable than any specific file's layout.
+</blockquote>
+
+</body>
+</html>

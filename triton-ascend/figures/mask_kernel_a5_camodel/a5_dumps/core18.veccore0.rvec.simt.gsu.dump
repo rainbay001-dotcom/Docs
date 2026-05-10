@@ -1,0 +1,10 @@
+[info] [GSU_CFG], bg_num over gsu_port    2
+[info] [GSU_CFG], bank_num     64
+[info] [GSU_CFG], bg_num       32
+[info] [GSU_CFG], vir_bg_num   16
+[info] [GSU_CFG], line_size    8
+[info] [GSU_CFG], port_limit   16
+[info] [GSU_CFG], throughput   128
+[info] [GSU_CFG], ele_size     2
+[info] [GSU_CFG], vir_bkbg_ofs 7
+[info] [GSU_CFG], vir_bkbg_msk 1

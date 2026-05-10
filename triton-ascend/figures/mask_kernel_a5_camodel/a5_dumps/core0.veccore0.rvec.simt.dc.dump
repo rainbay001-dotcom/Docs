@@ -1,0 +1,17 @@
+[info] [00000000][TagRam] SetShmemSz, dcacheBase_:131072
+[info] [00000000][Line] SetShmemSz, shmemSz:131072
+[info] [00000000][Line] AutoReset, dcacheSize_:131072, cacheLineNum_:1024
+[info] [00000216][DC] cfg SetShmemSz, shmemSz:262144
+[info] [00000216][TagRam] SetShmemSz, dcacheBase_:262144
+[info] [00000216][Line] SetShmemSz, shmemSz:262144
+[info] [00000216][Line] AutoReset, dcacheSize_:0, cacheLineNum_:0
+[info] [00002140][Line] AutoReset, dcacheSize_:0, cacheLineNum_:0
+[info] ++++++++++++++++++++++core: 0, subcore: 1, start: 216, tick: 2232, kernelId: 0, blkID: 0, blkDim: 1, rtsqId: 1, streamId: 0, taskId: 0, subtaskId: 0, threadId: 0, done++++++++++++++++++++++.
+[info] [00002233][Line] AutoReset, dcacheSize_:0, cacheLineNum_:0
+[info] [00002234][Line] AutoReset, dcacheSize_:0, cacheLineNum_:0
+[info] [00002235][Line] AutoReset, dcacheSize_:0, cacheLineNum_:0
+[info] [00002236][Line] AutoReset, dcacheSize_:0, cacheLineNum_:0
+[info] [00002237][Line] AutoReset, dcacheSize_:0, cacheLineNum_:0
+[info] [00002238][Line] AutoReset, dcacheSize_:0, cacheLineNum_:0
+[info] [00002239][Line] AutoReset, dcacheSize_:0, cacheLineNum_:0
+[info] [00002240][Line] AutoReset, dcacheSize_:0, cacheLineNum_:0

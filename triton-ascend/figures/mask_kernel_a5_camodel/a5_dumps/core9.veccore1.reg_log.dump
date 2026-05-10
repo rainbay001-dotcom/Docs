@@ -1,0 +1,2 @@
+[info] [00000000]: write spr: name = COREID, val = 0x33
+[info] [00000000]: write spr: name = SYS_VA_BASE, val = 0x0

@@ -1,0 +1,749 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>SMAP Integration Roadmap: Kernel Features to Absorb</title>
+<style>
+:root {
+    --bg: #0d1117;
+    --card: #161b22;
+    --border: #30363d;
+    --text: #c9d1d9;
+    --heading: #e6edf3;
+    --accent: #58a6ff;
+    --accent2: #7ee787;
+    --accent3: #d2a8ff;
+    --accent4: #ff7b72;
+    --accent5: #ffa657;
+    --code-bg: #0d1117;
+    --link: #58a6ff;
+}
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    line-height: 1.7;
+    padding: 2rem;
+    max-width: 1200px;
+    margin: 0 auto;
+}
+h1 { color: var(--heading); font-size: 2.2rem; margin-bottom: 0.5rem; border-bottom: 1px solid var(--border); padding-bottom: 1rem; }
+h2 { color: var(--accent); font-size: 1.6rem; margin-top: 2.5rem; margin-bottom: 1rem; border-bottom: 1px solid var(--border); padding-bottom: 0.5rem; }
+h3 { color: var(--accent2); font-size: 1.25rem; margin-top: 1.8rem; margin-bottom: 0.8rem; }
+h4 { color: var(--accent3); font-size: 1.05rem; margin-top: 1.2rem; margin-bottom: 0.5rem; }
+p { margin-bottom: 1rem; }
+a { color: var(--link); text-decoration: none; }
+a:hover { text-decoration: underline; }
+code {
+    font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
+    background: var(--code-bg);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 0.15em 0.4em;
+    font-size: 0.88em;
+    color: var(--accent5);
+}
+pre {
+    background: var(--code-bg);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 1.2rem;
+    overflow-x: auto;
+    margin-bottom: 1.2rem;
+    font-size: 0.85rem;
+    line-height: 1.5;
+}
+pre code { border: none; padding: 0; background: none; color: var(--text); }
+.card {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 1.5rem;
+    margin-bottom: 1.5rem;
+}
+.svg-container {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 1rem;
+    margin: 1.5rem 0;
+    overflow-x: auto;
+    text-align: center;
+}
+.svg-container svg { max-width: 100%; height: auto; }
+table { width: 100%; border-collapse: collapse; margin-bottom: 1.5rem; }
+th, td { padding: 0.6rem 0.8rem; border: 1px solid var(--border); text-align: left; font-size: 0.9rem; vertical-align: top; }
+th { background: #1c2128; color: var(--accent); font-weight: 600; }
+td { background: var(--card); }
+ul, ol { margin: 0.5rem 0 1rem 1.5rem; }
+li { margin-bottom: 0.3rem; }
+.tag {
+    display: inline-block;
+    padding: 0.1em 0.5em;
+    border-radius: 12px;
+    font-size: 0.78em;
+    font-weight: 600;
+    margin-right: 0.3em;
+}
+.tag-signal  { background: #58a6ff20; color: #58a6ff; border: 1px solid #58a6ff40; }
+.tag-action  { background: #7ee78720; color: #7ee787; border: 1px solid #7ee78740; }
+.tag-framework { background: #d2a8ff20; color: #d2a8ff; border: 1px solid #d2a8ff40; }
+.tag-research { background: #ffa65720; color: #ffa657; border: 1px solid #ffa65740; }
+.tag-low  { background: #3fb95020; color: #3fb950; border: 1px solid #3fb95040; }
+.tag-med  { background: #ffa65720; color: #ffa657; border: 1px solid #ffa65740; }
+.tag-high { background: #ff7b7220; color: #ff7b72; border: 1px solid #ff7b7240; }
+.subtitle { color: #8b949e; font-size: 1.1rem; margin-bottom: 2rem; }
+.toc { background: var(--card); border: 1px solid var(--border); border-radius: 8px; padding: 1.5rem; margin: 1.5rem 0; }
+.toc h3 { margin-top: 0; color: var(--heading); }
+.toc ol { margin-bottom: 0; }
+.toc li { margin-bottom: 0.4rem; }
+.toc a { color: var(--accent); }
+.file-ref { color: #8b949e; font-size: 0.85em; font-style: italic; }
+.highlight { color: var(--accent5); font-weight: 600; }
+.direction { border-left: 3px solid var(--accent); padding-left: 1rem; margin: 2rem 0; }
+.direction h3 { margin-top: 0; }
+.meta-table td { font-size: 0.88rem; }
+.meta-table td:first-child { background: #1c2128; color: var(--accent3); font-weight: 600; width: 130px; }
+blockquote { border-left: 3px solid var(--accent5); padding: 0.5rem 1rem; margin: 1rem 0; background: var(--card); color: #8b949e; font-style: italic; }
+</style>
+</head>
+<body>
+
+<h1>SMAP Integration Roadmap</h1>
+<p class="subtitle">Modern Linux memory-management features worth absorbing into SMAP &mdash; prioritized by value, effort, and strategic fit</p>
+
+<p>SMAP today is a paddr-driven tiering daemon: ACTC + AF-bit access tracking, a per-process strategy engine, NUMA-node-based L1/L2 migration via <code>migrate_pages()</code>, and (as of 2026-04-17) NVMe swap-out via <code>reclaim_pages()</code>. That covers the <strong>basic</strong> job of three-tier placement. But the Linux memory subsystem has evolved substantially since SMAP was designed; a number of kernel features would let SMAP be smarter, more reactive, and less custom.</p>
+
+<p>This document catalogs <strong>fifteen integration directions</strong>, explains the gap each fills, sketches the concrete integration, and proposes a phased roadmap. It is intentionally a survey, not a commitment &mdash; the goal is to make the tradeoffs explicit so we can pick correctly.</p>
+
+<div class="toc">
+<h3>Table of Contents</h3>
+<ol>
+<li><a href="#framing">Framing: What SMAP Is and Isn't Seeing</a></li>
+<li><a href="#current">Current Architecture Snapshot</a></li>
+<li><a href="#directions">The Fifteen Directions</a>
+    <ol>
+        <li><a href="#d-psi">PSI &mdash; Pressure Stall Information</a></li>
+        <li><a href="#d-mglru">MGLRU &mdash; Multi-Generational LRU</a></li>
+        <li><a href="#d-hmat">HMAT / CDAT &mdash; Tier Topology Discovery</a></li>
+        <li><a href="#d-spe">SPE / PMU &mdash; Hardware Access Sampling</a></li>
+        <li><a href="#d-cxlctr">CXL.mem Hardware Counters</a></li>
+        <li><a href="#d-zswap">zswap / zram &mdash; Compressed In-RAM Tier</a></li>
+        <li><a href="#d-memreclaim">cgroup memory.reclaim &mdash; Scoped Reclaim</a></li>
+        <li><a href="#d-swapthrottle">cgroup memory.swap &mdash; Per-Container Throttling</a></li>
+        <li><a href="#d-iouring">io_uring &mdash; Async Swap I/O</a></li>
+        <li><a href="#d-uffd">userfaultfd &mdash; User-Space Fault Handling</a></li>
+        <li><a href="#d-damon">DAMON Ops Set &mdash; Framework Refactor</a></li>
+        <li><a href="#d-bpf-intro">eBPF &mdash; Introspection</a></li>
+        <li><a href="#d-bpf-policy">eBPF &mdash; Loadable Strategy</a></li>
+        <li><a href="#d-rl">RL Auto-Tuning</a></li>
+        <li><a href="#d-rdma">RDMA &mdash; Cross-Node Migration</a></li>
+    </ol>
+</li>
+<li><a href="#matrix">Prioritization Matrix</a></li>
+<li><a href="#roadmap">Phased Roadmap</a></li>
+<li><a href="#references">References</a></li>
+</ol>
+</div>
+
+<!-- ============================================================ -->
+<h2 id="framing">1. Framing: What SMAP Is and Isn't Seeing</h2>
+
+<p>Before surveying features, it helps to name <strong>the gaps</strong>. Every integration below fills one of these buckets:</p>
+
+<h3>Missing signals (input)</h3>
+<ul>
+<li><span class="tag tag-signal">pressure</span> How much the workload is <em>actually</em> suffering right now. SMAP sees memory levels (supply side), not stalls (demand side). &rarr; PSI.</li>
+<li><span class="tag tag-signal">generation</span> How old/cold each page is in the kernel's own view. SMAP's AF-bit scanner redoes work the kernel already does. &rarr; MGLRU.</li>
+<li><span class="tag tag-signal">topology</span> Which NUMA nodes are DRAM vs CXL vs PMEM, and their relative speed. SMAP hardcodes this. &rarr; HMAT / CDAT.</li>
+<li><span class="tag tag-signal">pattern</span> Actual addresses accessed, with latency. AF-bit is binary; SPE samples are continuous. &rarr; ARM SPE / x86 IBS.</li>
+<li><span class="tag tag-signal">device</span> Per-CXL-device access counts exposed in hardware. &rarr; CXL 3.0 DPA counters.</li>
+</ul>
+
+<h3>Missing levers (output)</h3>
+<ul>
+<li><span class="tag tag-action">compressed tier</span> In-RAM compressed storage before going to disk. &rarr; zswap / zram.</li>
+<li><span class="tag tag-action">scope</span> Per-cgroup reclaim instead of per-process or global. &rarr; cgroup memory.reclaim.</li>
+<li><span class="tag tag-action">throttle</span> Prevent runaway swap consumption by one tenant. &rarr; memory.swap.{max,high}.</li>
+<li><span class="tag tag-action">async I/O</span> Explicit control over swap device I/O pipeline. &rarr; io_uring.</li>
+<li><span class="tag tag-action">fault-time</span> Make placement decisions at page-fault time, not post-hoc. &rarr; userfaultfd.</li>
+</ul>
+
+<h3>Missing framework integration</h3>
+<ul>
+<li><span class="tag tag-framework">framework</span> Custom kprobe-based symbol lookup is fragile across kernels. &rarr; eBPF introspection.</li>
+<li><span class="tag tag-framework">framework</span> Strategy is compiled-in C; hard to experiment. &rarr; eBPF-loadable policy.</li>
+<li><span class="tag tag-framework">framework</span> SMAP re-implements access tracking, filtering, quotas &mdash; DAMON already has all of this. &rarr; DAMON ops set.</li>
+</ul>
+
+<h3>Research / long-term</h3>
+<ul>
+<li><span class="tag tag-research">research</span> Static thresholds are wrong for most workloads. &rarr; RL auto-tuning.</li>
+<li><span class="tag tag-research">research</span> Pool memory across machines via CXL fabric or RDMA. &rarr; RDMA cross-node.</li>
+</ul>
+
+<!-- ============================================================ -->
+<h2 id="current">2. Current Architecture Snapshot</h2>
+
+<div class="svg-container">
+<svg viewBox="0 0 920 420" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <marker id="arr" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#58a6ff"/>
+    </marker>
+  </defs>
+  <rect width="920" height="420" fill="#0d1117"/>
+
+  <!-- User-space daemon -->
+  <rect x="20" y="40" width="420" height="150" fill="#161b22" stroke="#58a6ff" rx="8"/>
+  <text x="230" y="65" text-anchor="middle" fill="#58a6ff" font-size="15" font-weight="bold">User-Space Daemon</text>
+  <rect x="40" y="80" width="180" height="40" fill="#0d1117" stroke="#30363d" rx="4"/>
+  <text x="130" y="105" text-anchor="middle" fill="#7ee787" font-size="12">Scene Classifier</text>
+  <rect x="240" y="80" width="180" height="40" fill="#0d1117" stroke="#30363d" rx="4"/>
+  <text x="330" y="105" text-anchor="middle" fill="#7ee787" font-size="12">Strategy Engine</text>
+  <rect x="40" y="130" width="180" height="40" fill="#0d1117" stroke="#30363d" rx="4"/>
+  <text x="130" y="155" text-anchor="middle" fill="#7ee787" font-size="12">Cold-Window Tracker</text>
+  <rect x="240" y="130" width="180" height="40" fill="#0d1117" stroke="#30363d" rx="4"/>
+  <text x="330" y="155" text-anchor="middle" fill="#7ee787" font-size="12">IPC / SDK (17 APIs)</text>
+
+  <!-- Kernel module -->
+  <rect x="480" y="40" width="420" height="150" fill="#161b22" stroke="#d2a8ff" rx="8"/>
+  <text x="690" y="65" text-anchor="middle" fill="#d2a8ff" font-size="15" font-weight="bold">Kernel Module (SMAP)</text>
+  <rect x="500" y="80" width="180" height="40" fill="#0d1117" stroke="#30363d" rx="4"/>
+  <text x="590" y="105" text-anchor="middle" fill="#ffa657" font-size="12">ACTC Driver</text>
+  <rect x="700" y="80" width="180" height="40" fill="#0d1117" stroke="#30363d" rx="4"/>
+  <text x="790" y="105" text-anchor="middle" fill="#ffa657" font-size="12">AF-bit Scanner</text>
+  <rect x="500" y="130" width="180" height="40" fill="#0d1117" stroke="#30363d" rx="4"/>
+  <text x="590" y="155" text-anchor="middle" fill="#ffa657" font-size="12">do_migrate (ioctl)</text>
+  <rect x="700" y="130" width="180" height="40" fill="#0d1117" stroke="#30363d" rx="4"/>
+  <text x="790" y="155" text-anchor="middle" fill="#ffa657" font-size="12">do_swap_out (ioctl)</text>
+
+  <!-- Ioctl arrow -->
+  <line x1="440" y1="115" x2="480" y2="115" stroke="#58a6ff" stroke-width="2" marker-end="url(#arr)"/>
+  <text x="460" y="108" text-anchor="middle" fill="#8b949e" font-size="10">ioctl</text>
+
+  <!-- Tiers -->
+  <rect x="60" y="230" width="220" height="140" fill="#161b22" stroke="#3fb950" rx="8"/>
+  <text x="170" y="255" text-anchor="middle" fill="#3fb950" font-size="14" font-weight="bold">L1: Local DRAM</text>
+  <text x="170" y="285" text-anchor="middle" fill="#c9d1d9" font-size="11">NUMA 0-3</text>
+  <text x="170" y="310" text-anchor="middle" fill="#8b949e" font-size="11">hot working set</text>
+
+  <rect x="320" y="230" width="220" height="140" fill="#161b22" stroke="#58a6ff" rx="8"/>
+  <text x="430" y="255" text-anchor="middle" fill="#58a6ff" font-size="14" font-weight="bold">L2: CXL / PMEM</text>
+  <text x="430" y="285" text-anchor="middle" fill="#c9d1d9" font-size="11">NUMA 4 (remote)</text>
+  <text x="430" y="310" text-anchor="middle" fill="#8b949e" font-size="11">warm / slow-decay</text>
+
+  <rect x="580" y="230" width="260" height="140" fill="#161b22" stroke="#ff7b72" rx="8"/>
+  <text x="710" y="255" text-anchor="middle" fill="#ff7b72" font-size="14" font-weight="bold">L3: NVMe Swap</text>
+  <text x="710" y="285" text-anchor="middle" fill="#c9d1d9" font-size="11">cold &mdash; reclaim_pages()</text>
+  <text x="710" y="310" text-anchor="middle" fill="#8b949e" font-size="11">new, post-commit 39eb533</text>
+
+  <!-- Arrows between tiers -->
+  <line x1="280" y1="290" x2="320" y2="290" stroke="#58a6ff" stroke-width="2" marker-end="url(#arr)"/>
+  <line x1="320" y1="320" x2="280" y2="320" stroke="#58a6ff" stroke-width="2" marker-end="url(#arr)"/>
+  <line x1="540" y1="290" x2="580" y2="290" stroke="#ff7b72" stroke-width="2" marker-end="url(#arr)"/>
+
+  <text x="880" y="400" text-anchor="end" fill="#8b949e" font-size="10" font-style="italic">Current SMAP (as of 2026-04-18)</text>
+</svg>
+</div>
+
+<p>Signals SMAP acts on today: ACTC counters, AF-bit scans, L2 watermarks, per-process cold-window counts. Levers: <code>migrate_pages()</code>, <code>reclaim_pages()</code>. Everything else below is a potential expansion of either set.</p>
+
+<!-- ============================================================ -->
+<h2 id="directions">3. The Fifteen Directions</h2>
+
+<p>Each direction is presented with a consistent template: <strong>gap it fills</strong>, <strong>concrete integration</strong>, <strong>effort</strong>, <strong>risks / dependencies</strong>. Rough effort is for a single engineer: <span class="tag tag-low">days</span>, <span class="tag tag-med">weeks</span>, <span class="tag tag-high">months</span>.</p>
+
+<!-- ----- 1. PSI ----- -->
+<div class="direction">
+<h3 id="d-psi">3.1 <span class="tag tag-signal">signal</span> PSI &mdash; Pressure Stall Information <span class="tag tag-low">days</span></h3>
+
+<p><strong>Gap:</strong> SMAP sees memory levels (free, used, watermark) but not <em>stalls</em>. A system can have plenty of free memory and still thrash; or low free memory and be idle. PSI reports wall-time fraction that tasks spent blocked on memory, IO, or CPU &mdash; the actual pain signal.</p>
+
+<p><strong>openEuler availability:</strong> Confirmed. <code>kernel/sched/psi.c</code> + <code>CONFIG_PSI</code> + openEuler extensions <code>CONFIG_PSI_FINE_GRAINED</code> (per-cause breakdown) and <code>CONFIG_PSI_CGROUP_V1</code> (v1 hierarchies).</p>
+
+<p><strong>Files / APIs:</strong></p>
+<ul>
+<li><code>/proc/pressure/{cpu,memory,io,irq}</code> &mdash; standard 2-line format (some/full &times; avg10/60/300/total).</li>
+<li><code>/proc/pressure/stat</code> &mdash; openEuler fine-grained: <code>global_memory_reclaim</code>, <code>cgroup_memory_reclaim</code>, <code>swap</code>, <code>compact</code>, <code>cgroup_async_memory_reclaim</code>, <code>cpu_cfs_bandwidth</code>, <code>cpu_qos</code>.</li>
+<li><code>/sys/fs/cgroup/&lt;path&gt;/memory.pressure</code> + <code>pressure.stat</code> &mdash; same files per-cgroup.</li>
+<li><strong>Trigger channel:</strong> write <code>"some 150000 1000000"</code> to the file, then <code>poll(fd, POLLPRI)</code> &mdash; kernel wakes you on threshold crossing (150 ms stall in any 1 s window).</li>
+</ul>
+
+<p><strong>Integration:</strong></p>
+<ol>
+<li>New module <code>plugins/smap/src/user/sense/psi_monitor.{h,c}</code> &mdash; reads global + per-cgroup PSI each tick, plus optional trigger fd.</li>
+<li>Extend <code>SceneContext</code> with <code>PSIMetrics</code>. Scene classifier inputs PSI before falling back to current heuristics.</li>
+<li>Strategy tuning: HEAVY (some_avg10 &gt; 10%) &rarr; lower cold threshold, bigger batch. UNSTABLE (rapid derivative) &rarr; skip swap-out this round.</li>
+<li>Closed-loop (stretch): sample PSI delta pre/post swap to validate whether eviction actually reduced pain.</li>
+</ol>
+
+<p><strong>Risks:</strong> PSI must be enabled at build (<code>CONFIG_PSI=y</code>, optionally <code>psi=1</code> cmdline). Fine-grained files only exist with <code>CONFIG_PSI_FINE_GRAINED=y</code>. Graceful fallback required. Also: cgroup PSI needs v2 (or v1 + extension).</p>
+
+<p><strong>Why SMAP specifically:</strong> Differentiator. <span class="highlight">Neither DAMON nor damon_reclaim uses PSI today</span> &mdash; they're watermark-driven. SMAP + PSI = measurably smarter than stock tooling.</p>
+</div>
+
+<!-- ----- 2. MGLRU ----- -->
+<div class="direction">
+<h3 id="d-mglru">3.2 <span class="tag tag-signal">signal</span> MGLRU &mdash; Multi-Generational LRU <span class="tag tag-med">weeks</span></h3>
+
+<p><strong>Gap:</strong> SMAP's cold-window tracker redoes work MGLRU already does. MGLRU ages pages into generations (gen 0 = newest, gen N = oldest) via scheduler-integrated sampling; this is the kernel's canonical "how old is this page?" answer. Running two agers in parallel wastes CPU and can disagree.</p>
+
+<p><strong>openEuler availability:</strong> MGLRU merged upstream 6.1; OLK-6.6 should have it. Check <code>/sys/kernel/mm/lru_gen/enabled</code>.</p>
+
+<p><strong>Files / APIs:</strong></p>
+<ul>
+<li><code>/sys/kernel/mm/lru_gen/enabled</code> &mdash; on/off.</li>
+<li><code>/sys/kernel/mm/lru_gen/admin</code> &mdash; query per-memcg generation stats.</li>
+<li><code>/sys/kernel/debug/lru_gen</code> &mdash; read: table of generation counts per memcg/node/zone. Write: force-age commands.</li>
+<li>Tracepoints: <code>trace_mglru_*</code> via <code>tracefs/events/mglru/</code>.</li>
+<li>Kernel-internal: <code>struct lru_gen_folio</code>, <code>folio_lru_gen(folio)</code>.</li>
+</ul>
+
+<p><strong>Integration:</strong></p>
+<ol>
+<li>User-space: read <code>/sys/kernel/debug/lru_gen</code> for the target memcg and skim gen N (oldest) pages as swap-out candidates. Skip SMAP's own scan.</li>
+<li>Kernel-side (advanced): read <code>folio_lru_gen(folio)</code> during <code>do_swap_out</code>'s isolation check &mdash; only evict if gen &ge; threshold. Cheap in-line filter.</li>
+<li>Alignment: SMAP's Scene model can be informed by generation distribution &mdash; if most pages are in the newest 2 gens, there's nothing to evict.</li>
+</ol>
+
+<p><strong>Risks:</strong> MGLRU's internal ABI isn't stable; reading debug files is sanctioned but parsing is brittle. Kernel-side use means kallsyms lookup of <code>folio_lru_gen</code>-adjacent symbols.</p>
+
+<p><strong>Win:</strong> Potentially <em>remove</em> the cold-window tracker entirely, or at minimum run it at a lower frequency. The longer-term prize is cutting SMAP's per-tick CPU cost.</p>
+</div>
+
+<!-- ----- 3. HMAT / CDAT ----- -->
+<div class="direction">
+<h3 id="d-hmat">3.3 <span class="tag tag-signal">signal</span> HMAT / CDAT &mdash; Tier Topology Discovery <span class="tag tag-med">weeks</span></h3>
+
+<p><strong>Gap:</strong> SMAP hardcodes <code>NUMA0-3 = local DRAM</code>, <code>NUMA4 = remote CXL</code>. This doesn't survive porting: different boards have different topologies. ACPI HMAT (Heterogeneous Memory Attribute Table) and its successor CDAT (Coherent Device Attribute Table) expose per-node performance characteristics directly.</p>
+
+<p><strong>Files / APIs:</strong></p>
+<ul>
+<li><code>/sys/devices/system/node/nodeN/access0/initiators/</code> &mdash; which CPUs are "close" to this memory.</li>
+<li><code>/sys/devices/system/node/nodeN/access0/{read,write}_{latency,bandwidth}</code> &mdash; quantitative performance.</li>
+<li><code>/sys/bus/cxl/devices/*/</code> &mdash; CXL device inventory.</li>
+<li>Kernel: <code>include/linux/node.h</code> &mdash; in-kernel access-class queries.</li>
+</ul>
+
+<p><strong>Integration:</strong></p>
+<ol>
+<li>New module <code>plugins/smap/src/user/topology/tier_discovery.{h,c}</code> &mdash; walks sysfs at startup, classifies nodes into tiers by latency/bandwidth quartiles.</li>
+<li>Replace hardcoded <code>GetNrLocalNuma()</code>, <code>is_numa_remote()</code>, <code>NotInAttrL2()</code> with topology-driven predicates.</li>
+<li>Add a 3+ tier mode: if HMAT shows L1 DRAM &rarr; L2 CXL &rarr; L3 CXL (farther/slower), SMAP should plan multi-hop demotion.</li>
+</ol>
+
+<p><strong>Risks:</strong> Older platforms may not populate HMAT. Need fallback to the existing hardcoded layout when sysfs returns empty. CXL device discovery varies by kernel version.</p>
+
+<p><strong>Downstream benefit:</strong> Cleanliness of this work also enables #5 (CXL.mem counters) &mdash; both rely on robust CXL device enumeration.</p>
+</div>
+
+<!-- ----- 4. SPE / PMU ----- -->
+<div class="direction">
+<h3 id="d-spe">3.4 <span class="tag tag-signal">signal</span> SPE / PMU &mdash; Hardware Access Sampling <span class="tag tag-high">months</span></h3>
+
+<p><strong>Gap:</strong> AF-bit scanning is binary (accessed yes/no within a window) and requires a full PTE walk. ARM Statistical Profiling Extension (SPE) continuously samples load/store instructions with physical and virtual addresses, latency, and target tier &mdash; richer signal at lower CPU overhead.</p>
+
+<p><strong>Platform:</strong> ARMv8.2+ / Neoverse with SPE. Kunpeng 920 has it (check: <code>/sys/bus/event_source/devices/arm_spe_0</code>). x86 analog: IBS (AMD) or PEBS+PRECDIST (Intel).</p>
+
+<p><strong>Files / APIs:</strong></p>
+<ul>
+<li><code>perf_event_open(2)</code> with <code>PERF_TYPE_RAW</code>, <code>arm_spe_0</code> PMU type &mdash; installs SPE sampling.</li>
+<li>Sample record includes PA (<code>PHYS_ADDR</code>), VA (<code>DATA_SRC</code>), latency, target memory level.</li>
+<li>Integration precedents: HeMem (OSDI '21), Memtis (SOSP '23).</li>
+</ul>
+
+<p><strong>Integration:</strong></p>
+<ol>
+<li>New kernel-side sampling module <code>plugins/smap/src/kernel/spe_sampler.c</code> &mdash; configures SPE, ring-buffer consumer, populates a per-PA access-count map alongside ACTC.</li>
+<li>User-space merges: ACTC (hardware counters, per-page, sparse) + SPE (statistical, high-granularity, cross-node) &rarr; richer hotness score.</li>
+<li>Latency-aware tier decisions: if SPE shows a page's loads have 90 ns latency (L2 CXL), but access rate justifies DRAM &mdash; promote.</li>
+</ol>
+
+<p><strong>Risks:</strong> SPE output volume is large; need efficient filtering. Only some chips have it. Overhead if sampling rate too high. Aarch64-specific.</p>
+
+<p><strong>Research angle:</strong> SMAP + SPE + PSI is a publishable combination &mdash; three independent signal sources fused for tiering decisions.</p>
+</div>
+
+<!-- ----- 5. CXL.mem counters ----- -->
+<div class="direction">
+<h3 id="d-cxlctr">3.5 <span class="tag tag-signal">signal</span> CXL.mem Hardware Counters <span class="tag tag-med">weeks</span></h3>
+
+<p><strong>Gap:</strong> CXL 3.0 devices expose Device Physical Address (DPA) access counters &mdash; the CXL hardware tells you which pages <em>on the device</em> are being accessed, with no software sampling cost. Complements ACTC (which counts at the CPU side).</p>
+
+<p><strong>Files / APIs:</strong></p>
+<ul>
+<li><code>/sys/bus/cxl/devices/memX/</code> &mdash; device handle.</li>
+<li><code>/dev/cxl/memX</code> &mdash; mailbox commands via <code>CXL_MEM_QUERY_COMMANDS</code> / <code>CXL_MEM_SEND_COMMAND</code>.</li>
+<li>Commands of interest: <code>GET_POISON_LIST</code>, vendor-specific DPA heatmaps (device-dependent).</li>
+<li>Kernel: <code>drivers/cxl/</code> subsystem.</li>
+</ul>
+
+<p><strong>Integration:</strong></p>
+<ol>
+<li>Poll DPA counters at SMAP's scan interval; translate DPA &rarr; host PA via the CXL region mapping.</li>
+<li>Feed into the existing per-PA hotness map alongside ACTC.</li>
+<li>Special case: pages hot on CXL but never accessed by CPU &mdash; accelerator-only access; keep on CXL.</li>
+</ol>
+
+<p><strong>Risks:</strong> Very hardware-dependent. Only viable on specific CXL 3.0+ vendors. Vendor-specific mailbox commands needed &mdash; not portable across CXL devices.</p>
+</div>
+
+<!-- ----- 6. zswap / zram ----- -->
+<div class="direction">
+<h3 id="d-zswap">3.6 <span class="tag tag-action">action</span> zswap / zram &mdash; Compressed In-RAM Tier <span class="tag tag-low">days</span></h3>
+
+<p><strong>Gap:</strong> Today's tier hierarchy is DRAM &rarr; CXL &rarr; NVMe. Between CXL and NVMe there's a gap of ~100&times; latency. zswap (write-back cache to backing swap) or zram (pure compressed RAM block device) closes it: 2&ndash;4&times; compression ratio, microsecond-class latency. Cheap insurance before disk.</p>
+
+<p><strong>openEuler availability:</strong> Built in. <code>CONFIG_ZSWAP</code>, <code>CONFIG_ZRAM</code> standard.</p>
+
+<p><strong>Integration:</strong></p>
+<ol>
+<li>Deploy-time: <code>modprobe zram; echo $SIZE &gt; /sys/block/zram0/disksize; swapon -p 10 /dev/zram0</code> + configure zswap as front-cache for the NVMe swap (<code>echo 1 &gt; /sys/module/zswap/parameters/enabled</code>).</li>
+<li>SMAP code: zero change required &mdash; <code>reclaim_pages()</code> writes to the highest-priority swap device, which will be zram. NVMe becomes overflow.</li>
+<li>Optional: expose the zswap hit ratio via SDK for visibility.</li>
+</ol>
+
+<p><strong>Risks:</strong> Minimal. zram uses RAM, so overly-aggressive eviction can paradoxically increase memory pressure (compressed pages still consume RAM). Size zram carefully (10&ndash;20% of RAM is typical).</p>
+
+<p><strong>Why early:</strong> Easiest win. No code changes. Immediately improves swap latency profile.</p>
+</div>
+
+<!-- ----- 7. memory.reclaim ----- -->
+<div class="direction">
+<h3 id="d-memreclaim">3.7 <span class="tag tag-action">action</span> cgroup memory.reclaim &mdash; Scoped Reclaim <span class="tag tag-low">days</span></h3>
+
+<p><strong>Gap:</strong> SMAP's ioctl-based <code>do_swap_out</code> reclaims by-process. But production workloads are organized in cgroups. Kernel 6.0+ exposes <code>memory.reclaim</code>: write <code>"1G"</code> and kernel synchronously reclaims up to 1 GB from that cgroup.</p>
+
+<p><strong>Files / APIs:</strong></p>
+<ul>
+<li><code>/sys/fs/cgroup/&lt;path&gt;/memory.reclaim</code> (cgroup v2).</li>
+<li>Input formats: <code>"1G"</code>, <code>"100M"</code>, <code>"1G type=anon"</code>, <code>"1G type=file"</code>.</li>
+<li>Synchronous: return value = bytes actually reclaimed.</li>
+</ul>
+
+<p><strong>Integration:</strong></p>
+<ol>
+<li>New strategy variant <code>reclaim_by_cgroup</code>: instead of ioctl, write to cgroup memory.reclaim.</li>
+<li>Drives most reclaim without any kernel module changes. Keeps custom do_swap_out for per-page control cases.</li>
+<li>Pairs with PSI: when memcg PSI spikes, write memory.reclaim for that memcg.</li>
+</ol>
+
+<p><strong>Risks:</strong> The kernel picks which pages to reclaim &mdash; SMAP's cold-tracker selectivity is lost. This path is coarser than custom ioctl but zero-maintenance.</p>
+
+<p><strong>Architectural note:</strong> This is a <em>fallback</em>, not a replacement. Keep both paths; use this for bulk, ioctl for surgical.</p>
+</div>
+
+<!-- ----- 8. memory.swap throttling ----- -->
+<div class="direction">
+<h3 id="d-swapthrottle">3.8 <span class="tag tag-action">action</span> cgroup memory.swap &mdash; Per-Container Throttling <span class="tag tag-low">days</span></h3>
+
+<p><strong>Gap:</strong> No protection against one tenant consuming all swap bandwidth. <code>memory.swap.max</code> and <code>memory.swap.high</code> cap per-cgroup swap usage, throttling writes past the high threshold.</p>
+
+<p><strong>Files / APIs:</strong></p>
+<ul>
+<li><code>/sys/fs/cgroup/&lt;path&gt;/memory.swap.max</code> &mdash; hard cap.</li>
+<li><code>/sys/fs/cgroup/&lt;path&gt;/memory.swap.high</code> &mdash; soft cap, throttles once crossed.</li>
+<li><code>/sys/fs/cgroup/&lt;path&gt;/memory.swap.events</code> &mdash; event counters (max, fail, high).</li>
+</ul>
+
+<p><strong>Integration:</strong></p>
+<ol>
+<li>Expose via SMAP SDK: <code>smap_set_swap_limit(pid, high_bytes, max_bytes)</code>.</li>
+<li>Admin config file maps scenes to limits: LIGHT &rarr; 50% of RAM, HEAVY &rarr; 200%, etc.</li>
+<li>Monitor <code>memory.swap.events</code> for throttle events &mdash; feed into Scene classifier.</li>
+</ol>
+
+<p><strong>Risks:</strong> None material. Pure configuration of existing kernel feature.</p>
+</div>
+
+<!-- ----- 9. io_uring ----- -->
+<div class="direction">
+<h3 id="d-iouring">3.9 <span class="tag tag-action">action</span> io_uring &mdash; Async Swap I/O <span class="tag tag-high">months</span></h3>
+
+<p><strong>Gap:</strong> <code>reclaim_pages()</code> submits I/O through the kernel's generic swap path, which is synchronous-ish and opaque. For high-throughput swap-out (hundreds of MB/s), explicit async I/O with completion steering beats the default by 2&ndash;5&times; in published results (Option A design doc referenced this).</p>
+
+<p><strong>Files / APIs:</strong></p>
+<ul>
+<li><code>io_uring_setup/submit/wait</code> &mdash; user-space submission of NVMe I/O.</li>
+<li><code>IORING_OP_WRITE</code> / <code>IORING_OP_READ</code> with fixed buffers.</li>
+<li>Requires custom-swap (Option A) path: SMAP kernel module allocates swap slots and submits bios, user-space orchestrates via ring.</li>
+</ul>
+
+<p><strong>Integration:</strong></p>
+<ol>
+<li>Revive <code>feat/nvme-swap-kernel</code> (Option A): kernel module has slot allocator + bio engine. Add io_uring shim in user-space to feed it batches.</li>
+<li>Ring-buffer interface between user daemon and kernel: user submits "swap out these PA[]" via ring; kernel does zero-copy bio.</li>
+<li>Completion ring delivers done/failed lists.</li>
+</ol>
+
+<p><strong>Risks:</strong> Significant work. Duplicates the kernel's swap path. Only worth it if profiling shows current swap I/O is the bottleneck.</p>
+
+<p><strong>Decision gate:</strong> Only pursue after Phase 1&ndash;2 ship and we have throughput numbers. If NVMe isn't saturated, io_uring doesn't help.</p>
+</div>
+
+<!-- ----- 10. userfaultfd ----- -->
+<div class="direction">
+<h3 id="d-uffd">3.10 <span class="tag tag-action">action</span> userfaultfd &mdash; User-Space Fault Handling <span class="tag tag-high">months</span></h3>
+
+<p><strong>Gap:</strong> All SMAP decisions are post-hoc: observe access &rarr; decide &rarr; migrate. For <em>predictable</em> workloads (known access pattern), a fault-time decision is more efficient &mdash; decide placement as the page is first faulted in.</p>
+
+<p><strong>Files / APIs:</strong></p>
+<ul>
+<li><code>userfaultfd(2)</code> syscall &mdash; get an fd representing page faults on a given range.</li>
+<li><code>UFFDIO_REGISTER</code> with <code>UFFDIO_REGISTER_MODE_MISSING</code> for faults, <code>_WP</code> for writes.</li>
+<li><code>UFFDIO_COPY</code> / <code>UFFDIO_ZEROPAGE</code> / <code>UFFDIO_CONTINUE</code> to resolve faults.</li>
+</ul>
+
+<p><strong>Integration:</strong></p>
+<ol>
+<li>SMAP daemon offers "opt-in" mode: process registers address ranges; SMAP installs uffd.</li>
+<li>On missing fault: daemon materializes the page from NVMe / CXL / compute on the right tier based on access history.</li>
+<li>On write-protect fault (tracked cold regions): log as dirty, reset cold counter.</li>
+</ol>
+
+<p><strong>Risks:</strong> Fault-driven path must be fast (microseconds). User-space daemon with syscall overhead is marginal. Realistic win only for niche workloads where SMAP is consulted pre-fault.</p>
+
+<p><strong>Verdict:</strong> Skip unless a specific tenant asks for it. High effort, narrow applicability.</p>
+</div>
+
+<!-- ----- 11. DAMON ops set ----- -->
+<div class="direction">
+<h3 id="d-damon">3.11 <span class="tag tag-framework">framework</span> DAMON Ops Set &mdash; Upstream-Friendly Refactor <span class="tag tag-high">months</span></h3>
+
+<p><strong>Gap:</strong> SMAP re-implements: access tracking, cold scoring, filter framework, quotas, watermarks, action dispatch. DAMON already has all of this. The architectural right answer is <strong>SMAP becomes a DAMON operations set</strong> &mdash; <code>DAMON_OPS_ACTC</code> &mdash; sourcing access data from ACTC, letting DAMOS schemes handle the rest.</p>
+
+<p><strong>Files / APIs:</strong></p>
+<ul>
+<li><code>struct damon_operations</code> &mdash; <code>init</code> / <code>update</code> / <code>prepare_access_checks</code> / <code>check_accesses</code> / <code>apply_scheme</code> / <code>cleanup</code>.</li>
+<li><code>damon_register_ops()</code> &mdash; register a new ops set.</li>
+<li>Existing ops sets for reference: <code>DAMON_OPS_VADDR</code>, <code>DAMON_OPS_PADDR</code>, <code>DAMON_OPS_FVADDR</code>.</li>
+</ul>
+
+<p><strong>Integration:</strong></p>
+<ol>
+<li>Implement <code>struct damon_operations smap_ops</code>. <code>check_accesses</code> reads ACTC hot counters; everything else reuses DAMON core.</li>
+<li>Delete: cold-window tracker (DAMOS's <code>min_age</code> replaces it), custom strategy engine (DAMOS schemes replace it), custom ioctl (<code>DAMOS_PAGEOUT</code> + <code>DAMOS_DEMOTION</code> replace it).</li>
+<li>Keep: ACTC driver, process management, Scene model (as custom DAMOS quota/watermark plugins).</li>
+<li>Upstream candidate: the <code>DAMON_OPS_ACTC</code> module could be submitted to linux-mm.</li>
+</ol>
+
+<p><strong>Risks:</strong> Large refactor. Breaks SDK API surface (SMAP's IPC becomes DAMON sysfs). Scene classification logic needs a new home. openEuler-specific <code>DAMOS_DEMOTION</code> action is non-upstream &mdash; may not be in all DAMON versions.</p>
+
+<p><strong>Payoff:</strong> Delete <em>thousands of lines</em> of duplicated plumbing. Get DAMON's filter framework, quotas, watermarks, upstream bug fixes for free. Strongest case for long-term viability.</p>
+</div>
+
+<!-- ----- 12. eBPF introspection ----- -->
+<div class="direction">
+<h3 id="d-bpf-intro">3.12 <span class="tag tag-framework">framework</span> eBPF &mdash; Introspection Replacement <span class="tag tag-med">weeks</span></h3>
+
+<p><strong>Gap:</strong> SMAP resolves non-exported symbols (<code>migrate_pages</code>, <code>folio_isolate_lru</code>, <code>reclaim_pages</code>) via <code>kallsyms_lookup_name()</code> + kprobe. This is fragile across kernel versions, KABI breakage, and CONFIG differences. eBPF iterators and kfuncs offer stable-ish APIs for most of the same needs.</p>
+
+<p><strong>APIs:</strong></p>
+<ul>
+<li><code>bpf_iter_task_vma</code>, <code>bpf_iter_folio_lru</code>, <code>bpf_iter_pfn</code> &mdash; safe enumeration.</li>
+<li>Memory kfuncs: <code>bpf_folio_*</code>, <code>bpf_migrate_*</code> (expanding set).</li>
+<li>BTF-driven access to kernel structs &mdash; survives struct layout changes.</li>
+</ul>
+
+<p><strong>Integration:</strong></p>
+<ol>
+<li>New component <code>plugins/smap/src/bpf/*.bpf.c</code> &mdash; ebpf programs for access-scanning and folio enumeration.</li>
+<li>Load at daemon startup via libbpf.</li>
+<li>Gradually replace kprobe lookups with BPF calls where kfuncs exist.</li>
+</ol>
+
+<p><strong>Risks:</strong> kfunc coverage is incomplete &mdash; some SMAP operations (e.g., direct call to <code>migrate_pages</code>) don't have kfunc equivalents yet. Hybrid approach needed.</p>
+
+<p><strong>Win:</strong> Portability. One SMAP build works across several kernel versions instead of requiring per-version symbol tables.</p>
+</div>
+
+<!-- ----- 13. eBPF policy ----- -->
+<div class="direction">
+<h3 id="d-bpf-policy">3.13 <span class="tag tag-framework">framework</span> eBPF &mdash; Loadable Strategy Policy <span class="tag tag-high">months</span></h3>
+
+<p><strong>Gap:</strong> <code>separate_strategy.c</code> is compiled-in C with baked-in constants. Changing strategy requires rebuild + redeploy. A BPF-loadable policy would let admins load <code>.bpf.o</code> at runtime &mdash; experiment without rebuilds.</p>
+
+<p><strong>Integration:</strong></p>
+<ol>
+<li>Define policy interface as a BPF struct_ops: <code>classify_scene(metrics) &rarr; scene</code>, <code>pick_threshold(scene, age_dist) &rarr; threshold</code>, <code>decide_action(folio, context) &rarr; action</code>.</li>
+<li>Hardcoded C policy remains as default; BPF override optional.</li>
+<li>Tie-in to BCC/libbpf tooling: <code>smapctl load-policy my_policy.bpf.o</code>.</li>
+</ol>
+
+<p><strong>Risks:</strong> BPF verifier constraints limit expressiveness. Needs careful API design so operators can write meaningful policies without escaping verifier limits.</p>
+
+<p><strong>Verdict:</strong> Worth it only if we expect third-party policy tuning. For a single internal product, keep C.</p>
+</div>
+
+<!-- ----- 14. RL auto-tuning ----- -->
+<div class="direction">
+<h3 id="d-rl">3.14 <span class="tag tag-research">research</span> RL-Based Auto-Tuning <span class="tag tag-high">months</span></h3>
+
+<p><strong>Gap:</strong> Every constant in SMAP (cold-window threshold, batch size, scan interval, scene transition hysteresis) is currently hand-tuned. Published work (Pond, Memtis, HeMem) shows thresholds that work well for one workload fail others by &gt;2&times;. A learned controller beats static tuning.</p>
+
+<p><strong>Approach:</strong></p>
+<ul>
+<li>State: PSI metrics, access density histogram, swap latency distribution, tier occupancy, Scene.</li>
+<li>Action: threshold, batch size, scan interval (discretized).</li>
+<li>Reward: <code>-alpha * p95_latency - beta * swap_write_bw + gamma * free_dram</code>.</li>
+<li>Algorithm: PPO or contextual bandit; training offline from traces, online fine-tuning.</li>
+</ul>
+
+<p><strong>Integration:</strong></p>
+<ol>
+<li>Telemetry path: dump state/action/reward tuples to a file or sqlite.</li>
+<li>Offline training: Python with PyTorch / RLlib.</li>
+<li>Inference: export tiny model to onnx, run in SMAP daemon each tick (sub-ms).</li>
+</ol>
+
+<p><strong>Risks:</strong> Training data requires diverse workloads. Operators rarely trust black-box controllers &mdash; need explainability (why did you raise threshold?).</p>
+
+<p><strong>Publishable:</strong> Yes, if it demonstrably beats static. Pair with SPE signal (#4) for best chance.</p>
+</div>
+
+<!-- ----- 15. RDMA cross-node ----- -->
+<div class="direction">
+<h3 id="d-rdma">3.15 <span class="tag tag-research">research</span> RDMA Cross-Node Migration <span class="tag tag-high">months</span></h3>
+
+<p><strong>Gap:</strong> SMAP manages within a single host. In CXL-fabric-connected clusters or RDMA-networked datacenters, cold pages could migrate to <em>another machine's</em> spare RAM rather than local swap. Dramatically higher throughput than NVMe.</p>
+
+<p><strong>Integration:</strong></p>
+<ol>
+<li>New tier L2.5 (remote RAM via RDMA). Requires cluster-wide memory allocator (e.g., based on Carbink, AIFM).</li>
+<li>Swap-out path: for pages cold enough for NVMe but hot enough to not want 100&micro;s latency &rarr; RDMA to remote peer.</li>
+<li>Swap-in path: low-latency fault handler issues RDMA read.</li>
+</ol>
+
+<p><strong>Risks:</strong> Needs cluster infrastructure. Consistency (host A's cold page is evicted by host B's memory pressure). Failure modes proliferate.</p>
+
+<p><strong>Verdict:</strong> Long-horizon research. Not a near-term SMAP feature.</p>
+</div>
+
+<!-- ============================================================ -->
+<h2 id="matrix">4. Prioritization Matrix</h2>
+
+<table>
+<tr>
+<th>Direction</th>
+<th>Category</th>
+<th>Effort</th>
+<th>Value</th>
+<th>openEuler?</th>
+<th>Unique to SMAP?</th>
+</tr>
+<tr><td>1. PSI</td><td>signal</td><td><span class="tag tag-low">days</span></td><td>High</td><td>&check;</td><td>&check; (DAMON lacks)</td></tr>
+<tr><td>2. MGLRU</td><td>signal</td><td><span class="tag tag-med">weeks</span></td><td>High</td><td>&check;</td><td>partial (lets us delete cold tracker)</td></tr>
+<tr><td>3. HMAT/CDAT</td><td>signal</td><td><span class="tag tag-med">weeks</span></td><td>Med</td><td>&check;</td><td>portability</td></tr>
+<tr><td>4. SPE/PMU</td><td>signal</td><td><span class="tag tag-high">months</span></td><td>High</td><td>hw-dep</td><td>&check; research-grade</td></tr>
+<tr><td>5. CXL.mem counters</td><td>signal</td><td><span class="tag tag-med">weeks</span></td><td>Med</td><td>hw-dep</td><td>&check;</td></tr>
+<tr><td>6. zswap/zram</td><td>action</td><td><span class="tag tag-low">days</span></td><td>High</td><td>&check;</td><td>&ndash; (config only)</td></tr>
+<tr><td>7. memory.reclaim</td><td>action</td><td><span class="tag tag-low">days</span></td><td>High</td><td>&check;</td><td>&ndash;</td></tr>
+<tr><td>8. memory.swap throttling</td><td>action</td><td><span class="tag tag-low">days</span></td><td>Low-Med</td><td>&check;</td><td>&ndash;</td></tr>
+<tr><td>9. io_uring</td><td>action</td><td><span class="tag tag-high">months</span></td><td>Med (if bottlenecked)</td><td>&check;</td><td>&check;</td></tr>
+<tr><td>10. userfaultfd</td><td>action</td><td><span class="tag tag-high">months</span></td><td>Low (niche)</td><td>&check;</td><td>workload-dep</td></tr>
+<tr><td>11. DAMON ops set</td><td>framework</td><td><span class="tag tag-high">months</span></td><td>High (refactor)</td><td>&check;</td><td>upstream-friendly</td></tr>
+<tr><td>12. eBPF introspection</td><td>framework</td><td><span class="tag tag-med">weeks</span></td><td>Med</td><td>&check;</td><td>portability</td></tr>
+<tr><td>13. eBPF policy</td><td>framework</td><td><span class="tag tag-high">months</span></td><td>Low (if single-product)</td><td>&check;</td><td>&check;</td></tr>
+<tr><td>14. RL auto-tuning</td><td>research</td><td><span class="tag tag-high">months</span></td><td>Med-High</td><td>software</td><td>&check; publishable</td></tr>
+<tr><td>15. RDMA cross-node</td><td>research</td><td><span class="tag tag-high">months</span></td><td>Speculative</td><td>software</td><td>&check; long-term</td></tr>
+</table>
+
+<!-- ============================================================ -->
+<h2 id="roadmap">5. Phased Roadmap</h2>
+
+<h3>Phase 1 &mdash; Easy wins (Q2 2026, ~3 weeks)</h3>
+<ul>
+<li><strong>#6 zswap/zram</strong> &mdash; deploy-time config; zero SMAP code.</li>
+<li><strong>#7 memory.reclaim</strong> &mdash; add as alternate reclaim path in strategy.</li>
+<li><strong>#8 memory.swap throttling</strong> &mdash; SDK surface; admin config.</li>
+<li><strong>#1 PSI (Level 1 &amp; 2)</strong> &mdash; sensing + triggered mode, drive Scene classifier.</li>
+</ul>
+<p>Outcome: SMAP uses modern cgroup/swap/pressure infrastructure; immediately measurable latency + tenant-isolation improvements.</p>
+
+<h3>Phase 2 &mdash; Signal richness (Q3 2026, ~6 weeks)</h3>
+<ul>
+<li><strong>#2 MGLRU integration</strong> &mdash; replace or complement cold-window tracker.</li>
+<li><strong>#3 HMAT/CDAT topology discovery</strong> &mdash; remove hardcoded NUMA layout.</li>
+<li><strong>#12 eBPF introspection</strong> &mdash; replace kprobe-based lookups where possible.</li>
+<li><strong>#5 CXL.mem counters</strong> (if hw available).</li>
+</ul>
+<p>Outcome: Cheaper per-tick cost, portable across boards, better signal fusion.</p>
+
+<h3>Phase 3 &mdash; Framework maturity (Q4 2026, ~10 weeks)</h3>
+<ul>
+<li><strong>#9 io_uring</strong> (only if Phase 1&ndash;2 profiles show swap I/O is the bottleneck).</li>
+<li><strong>#11 DAMON ops set refactor</strong> &mdash; major cleanup; positions SMAP for upstream contribution.</li>
+</ul>
+<p>Outcome: Architecturally clean. Maintenance cost drops. Upstream-contribution path open.</p>
+
+<h3>Phase 4 &mdash; Research (2027+)</h3>
+<ul>
+<li><strong>#4 SPE-based access sampling</strong> &mdash; paper-worthy if paired with RL.</li>
+<li><strong>#14 RL auto-tuning</strong> &mdash; trained on Phase 1&ndash;3 telemetry.</li>
+<li><strong>#13 eBPF policy</strong> &mdash; only if a productization path demands it.</li>
+<li><strong>#15 RDMA / #10 userfaultfd</strong> &mdash; evaluate only on concrete workload asks.</li>
+</ul>
+
+<h3>Explicit non-goals</h3>
+<p>Items that are tempting but I recommend <em>not</em> pursuing unless a specific driver appears:</p>
+<ul>
+<li><strong>#10 userfaultfd</strong> &mdash; narrow use case, high effort, user-space fault paths are slow.</li>
+<li><strong>#13 eBPF policy</strong> &mdash; adds surface area without clear customer.</li>
+<li><strong>#15 RDMA cross-node</strong> &mdash; cluster-level problem, not a host-level feature.</li>
+</ul>
+
+<!-- ============================================================ -->
+<h2 id="references">6. References</h2>
+
+<h3>Kernel source (this repo: <code>/Users/ray/Documents/Repo/kernel</code>, branch OLK-6.6)</h3>
+<ul>
+<li>PSI: <code>kernel/sched/psi.c</code>, <code>include/linux/psi_types.h</code>, <code>Documentation/accounting/psi.rst</code></li>
+<li>MGLRU: <code>mm/vmscan.c</code> (search <code>lru_gen_</code>), <code>include/linux/mmzone.h</code></li>
+<li>DAMON: <code>mm/damon/{core,vaddr,paddr,reclaim,lru_sort}.c</code>, <code>include/linux/damon.h</code></li>
+<li>cgroup memory.reclaim: <code>mm/memcontrol.c</code> (<code>memcg_reclaim_write</code>)</li>
+<li>HMAT: <code>drivers/acpi/numa/hmat.c</code>, <code>include/linux/acpi.h</code></li>
+<li>CXL: <code>drivers/cxl/</code>, <code>include/linux/cxl.h</code></li>
+<li>userfaultfd: <code>fs/userfaultfd.c</code>, <code>include/uapi/linux/userfaultfd.h</code></li>
+<li>io_uring: <code>io_uring/</code>, <code>include/linux/io_uring.h</code></li>
+</ul>
+
+<h3>SMAP current state</h3>
+<ul>
+<li>Core: <code>/Users/ray/Documents/Repo/ubturbo/plugins/smap/</code></li>
+<li>Branches: <code>feat/nvme-swap</code> (Option B v2, ioctl + reclaim_pages), <code>feat/nvme-swap-kernel</code> (Option A, custom kernel swap)</li>
+<li>Architecture doc: <code>smap_architecture.html</code></li>
+<li>NVMe swap design: <code>smap_nvme_swap_design.html</code>, <code>smap_nvme_swap_option_a.html</code>, <code>smap_nvme_swap_option_b_v2.html</code></li>
+</ul>
+
+<h3>Academic / industrial precedents</h3>
+<ul>
+<li><strong>HeMem</strong> (OSDI '21) &mdash; tiered memory via SPE sampling. Validates #4.</li>
+<li><strong>Memtis</strong> (SOSP '23) &mdash; SPE-driven tiering with granularity control. Extends #4.</li>
+<li><strong>Pond</strong> (ASPLOS '23) &mdash; Microsoft's CXL pool management; pressure-driven placement. Validates #1.</li>
+<li><strong>TPP</strong> (ASPLOS '23) &mdash; Meta's transparent-page-placement in production. Uses MGLRU; validates #2.</li>
+<li><strong>Nimble</strong> (ASPLOS '19) &mdash; page-migration throughput bounds. Context for #9.</li>
+<li><strong>Carbink</strong> (OSDI '22) &mdash; fault-tolerant remote memory via RDMA. Context for #15.</li>
+</ul>
+
+<h3>Upstream discussions</h3>
+<ul>
+<li>linux-mm mailing list archive: <a href="https://lore.kernel.org/linux-mm/">https://lore.kernel.org/linux-mm/</a></li>
+<li>DAMON PSI integration threads (search: "damon psi") &mdash; proposed but not merged.</li>
+<li>Multi-tier memory RFCs: search "memory tiering" on lore.kernel.org.</li>
+</ul>
+
+<h3>openEuler specifics</h3>
+<ul>
+<li><code>CONFIG_PSI_FINE_GRAINED</code>, <code>CONFIG_PSI_CGROUP_V1</code> &mdash; custom Kconfigs, see <code>init/Kconfig</code>.</li>
+<li><code>DAMOS_DEMOTION</code> action &mdash; openEuler-specific, see <code>include/linux/damon.h:114</code>.</li>
+</ul>
+
+<blockquote>
+This roadmap is a proposal, not a commitment. Pick items individually based on what actual workloads need. Re-prioritize at each phase boundary &mdash; the Phase-1 results will likely reshape Phase-2 priorities.
+</blockquote>
+
+</body>
+</html>

@@ -1,0 +1,1 @@
+{"kernelName": "mask_kernel", "blockDim": 1, "magic": "RT_DEV_BINARY_MAGIC_ELF_AIVEC", "workspace": {"size": []}}
