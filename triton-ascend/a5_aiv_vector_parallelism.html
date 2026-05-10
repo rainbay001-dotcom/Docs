@@ -874,7 +874,183 @@ ts=1126). RVECSU/MTE3/PUSHQ/RVECLP have too few events for either
 finding (proven dual or proven single) — they remain Tier-B
 inferences in §4.</p>
 
-<h2>6. Steady-state in-flight counts at cycle 1700–1750 (mid-loop)</h2>
+<h2>6. Issue width vs lane count vs stage count — the right model</h2>
+
+<p>The §4 table conflated <i>issue width</i> with <i>pipe width</i>.
+They are not the same thing, and being precise matters when reasoning
+about how much headroom a pipe has. The corrected model:</p>
+
+<pre>
+issue_width   = ops/cyc accepted at the dispatch stage (front-end)
+lane_count    = parallel execution units inside the pipe (back-end)
+stage_count   = depth of each lane = single-op latency in cycles
+
+max in-flight at steady state = stage_count × min(issue_width, lane_count)
+</pre>
+
+<p>In any sane design <code>lane_count ≥ issue_width</code> (otherwise
+some lanes are wasted). When <code>lane_count &gt; issue_width</code>
+the issue stage is the bottleneck and the extra lanes sit idle waiting
+for more dispatch slots — and <b>that case is invisible from the
+trace</b>. The trace records only what crosses the issue boundary
+(<code>ts</code>) and what crosses the completion boundary
+(<code>ts + dur</code>); lane count is purely back-end and hidden
+behind both. Observed <code>max_simul_issue = 2</code> only places a
+<i>lower bound</i> on lane_count.</p>
+
+<h3>6.1 Per-pipe numbers (with bounds explicit)</h3>
+
+<table>
+<thead>
+<tr>
+  <th>Pipe</th>
+  <th class="num">issue_width<br><span class="small">(proven)</span></th>
+  <th class="num">lane_count<br><span class="small">(lower bound)</span></th>
+  <th class="num">stage_count<br><span class="small">(= dur)</span></th>
+  <th class="num">In-flight ceiling<br><span class="small">(if lane = issue)</span></th>
+  <th class="num">Observed peak<br>in flight</th>
+  <th>Headroom</th>
+</tr>
+</thead>
+<tbody>
+<tr style="background:#fff8e1">
+  <td><b>RVECEX</b></td>
+  <td class="num">≥ 2</td>
+  <td class="num">≥ 2</td>
+  <td class="num">7–8</td>
+  <td class="num">14</td>
+  <td class="num"><b>14</b></td>
+  <td>★ at ceiling — no headroom on issue</td>
+</tr>
+<tr>
+  <td><b>RVECLD</b></td>
+  <td class="num">≥ 2</td>
+  <td class="num">≥ 2</td>
+  <td class="num">10–11</td>
+  <td class="num">20–22</td>
+  <td class="num">6</td>
+  <td>3.7× — large slack</td>
+</tr>
+<tr>
+  <td><b>RVECST</b></td>
+  <td class="num">≥ 2</td>
+  <td class="num">≥ 2</td>
+  <td class="num">10–22</td>
+  <td class="num">~ 34</td>
+  <td class="num">4</td>
+  <td>~ 8× — very large slack</td>
+</tr>
+<tr>
+  <td><b>MTE2</b></td>
+  <td class="num">≥ 2</td>
+  <td class="num">≥ 2</td>
+  <td class="num">6–441 (variable)</td>
+  <td class="num">— (model breaks)</td>
+  <td class="num">9</td>
+  <td>DMA-queue limited, see §6.3</td>
+</tr>
+<tr>
+  <td><b>MTE3</b></td>
+  <td class="num">1*</td>
+  <td class="num">≥ 1</td>
+  <td class="num">314–678</td>
+  <td class="num">— (model breaks)</td>
+  <td class="num">1</td>
+  <td>DMA-queue limited</td>
+</tr>
+<tr>
+  <td><b>RVECSU</b></td>
+  <td class="num">1*</td>
+  <td class="num">≥ 1</td>
+  <td class="num">1–2</td>
+  <td class="num">2</td>
+  <td class="num">2</td>
+  <td>too few events to bound</td>
+</tr>
+</tbody>
+</table>
+
+<p class="small">* "1" entries are observed lower bounds on a pipe with
+too few events to demonstrate dual-issue. Could be 2 or higher; we
+just never saw it.</p>
+
+<h3>6.2 What we can and can't say from this trace</h3>
+
+<ul>
+<li><b>Can say:</b> RVECEX is at the
+<code>issue × stages</code> ceiling — observed peak 14 = 2 × 7.
+Adding more RVECEX work creates back-pressure, no matter what the
+true lane_count is.</li>
+
+<li><b>Can say:</b> RVECLD and RVECST have huge headroom even at the
+conservative lane=2 model. If lane_count is actually 4 or 8 the
+headroom is even larger, but we can't exploit it without first
+issuing faster — and issue_width = 2 caps that.</li>
+
+<li><b>Can't say:</b> exact lane_count for any pipe. The trace gives
+only a lower bound (≥ 2 for the dual-issue pipes, ≥ 1 for the
+others). The kernel never issues fast enough to expose lanes wider
+than 2.</li>
+
+<li><b>Can't say:</b> whether the 1-cycle stretch on the second
+paired VLDI in §5 (<code>dur = 11</code> vs <code>10</code>) is a
+shared-lane back-end contention or a shared-port effect. Either is
+consistent with what we see.</li>
+</ul>
+
+<h3>6.3 Why the DMA pipes (MTE2 / MTE3) don't fit the model</h3>
+
+<p>MTE2's average <code>dur</code> is ~318 cyc with peak 441; MTE3's
+range is 314–678 cyc. Naïvely plugging into <code>2 × 318 = 636</code>
+in-flight ceiling is meaningless because the latency is dominated by
+<i>external GM access</i>, not internal pipeline stages. The relevant
+ceiling for these pipes is the <b>outstanding-burst queue depth</b> —
+a separate hardware limit on how many in-flight GM transactions the
+DMA bus can hold. Observed peak 9 in-flight on MTE2 is probably near
+that ceiling, but we can't quote it precisely without vendor-published
+DMA queue specs (not present in <code>atlas_ascendc_10_00065</code>
+or the local <code>~/Documents/docs/ascend_910c_microarchitecture.md</code>
+reference).</p>
+
+<h3>6.4 Paths to find true lane_count</h3>
+
+<ol>
+<li><b>Vendor docs.</b> <code>atlas_ascendc_10_00065</code> enumerates
+the Cube unit's fractal counts (16×16×32 etc.) but does not give
+explicit lane counts for the vector pipes. A more careful pass
+through the full <code>programug</code> chapter and the silicon-spec
+references in <code>~/Documents/docs/ascend_910c_microarchitecture.md</code>
+might find them.</li>
+
+<li><b>Synthetic over-issue benchmark.</b> Build a kernel that
+attempts to issue 4 ops/cyc on RVECLD (compiler-fused 4-way unroll
+or hand-written assembler). If the trace shows
+<code>max_simul_issue = 4</code>, then issue_width ≥ 4 and
+lane_count ≥ 4. If it caps at 2 even with the attempt, then
+issue_width is truly hardware-capped at 2 and we still don't know
+lane_count beyond ≥ 2.</li>
+
+<li><b>RTL or microarchitecture spec.</b> The NPU-FPGA-prototype
+source on the 218 server (chiseltest harness) has the actual vector
+unit RTL. Grep for <code>Lane</code> / <code>ExecUnit</code> /
+<code>NumLanes</code> in the vector unit module would be definitive.
+This is the only path that gives the exact number rather than a
+lower bound.</li>
+</ol>
+
+<div class="callout">
+<b>Practical implication for <code>mask_kernel</code>.</b> Because
+RVECEX is already at the
+<code>issue_width × stage_count</code> ceiling, lane_count is only
+relevant for RVECLD and RVECST optimizations — and there the
+conservative lane=2 model already says we have 3.7× and ~8× headroom
+respectively. Wider lanes would only make that headroom larger, not
+qualitatively change which optimizations are profitable. Knowing the
+exact lane count is interesting for completeness; it doesn't change
+any of the §9 optimization rankings.
+</div>
+
+<h2>7. Steady-state in-flight counts at cycle 1700–1750 (mid-loop)</h2>
 
 <table>
 <thead>
@@ -910,7 +1086,7 @@ matches Little's law:
 <code>RVECEX in flight ≈ issue rate × latency = 1.28 × 7 = 9</code>
 or with peak ≈ <code>2 × 7 = 14</code>.</p>
 
-<h2>7. Three granularities of parallelism in the AIV</h2>
+<h2>8. Three granularities of parallelism in the AIV</h2>
 
 <table>
 <thead>
@@ -974,7 +1150,7 @@ or with peak ≈ <code>2 × 7 = 14</code>.</p>
 </tbody>
 </table>
 
-<h2>8. Where each missed-optimization lands on this map</h2>
+<h2>9. Where each missed-optimization lands on this map</h2>
 
 <table>
 <thead>
@@ -1033,7 +1209,7 @@ slack — convert at ratio close to <b>0</b> unless you remove enough
 to drop in-flight count below the issue rate × latency floor.
 </div>
 
-<h2>9. Verification recipe</h2>
+<h2>10. Verification recipe</h2>
 
 <p>Anyone reading this can re-derive every empirical number above
 in 5 lines of Python against the committed trace JSON:</p>
@@ -1049,7 +1225,7 @@ for pipe in ['RVECEX','RVECLD','RVECST','RVECSU','MTE2','MTE3','PUSHQ']:
           f'issue_rate={len(pe)/span:.3f} ops/cyc')
 </pre>
 
-<h2>10. Cross-references</h2>
+<h2>11. Cross-references</h2>
 
 <ul>
   <li><code>a5_pto_bool_vloop_walkthrough.md</code> §5.3 — vendor-published architecture facts (sources & verbatim quotes)</li>
