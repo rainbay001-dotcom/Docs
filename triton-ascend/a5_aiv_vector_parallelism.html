@@ -1047,10 +1047,161 @@ conservative lane=2 model already says we have 3.7× and ~8× headroom
 respectively. Wider lanes would only make that headroom larger, not
 qualitatively change which optimizations are profitable. Knowing the
 exact lane count is interesting for completeness; it doesn't change
-any of the §9 optimization rankings.
+any of the §10 optimization rankings.
 </div>
 
-<h2>7. Steady-state in-flight counts at cycle 1700–1750 (mid-loop)</h2>
+<h2>7. ROB / buffer-depth bounds — what does "ROB" mean on a VLIW vector core?</h2>
+
+<p>The natural follow-on question is: how big is the reorder buffer
+on each pipe? Or globally? On an out-of-order CPU the ROB sets the
+max window of in-flight instructions; on a VLIW vector core the
+question is more nuanced because there isn't a traditional ROB at
+all — the static schedule emitted by the compiler already locks in
+retirement order. What the AIV does have:</p>
+
+<ul>
+<li><b>Per-pipe execution buffer</b> = the pipeline itself, depth
+<code>stage_count</code> (per lane).</li>
+<li><b>Per-queue dispatch buffer</b> in front of each of the 4
+instruction queues (MTE2 / MTE3 / SIMD-VF / SIMT-VF). Depth unknown
+from this trace.</li>
+<li><b>Outstanding-burst budget</b> on the MTE2/MTE3 DMA paths.
+Depth unknown from this trace.</li>
+</ul>
+
+<h3>7.1 Per-pipe lower bounds (from this kernel's trace)</h3>
+
+<table>
+<thead>
+<tr>
+  <th>Pipe</th>
+  <th class="num">Peak in-flight<br><span class="small">(lower bound on buffer)</span></th>
+  <th class="num">iw × stages<br><span class="small">ceiling</span></th>
+  <th class="num">Headroom<br><span class="small">left in this kernel</span></th>
+  <th>Notes</th>
+</tr>
+</thead>
+<tbody>
+<tr style="background:#fff8e1">
+  <td><b>RVECEX</b></td>
+  <td class="num"><b>14</b></td>
+  <td class="num">2 × 7 = <b>14</b></td>
+  <td class="num">0</td>
+  <td>★ peak = ceiling exactly. No extra ROB visible.</td>
+</tr>
+<tr>
+  <td><b>RVECLD</b></td>
+  <td class="num">6</td>
+  <td class="num">2 × 10 = 20</td>
+  <td class="num">14</td>
+  <td>Kernel doesn't push it; can't bound buffer above 6.</td>
+</tr>
+<tr>
+  <td><b>RVECST</b></td>
+  <td class="num">4</td>
+  <td class="num">2 × 17 = 34</td>
+  <td class="num">30</td>
+  <td>Kernel doesn't push it; can't bound buffer above 4.</td>
+</tr>
+<tr>
+  <td><b>MTE2</b></td>
+  <td class="num">9</td>
+  <td class="num">— (DMA)</td>
+  <td class="num">unknown</td>
+  <td>Likely near the GM-burst-queue cap, but only 10 events
+  total — no firm upper bound.</td>
+</tr>
+<tr>
+  <td><b>MTE3</b></td>
+  <td class="num">1</td>
+  <td class="num">— (DMA)</td>
+  <td class="num">unknown</td>
+  <td>Single-issue + only 2 events. No bound.</td>
+</tr>
+<tr>
+  <td><b>RVECSU</b></td>
+  <td class="num">2</td>
+  <td class="num">— (4 ev)</td>
+  <td class="num">unknown</td>
+  <td>Too few events.</td>
+</tr>
+</tbody>
+</table>
+
+<p><b>Global peak in-flight across all pipes simultaneously:
+23 ops at cycle 1641.</b> That's the lower bound on the AIV's total
+instruction window for this kernel.</p>
+
+<h3>7.2 The smoking gun on RVECEX</h3>
+
+<p>RVECEX peak in-flight = <b>14</b>, which exactly equals the
+<code>issue_width × stage_count = 2 × 7</code> ceiling. The kernel
+visibly back-pressures RVECEX (utilization 64 %, peak in-flight at
+the ceiling), and yet in-flight never exceeds 14. <b>If there were a
+separate ROB or reservation station feeding RVECEX, in-flight would
+climb above 14</b> — because a ROB lets issued-but-not-completed ops
+accumulate beyond the pipeline depth. We don't see that.</p>
+
+<div class="callout callout-info">
+<b>Conclusion for RVECEX.</b> The "ROB-equivalent" is the pipeline
+depth itself. No extra reorder window beyond
+<code>issue × stages</code>. Consistent with VLIW + in-order pipe:
+ops issue in program order from the SIMD-VF queue, dispatch directly
+into the pipe, and march through stages.
+</div>
+
+<h3>7.3 What this kernel can't tell us</h3>
+
+<ul>
+<li><b>Pre-issue dispatch queue depth</b> (the 4 instruction queues
+in front of the pipes). The trace records pipe-issue events, not
+queue arrivals. If a queue is, say, 16 entries deep, this kernel
+never fills it because the loop body drains as fast as it fills.</li>
+
+<li><b>Upper bound on RVECLD / RVECST buffers.</b> Their peak (6 / 4)
+is well below the <code>issue × stages</code> ceiling, so the actual
+buffer could be 22 or 32 or larger. We need a kernel that pushes them
+harder to find out.</li>
+
+<li><b>MTE2 / MTE3 outstanding-burst queue depth.</b> MTE2's peak
+in-flight = 9, almost certainly near a hardware cap on outstanding
+GM transactions, but the kernel only ever issues 10 MTE2 bursts
+total — no way to tell if the cap is 9 or 16 or 32.</li>
+</ul>
+
+<h3>7.4 How to actually find the upper bounds</h3>
+
+<ol>
+<li><b>Synthetic stall test for RVECLD / RVECST.</b> Write a kernel
+that issues a long chain of independent VLDs (or VSTIs) back-to-back,
+sized to exceed any plausible buffer (say 64 ops). Trace it and look
+for the first cycle where issue rate drops despite the queue having
+work. The in-flight count at that stall = the per-pipe buffer
+size.</li>
+
+<li><b>MTE2 burst-queue probe.</b> Issue a burst of N independent
+MTE2 DMAs (sized so they all collide on the GM bus) and watch when
+the (N+1)th stalls. The N at which stall begins = burst-queue
+depth.</li>
+
+<li><b>Vendor docs / RTL.</b> The 218-server FPGA prototype contains
+the AIV instruction-queue depth and pipe execution buffer counts as
+RTL parameters. Grep the vector unit modules for
+<code>EntryNum</code> / <code>QueueDepth</code> / <code>RsSize</code>
+gives definitive values.</li>
+</ol>
+
+<div class="callout">
+<b>Practical implication for <code>mask_kernel</code>.</b> Because
+RVECEX is already at the <code>issue × stages</code> ceiling, none
+of these unknown buffer depths bind on this kernel. Knowing them
+would only matter if we ran a kernel that actually fills RVECLD,
+RVECST, or MTE2 to their per-pipe ceilings — at which point the
+queue depth in front becomes the next-tier bottleneck. That hasn't
+happened yet on any kernel we've measured.
+</div>
+
+<h2>8. Steady-state in-flight counts at cycle 1700–1750 (mid-loop)</h2>
 
 <table>
 <thead>
@@ -1086,7 +1237,7 @@ matches Little's law:
 <code>RVECEX in flight ≈ issue rate × latency = 1.28 × 7 = 9</code>
 or with peak ≈ <code>2 × 7 = 14</code>.</p>
 
-<h2>8. Three granularities of parallelism in the AIV</h2>
+<h2>9. Three granularities of parallelism in the AIV</h2>
 
 <table>
 <thead>
@@ -1150,7 +1301,7 @@ or with peak ≈ <code>2 × 7 = 14</code>.</p>
 </tbody>
 </table>
 
-<h2>9. Where each missed-optimization lands on this map</h2>
+<h2>10. Where each missed-optimization lands on this map</h2>
 
 <table>
 <thead>
@@ -1209,7 +1360,7 @@ slack — convert at ratio close to <b>0</b> unless you remove enough
 to drop in-flight count below the issue rate × latency floor.
 </div>
 
-<h2>10. Verification recipe</h2>
+<h2>11. Verification recipe</h2>
 
 <p>Anyone reading this can re-derive every empirical number above
 in 5 lines of Python against the committed trace JSON:</p>
@@ -1225,7 +1376,7 @@ for pipe in ['RVECEX','RVECLD','RVECST','RVECSU','MTE2','MTE3','PUSHQ']:
           f'issue_rate={len(pe)/span:.3f} ops/cyc')
 </pre>
 
-<h2>11. Cross-references</h2>
+<h2>12. Cross-references</h2>
 
 <ul>
   <li><code>a5_pto_bool_vloop_walkthrough.md</code> §5.3 — vendor-published architecture facts (sources & verbatim quotes)</li>
