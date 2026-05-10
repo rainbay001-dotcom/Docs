@@ -1,0 +1,219 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Ascend rvec — Register Vector ops in BiSheng / HiVM IR</title>
+<style>
+:root {
+    --bg: #0d1117;
+    --card: #161b22;
+    --border: #30363d;
+    --text: #c9d1d9;
+    --heading: #e6edf3;
+    --accent: #58a6ff;
+    --accent2: #7ee787;
+    --accent3: #d2a8ff;
+    --accent4: #ff7b72;
+    --accent5: #ffa657;
+    --code-bg: #0d1117;
+    --link: #58a6ff;
+}
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    line-height: 1.7;
+    padding: 2rem;
+    max-width: 1100px;
+    margin: 0 auto;
+}
+h1 { color: var(--heading); font-size: 2.0rem; margin-bottom: 0.5rem; border-bottom: 1px solid var(--border); padding-bottom: 1rem; }
+h2 { color: var(--accent); font-size: 1.5rem; margin-top: 2.5rem; margin-bottom: 1rem; border-bottom: 1px solid var(--border); padding-bottom: 0.5rem; }
+h3 { color: var(--accent2); font-size: 1.2rem; margin-top: 1.8rem; margin-bottom: 0.8rem; }
+p { margin-bottom: 1rem; }
+a { color: var(--link); text-decoration: none; }
+a:hover { text-decoration: underline; }
+code {
+    font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
+    background: var(--code-bg);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 0.15em 0.4em;
+    font-size: 0.88em;
+    color: var(--accent5);
+}
+pre {
+    background: var(--code-bg);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 1.2rem;
+    overflow-x: auto;
+    margin-bottom: 1.2rem;
+    font-size: 0.85rem;
+    line-height: 1.5;
+}
+pre code { border: none; padding: 0; background: none; color: var(--text); }
+.card {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 1.4rem;
+    margin-bottom: 1.4rem;
+}
+table { width: 100%; border-collapse: collapse; margin-bottom: 1.5rem; }
+th, td { padding: 0.6rem 0.8rem; border: 1px solid var(--border); text-align: left; font-size: 0.9rem; vertical-align: top; }
+th { background: #1c2128; color: var(--accent); font-weight: 600; }
+td { background: var(--card); }
+ul, ol { margin: 0.5rem 0 1rem 1.5rem; }
+li { margin-bottom: 0.3rem; }
+.subtitle { color: #8b949e; font-size: 1.05rem; margin-bottom: 2rem; }
+.tag { display: inline-block; padding: 0.1em 0.55em; border-radius: 10px; font-size: 0.75em; font-weight: 600; }
+.tag-old { background: #ff7b7220; color: #ff7b72; border: 1px solid #ff7b7240; }
+.tag-new { background: #7ee78720; color: #7ee787; border: 1px solid #7ee78740; }
+.note { background: #1c2128; border-left: 3px solid var(--accent); padding: 0.9rem 1.2rem; margin: 1rem 0; border-radius: 4px; }
+.warn { background: #1c2128; border-left: 3px solid var(--accent4); padding: 0.9rem 1.2rem; margin: 1rem 0; border-radius: 4px; }
+.highlight { color: var(--accent5); font-weight: 600; }
+hr { border: none; border-top: 1px solid var(--border); margin: 2rem 0; }
+</style>
+</head>
+<body>
+
+<h1>Ascend <code>rvec</code> &mdash; Register Vector ops</h1>
+<p class="subtitle">What the <code>rvec</code> prefix means in BiSheng / HiVM IR graphs and AscendC compiler dumps, and why it appeared with the A5/351x architecture.</p>
+
+<div class="card">
+<p><strong>TL;DR.</strong> <code>rvec</code> = <strong>Register Vector</strong>. It marks operations in the A5/351x <em>Regbase</em> vector model that work on the new <code>RegTensor</code> SIMD register (256 B / 2048 b wide), as opposed to the older <em>Membase</em> ops that operated directly on the Unified Buffer (UB). When you see <code>rvecld</code>, <code>rvecst</code>, <code>rvecex</code>, etc. in a graph, you are looking at the new register-stationary side of the pipeline introduced when the A5/351x switched away from UB-direct vector compute.</p>
+</div>
+
+<h2>1. Why the prefix exists &mdash; the Membase &rarr; Regbase pivot</h2>
+
+<p>The 220x generation (910C) ran a <em>Membase</em> vector unit: the vector ALU consumed UB data directly, with the data path looking like <code>UB &rarr; Vector ALU &rarr; UB</code>. There were no architecturally visible vector registers; alignment was handled implicitly by the UB bank logic and the MTE engines.</p>
+
+<p>The 351x (A5) generation switched to a <em>Regbase</em> vector unit. The vector ALU now consumes and produces <code>RegTensor</code> values, with the data path looking like <code>UB &rarr; RegTensor &rarr; Vector ALU &rarr; RegTensor &rarr; UB</code>. This change unlocked SIMT-style scheduling, register-stationary fused operations, and finer instruction-issue granularity, but it also created a new family of operations distinct from the legacy Membase ops.</p>
+
+<p>The IR / ISA naming convention reflects this split:</p>
+
+<table>
+<thead>
+<tr><th>Prefix</th><th>Operates on</th><th>Era</th><th>Examples</th></tr>
+</thead>
+<tbody>
+<tr>
+<td><span class="tag tag-old">v*</span></td>
+<td>UB-resident data, no register intermediary</td>
+<td>220x (910C) Membase legacy</td>
+<td><code>vadd</code>, <code>vld</code>, <code>vst</code>, <code>vmul</code></td>
+</tr>
+<tr>
+<td><span class="tag tag-new">rvec*</span></td>
+<td>RegTensor-resident data (or UB &harr; RegTensor staging)</td>
+<td>351x (A5) Regbase native</td>
+<td><code>rvecld</code>, <code>rvecst</code>, <code>rvecadd</code>, <code>rvecex</code></td>
+</tr>
+</tbody>
+</table>
+
+<div class="note">
+<strong>Reading guidance.</strong> If a graph or compiler dump mixes <code>v*</code> and <code>rvec*</code> ops, the kernel is bridging Membase and Regbase paths &mdash; typically because some operations (MTE2 from GM, FixPipe to GM) are still memory-staged while compute happens in RegTensors. Concentrated <code>rvec*</code> clusters mean the compiler kept the data in registers across multiple ops, which is the win the Regbase architecture is designed to enable.
+</div>
+
+<h2>2. Decoding common <code>rvec</code> mnemonics</h2>
+
+<table>
+<thead>
+<tr><th>Mnemonic</th><th>Expansion</th><th>What it does</th><th>Notes</th></tr>
+</thead>
+<tbody>
+<tr>
+<td><code>rvecld</code></td>
+<td><strong>R</strong>egister <strong>Vec</strong>tor <strong>L</strong>oa<strong>d</strong></td>
+<td>UB &rarr; RegTensor</td>
+<td>Backed by <code>UnalignRegForLoad</code> when source isn&rsquo;t 256 B-aligned. Auto-stride via <code>AddrReg</code>.</td>
+</tr>
+<tr>
+<td><code>rvecst</code></td>
+<td><strong>R</strong>egister <strong>Vec</strong>tor <strong>St</strong>ore</td>
+<td>RegTensor &rarr; UB</td>
+<td>Backed by <code>UnalignRegForStore</code> when destination isn&rsquo;t 256 B-aligned. Pairs with the <code>vstu</code>/<code>vstus</code>/<code>vstur</code> ISA-level unaligned-store family.</td>
+</tr>
+<tr>
+<td><code>rvecex</code></td>
+<td><strong>R</strong>egister <strong>Vec</strong>tor <strong>Ex</strong>ecute / Extract / Extension</td>
+<td>In-register transformation between RegTensors, no UB round-trip</td>
+<td>Could be a permute, a cast, an extract-subvector, a fused arithmetic, or a type-conversion op &mdash; the exact opcode depends on the dialect variant. No memory side-effect.</td>
+</tr>
+<tr>
+<td><code>rvecadd</code> / <code>rvecmul</code> / etc.</td>
+<td>Register Vector arithmetic</td>
+<td>RegTensor op RegTensor &rarr; RegTensor</td>
+<td>The native arithmetic surface of the Regbase ALU.</td>
+</tr>
+<tr>
+<td><code>rvecmask</code></td>
+<td>Register Vector with mask</td>
+<td>Element-wise op gated by <code>MaskReg</code></td>
+<td><code>MaskReg</code> is VL/8 wide (256-bit on A5); 1 bit per element of the RegTensor.</td>
+</tr>
+</tbody>
+</table>
+
+<h2>3. The supporting register classes</h2>
+
+<p>Regbase introduces a small, named register file that <code>rvec*</code> ops consume:</p>
+
+<table>
+<thead>
+<tr><th>Register class</th><th>Width</th><th>Role</th></tr>
+</thead>
+<tbody>
+<tr><td><code>RegTensor</code></td><td>256 B (VL = 2048 b)</td><td>Holds vector operands; vector ALU reads/writes these.</td></tr>
+<tr><td><code>MaskReg</code></td><td>VL/8 b</td><td>Per-element participation mask.</td></tr>
+<tr><td><code>UnalignRegForLoad</code></td><td>(buffer)</td><td>Stages misaligned UB &rarr; RegTensor transfers.</td></tr>
+<tr><td><code>UnalignRegForStore</code></td><td>(buffer)</td><td>Stages misaligned RegTensor &rarr; UB transfers.</td></tr>
+<tr><td><code>AddrReg</code></td><td>scalar</td><td>Address offset register with auto-stride increment per loop iteration.</td></tr>
+</tbody>
+</table>
+
+<p>The <code>UnalignReg*</code> registers are the alignment-merge buffers (the Ascend equivalent of PowerPC AltiVec&rsquo;s <code>lvsl</code>/<code>vperm</code> pattern, Tensilica&rsquo;s <code>valign</code>, or SPARC VIS&rsquo;s <code>alignaddr</code>/<code>faligndata</code>). They exist because the vector ALU expects 256 B-aligned <code>RegTensor</code> operands, but UB data may start at any 32 B boundary &mdash; loads from an unaligned UB address need two adjacent aligned 256 B reads stitched together by a shift-merge.</p>
+
+<h2>4. Why this matters for reading a kernel graph</h2>
+
+<p>When inspecting a BiSheng / HiVM compiler dump, the density and sequencing of <code>rvec*</code> ops tells you a lot about how well the kernel is using A5&rsquo;s Regbase model:</p>
+
+<ul>
+<li><strong>Long <code>rvec*</code> chains with no intervening <code>rvecst</code></strong>: register-stationary compute &mdash; the compiler kept intermediates in <code>RegTensor</code>, which is the optimal path. Avoids UB read-write traffic.</li>
+<li><strong>Frequent <code>rvecld</code> &harr; <code>rvecst</code> oscillation</strong>: the kernel is spilling to UB between every operation. Either the compiler couldn&rsquo;t keep things in registers (register pressure), or it&rsquo;s a Membase-style kernel that hasn&rsquo;t been ported.</li>
+<li><strong>Mixed <code>v*</code> and <code>rvec*</code></strong>: legacy code path or a transition kernel. Common at MTE boundaries where UB-resident data has to come in via Membase-style paths before being lifted into RegTensors.</li>
+<li><strong>Heavy <code>UnalignReg*</code> use</strong> (visible as boundary metadata on <code>rvecld</code>/<code>rvecst</code>): the source/destination addresses aren&rsquo;t 256 B-aligned. Aligning the upstream MTE descriptor or padding the tile would eliminate the alignment-merge cost.</li>
+</ul>
+
+<h2>5. Generation map</h2>
+
+<table>
+<thead>
+<tr><th>NPU arch version</th><th>Family</th><th>Vector model</th><th>Has <code>rvec</code>?</th></tr>
+</thead>
+<tbody>
+<tr><td>200x</td><td>Atlas 200/500 inference (early)</td><td>Coupled Membase</td><td>No</td></tr>
+<tr><td>220x</td><td>Atlas 800/900 training (910B/A2, 910C/A3)</td><td>Membase</td><td>No</td></tr>
+<tr><td>300x</td><td>Atlas 200I/500 inference (current)</td><td>Coupled Membase</td><td>No</td></tr>
+<tr><td><strong>351x</strong></td><td><strong>A5 / 9572 / Da Vinci C310</strong></td><td><strong>Regbase + SIMT</strong></td><td><strong>Yes</strong></td></tr>
+</tbody>
+</table>
+
+<div class="warn">
+<strong>If you see <code>rvec*</code> ops in a graph for a 220x kernel, double-check the target arch.</strong> The compiler will sometimes emit Regbase-shaped IR for analysis purposes even when the final lowering target doesn&rsquo;t support it; the ISA-level lowering should reject this. Most production 220x compilation paths stay on <code>v*</code> mnemonics end-to-end.
+</div>
+
+<h2>6. Cross-references</h2>
+
+<ul>
+<li><code>~/Documents/docs/ascend_910c_microarchitecture.md</code> &mdash; A5/351x Regbase architecture reference (lines 1072&ndash;1095 cover the Membase &rarr; Regbase pivot and the new register classes).</li>
+<li><code>Docs-repo/UMDK/umdk_triton_ascend_lowering.md</code> &mdash; how Triton-Ascend lowers Python kernels through TTIR &rarr; TTAdapter &rarr; npubin, which is where <code>rvec*</code> mnemonics appear in the dump pipeline.</li>
+<li><code>Docs-repo/UMDK/umdk_ascend_cycle_profiling.md</code> &mdash; msprof and camodel reference, useful for correlating <code>rvec*</code> op density with measured AIV cycle counts.</li>
+</ul>
+
+</body>
+</html>
