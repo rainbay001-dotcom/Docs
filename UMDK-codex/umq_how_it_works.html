@@ -1,0 +1,1175 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>UMQ Architecture and Runtime Workflow</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --ink: #172033;
+      --muted: #5d6778;
+      --paper: #f7f9fc;
+      --panel: #ffffff;
+      --line: #cfd7e6;
+      --strong-line: #93a4bf;
+      --blue: #2563eb;
+      --cyan: #0891b2;
+      --green: #15803d;
+      --amber: #b45309;
+      --red: #b91c1c;
+      --violet: #7c3aed;
+      --code: #102039;
+      --code-bg: #eef3fb;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      color: var(--ink);
+      background: var(--paper);
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      line-height: 1.55;
+    }
+
+    main {
+      width: min(1180px, calc(100% - 40px));
+      margin: 0 auto;
+      padding: 34px 0 56px;
+    }
+
+    h1, h2, h3 {
+      margin: 0;
+      line-height: 1.18;
+    }
+
+    h1 {
+      font-size: 34px;
+      letter-spacing: 0;
+    }
+
+    h2 {
+      margin-top: 34px;
+      padding-top: 8px;
+      border-top: 1px solid var(--line);
+      font-size: 24px;
+    }
+
+    h3 {
+      margin-top: 24px;
+      font-size: 18px;
+    }
+
+    p {
+      margin: 10px 0 0;
+    }
+
+    a {
+      color: var(--blue);
+      text-decoration: none;
+    }
+
+    a:hover {
+      text-decoration: underline;
+    }
+
+    code {
+      color: var(--code);
+      background: var(--code-bg);
+      border-radius: 4px;
+      padding: 1px 5px;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+      font-size: 0.93em;
+    }
+
+    pre {
+      overflow-x: auto;
+      margin: 12px 0 0;
+      padding: 14px 16px;
+      color: #f8fafc;
+      background: #172033;
+      border-radius: 8px;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+      font-size: 13px;
+      line-height: 1.5;
+    }
+
+    pre code {
+      color: inherit;
+      background: transparent;
+      padding: 0;
+    }
+
+    ul, ol {
+      margin: 10px 0 0 22px;
+      padding: 0;
+    }
+
+    li + li {
+      margin-top: 6px;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-top: 14px;
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      overflow: hidden;
+    }
+
+    th, td {
+      padding: 10px 12px;
+      border-bottom: 1px solid var(--line);
+      text-align: left;
+      vertical-align: top;
+    }
+
+    th {
+      color: #24324d;
+      background: #eaf0f9;
+      font-weight: 700;
+    }
+
+    tr:last-child td {
+      border-bottom: 0;
+    }
+
+    .hero {
+      padding: 26px;
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      box-shadow: 0 18px 40px rgba(23, 32, 51, 0.08);
+    }
+
+    .eyebrow {
+      margin: 0 0 8px;
+      color: var(--cyan);
+      font-size: 13px;
+      font-weight: 700;
+      letter-spacing: 0;
+      text-transform: uppercase;
+    }
+
+    .subtitle {
+      max-width: 920px;
+      color: var(--muted);
+      font-size: 16px;
+    }
+
+    .meta {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      margin-top: 16px;
+    }
+
+    .pill {
+      display: inline-flex;
+      align-items: center;
+      min-height: 28px;
+      padding: 4px 10px;
+      color: #24324d;
+      background: #edf4ff;
+      border: 1px solid #c9dcff;
+      border-radius: 999px;
+      font-size: 13px;
+      font-weight: 600;
+    }
+
+    .diagram-wrap {
+      margin-top: 22px;
+      overflow-x: auto;
+      padding: 12px;
+      background: #fbfdff;
+      border: 1px solid var(--line);
+      border-radius: 10px;
+    }
+
+    .diagram {
+      display: block;
+      min-width: 1060px;
+      max-width: 100%;
+      height: auto;
+    }
+
+    .panel {
+      margin-top: 18px;
+      padding: 18px;
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 10px;
+    }
+
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 16px;
+      margin-top: 16px;
+    }
+
+    .card {
+      padding: 16px;
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+    }
+
+    .card h3 {
+      margin-top: 0;
+    }
+
+    .note {
+      margin-top: 16px;
+      padding: 14px 16px;
+      border-left: 4px solid var(--amber);
+      background: #fff7ed;
+      border-radius: 6px;
+      color: #3f2c16;
+    }
+
+    .ok {
+      border-left-color: var(--green);
+      background: #ecfdf3;
+      color: #153d25;
+    }
+
+    .warning {
+      border-left-color: var(--red);
+      background: #fef2f2;
+      color: #4a1818;
+    }
+
+    .section-lead {
+      max-width: 960px;
+      color: var(--muted);
+    }
+
+    .call-flow {
+      display: grid;
+      grid-template-columns: repeat(5, minmax(0, 1fr));
+      gap: 10px;
+      margin-top: 16px;
+    }
+
+    .step {
+      min-height: 102px;
+      padding: 14px;
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+    }
+
+    .step strong {
+      display: block;
+      margin-bottom: 6px;
+      color: #24324d;
+    }
+
+    .step span {
+      color: var(--muted);
+      font-size: 14px;
+    }
+
+    .two-col {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 18px;
+      margin-top: 16px;
+    }
+
+    .small {
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    .tag {
+      display: inline-block;
+      margin: 2px 4px 2px 0;
+      padding: 2px 7px;
+      color: #24324d;
+      background: #f2f6fb;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      font-size: 12px;
+      font-weight: 700;
+    }
+
+    @media (max-width: 900px) {
+      main {
+        width: min(100% - 24px, 1180px);
+        padding-top: 18px;
+      }
+
+      .hero {
+        padding: 18px;
+      }
+
+      h1 {
+        font-size: 28px;
+      }
+
+      .grid, .two-col, .call-flow {
+        grid-template-columns: 1fr;
+      }
+    }
+  </style>
+</head>
+<body>
+<main>
+  <section class="hero">
+    <p class="eyebrow">UMDK / URPC / UMQ</p>
+    <h1>UMQ Architecture and Runtime Workflow</h1>
+    <p class="subtitle">
+      This document explains how Unified Message Queue (UMQ) works in the local UMDK source tree.
+      The focus is the actual implementation: the public facade, transport plugin boundary, buffer
+      ownership model, UB/IPC/UBMM backends, control-plane bind flow, and data-plane send/receive paths.
+    </p>
+    <div class="meta">
+      <span class="pill">Source: /Volumes/KernelDev/umdk</span>
+      <span class="pill">Observed branch: master</span>
+      <span class="pill">Observed commit: 2d99e487</span>
+      <span class="pill">Generated: 2026-05-10</span>
+    </div>
+
+    <div class="diagram-wrap" aria-label="Overall UMQ architecture">
+      <svg class="diagram" viewBox="0 0 1160 760" role="img" aria-labelledby="arch-title arch-desc" xmlns="http://www.w3.org/2000/svg">
+        <title id="arch-title">Overall UMQ architecture</title>
+        <desc id="arch-desc">Application calls public UMQ APIs, libumq dispatches through operation tables, and backend libraries implement UB, IPC, and UBMM transport behavior.</desc>
+        <defs>
+          <marker id="arrow" markerWidth="10" markerHeight="8" refX="9" refY="4" orient="auto">
+            <path d="M 0 0 L 10 4 L 0 8 z" fill="#50617c"/>
+          </marker>
+          <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">
+            <feDropShadow dx="0" dy="8" stdDeviation="8" flood-color="#172033" flood-opacity="0.14"/>
+          </filter>
+          <style>
+            .box { fill: #ffffff; stroke: #93a4bf; stroke-width: 1.4; filter: url(#shadow); }
+            .box2 { fill: #f8fbff; stroke: #93a4bf; stroke-width: 1.2; }
+            .app { fill: #eff6ff; stroke: #2563eb; }
+            .core { fill: #eefdf5; stroke: #15803d; }
+            .ops { fill: #f5f3ff; stroke: #7c3aed; }
+            .ub { fill: #ecfeff; stroke: #0891b2; }
+            .ipc { fill: #fff7ed; stroke: #b45309; }
+            .ubmm { fill: #fdf2f8; stroke: #be185d; }
+            .ext { fill: #f1f5f9; stroke: #64748b; }
+            .t { font: 700 16px Inter, Arial, sans-serif; fill: #172033; }
+            .s { font: 13px Inter, Arial, sans-serif; fill: #42526b; }
+            .tiny { font: 12px Inter, Arial, sans-serif; fill: #5d6778; }
+            .line { stroke: #50617c; stroke-width: 1.6; fill: none; marker-end: url(#arrow); }
+            .dash { stroke: #50617c; stroke-width: 1.4; fill: none; stroke-dasharray: 6 5; marker-end: url(#arrow); }
+          </style>
+        </defs>
+
+        <rect x="30" y="30" width="1100" height="700" rx="16" fill="#fbfdff" stroke="#cfd7e6"/>
+
+        <rect class="box app" x="70" y="70" width="1020" height="86" rx="10"/>
+        <text class="t" x="92" y="102">Application / service / tool</text>
+        <text class="s" x="92" y="128">Calls lifecycle, bind, buffer, base queue, pro I/O, interrupt, async event, route, device, and DFX APIs.</text>
+        <text class="tiny" x="720" y="101">Public headers: src/urpc/include/umq</text>
+        <text class="tiny" x="720" y="125">Examples: src/urpc/examples/umq</text>
+
+        <rect class="box core" x="70" y="208" width="1020" height="155" rx="10"/>
+        <text class="t" x="92" y="240">libumq.so common facade</text>
+        <text class="s" x="92" y="266">umq_api.c and umq_pro_api.c validate handles, keep global config, record perf, and dispatch to transport ops.</text>
+        <rect class="box2" x="92" y="288" width="210" height="50" rx="8"/>
+        <text class="s" x="110" y="309">umq_t handle</text>
+        <text class="tiny" x="110" y="329">mode + ops + umqh_tp</text>
+        <rect class="box2" x="326" y="288" width="215" height="50" rx="8"/>
+        <text class="s" x="344" y="309">g_umq_fws[] table</text>
+        <text class="tiny" x="344" y="329">dlopen + dlsym backends</text>
+        <rect class="box2" x="565" y="288" width="210" height="50" rx="8"/>
+        <text class="s" x="583" y="309">qbuf pools</text>
+        <text class="tiny" x="583" y="329">global, huge, shm, TLS</text>
+        <rect class="box2" x="799" y="288" width="245" height="50" rx="8"/>
+        <text class="s" x="817" y="309">DFX + flow control utilities</text>
+        <text class="tiny" x="817" y="329">stats, perf, timer, thread ctx</text>
+
+        <rect class="box ops" x="70" y="410" width="1020" height="88" rx="10"/>
+        <text class="t" x="92" y="441">Transport ABI boundary</text>
+        <text class="s" x="92" y="468">Backends publish operation tables: umq_ops_t for base/control, umq_pro_ops_t for post/poll, and umq_dfx_ops_t for statistics.</text>
+        <text class="tiny" x="784" y="441">Headers: transport_layer/umq_tp_api.h,</text>
+        <text class="tiny" x="784" y="463">umq_pro_tp_api.h, umq_tp_dfx_api.h</text>
+
+        <rect class="box ub" x="70" y="545" width="320" height="130" rx="10"/>
+        <text class="t" x="92" y="576">UB / UB_PLUS backend</text>
+        <text class="s" x="92" y="601">libumq_ub.so</text>
+        <text class="tiny" x="92" y="625">URMA contexts per EID, registered segments,</text>
+        <text class="tiny" x="92" y="644">JFC/JFCE/JFR/Jetty, flow control, UVS routes.</text>
+
+        <rect class="box ipc" x="420" y="545" width="320" height="130" rx="10"/>
+        <text class="t" x="442" y="576">IPC backend</text>
+        <text class="s" x="442" y="601">libumq_ipc.so</text>
+        <text class="tiny" x="442" y="625">shm_open + mmap, msg_ring,</text>
+        <text class="tiny" x="442" y="644">shared-memory qbuf pools, futex notify.</text>
+
+        <rect class="box ubmm" x="770" y="545" width="320" height="130" rx="10"/>
+        <text class="t" x="792" y="576">UBMM / UBMM_PLUS backend</text>
+        <text class="s" x="792" y="601">libumq_ubmm.so</text>
+        <text class="tiny" x="792" y="625">OB memory export/import, msg_ring,</text>
+        <text class="tiny" x="792" y="644">UB notify/read path for rendezvous data.</text>
+
+        <rect class="box ext" x="70" y="692" width="320" height="28" rx="7"/>
+        <text class="tiny" x="93" y="711">External: URMA / UVS / UB devices</text>
+        <rect class="box ext" x="420" y="692" width="320" height="28" rx="7"/>
+        <text class="tiny" x="443" y="711">External: POSIX shared memory + futex</text>
+        <rect class="box ext" x="770" y="692" width="320" height="28" rx="7"/>
+        <text class="tiny" x="793" y="711">External: OB memory + URMA / UB</text>
+
+        <path class="line" d="M580 156 L580 206"/>
+        <path class="line" d="M580 363 L580 408"/>
+        <path class="line" d="M230 498 L230 543"/>
+        <path class="line" d="M580 498 L580 543"/>
+        <path class="line" d="M930 498 L930 543"/>
+        <path class="dash" d="M230 675 L230 690"/>
+        <path class="dash" d="M580 675 L580 690"/>
+        <path class="dash" d="M930 675 L930 690"/>
+      </svg>
+    </div>
+  </section>
+
+  <section class="panel">
+    <h2>Executive Summary</h2>
+    <p>
+      UMQ is a C message-queue and asynchronous I/O layer under URPC. It exposes a single public API
+      but does not implement every transport directly in the top-level library. Instead, <code>libumq.so</code>
+      is a common facade: it validates calls, owns generic handles, initializes common buffer/DFX/flow-control
+      state, and dispatches to transport-specific operation tables.
+    </p>
+    <p>
+      The important runtime split is:
+    </p>
+    <ul>
+      <li><code>src/urpc/umq/umq_api.c</code> implements lifecycle, bind, buffers, base queue operations, interrupts, async events, device/route APIs, and global dispatch.</li>
+      <li><code>src/urpc/umq/umq_pro_api.c</code> implements the enhanced post/poll API and completion-event wrappers.</li>
+      <li><code>src/urpc/umq/umq_ub</code> implements the UB backend over URMA/UVS resources.</li>
+      <li><code>src/urpc/umq/umq_ipc</code> implements local IPC over POSIX shared memory, message rings, shared qbuf pools, and futex-style notification.</li>
+      <li><code>src/urpc/umq/umq_ubmm</code> implements UB memory-mode transport by combining OB memory export/import, shared-memory qbuf mechanics, and a UB control/notify path.</li>
+    </ul>
+  </section>
+
+  <h2>Source Layout</h2>
+  <table>
+    <thead>
+      <tr>
+        <th>Area</th>
+        <th>Path</th>
+        <th>Role</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>Public API</td>
+        <td><code>src/urpc/include/umq</code></td>
+        <td>User-visible headers for lifecycle, buffers, base I/O, pro I/O, DFX, transport ABI, and transport-specific declarations.</td>
+      </tr>
+      <tr>
+        <td>Common facade</td>
+        <td><code>src/urpc/umq/umq_api.c</code></td>
+        <td>Initializes UMQ, loads backend libraries, creates generic handles, dispatches base/control calls, manages common buffer behavior, and exposes device/route/event APIs.</td>
+      </tr>
+      <tr>
+        <td>Pro facade</td>
+        <td><code>src/urpc/umq/umq_pro_api.c</code></td>
+        <td>Dispatches <code>umq_post</code>, <code>umq_poll</code>, interrupt-fd, and CQ-event calls to backend pro ops.</td>
+      </tr>
+      <tr>
+        <td>Transport ABI</td>
+        <td><code>src/urpc/include/umq/transport_layer</code></td>
+        <td>Defines <code>umq_ops_t</code>, <code>umq_pro_ops_t</code>, and <code>umq_dfx_ops_t</code>, which are the plugin contracts.</td>
+      </tr>
+      <tr>
+        <td>Buffer pools</td>
+        <td><code>src/urpc/umq/qbuf</code></td>
+        <td>Implements qbuf pools, huge qbuf pools, shared-memory qbuf pools, TLS caches, expansion, shrink, and buffer metadata layout.</td>
+      </tr>
+      <tr>
+        <td>UB backend</td>
+        <td><code>src/urpc/umq/umq_ub</code></td>
+        <td>Maps UMQ queues to URMA resources, performs bind-info exchange, posts/polls work requests, supports flow control, routes, async events, and DFX.</td>
+      </tr>
+      <tr>
+        <td>IPC backend</td>
+        <td><code>src/urpc/umq/umq_ipc</code></td>
+        <td>Uses POSIX shared memory and <code>msg_ring</code> to exchange qbuf offsets between local processes.</td>
+      </tr>
+      <tr>
+        <td>UBMM backend</td>
+        <td><code>src/urpc/umq/umq_ubmm</code></td>
+        <td>Exports/imports OB memory, reuses shared-memory qbuf mechanics, and uses UB for bind/notify/rendezvous support.</td>
+      </tr>
+      <tr>
+        <td>Examples and tests</td>
+        <td><code>src/urpc/examples/umq</code>, <code>test/urpc/umq</code></td>
+        <td>Show initialization, bind-info exchange, pro post/poll, base enqueue/dequeue, interrupts, device lookup, and route lookup.</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <h2>Core Runtime Model</h2>
+  <p class="section-lead">
+    UMQ has a facade-plus-plugin model. A public handle is a generic <code>umq_t</code> wrapper. The backend handle is stored inside it as <code>umqh_tp</code>.
+  </p>
+
+  <div class="grid">
+    <div class="card">
+      <h3>Generic handle</h3>
+      <pre><code>umq_t
+  mode        -> selected umq_trans_mode_t
+  tp_ops      -> base/control operation table
+  pro_tp_ops  -> post/poll operation table
+  dfx_tp_ops  -> stats/perf operation table
+  umqh_tp     -> backend-specific handle</code></pre>
+      <p>
+        <code>umq_create</code> allocates this object and returns it as a <code>uint64_t</code>. Most public calls cast the handle back to <code>umq_t *</code>, validate the ops table, and call the backend with <code>umq->umqh_tp</code>.
+      </p>
+    </div>
+
+    <div class="card">
+      <h3>Transport framework table</h3>
+      <p>
+        <code>g_umq_fws[]</code> maps each enabled <code>umq_trans_mode_t</code> to a shared object and symbol names. For example:
+      </p>
+      <ul>
+        <li><code>UMQ_TRANS_MODE_UB</code> -> <code>libumq_ub.so</code>, <code>umq_ub_ops_get</code>, <code>umq_pro_ub_ops_get</code>, <code>umq_ub_dfx_ops_get</code></li>
+        <li><code>UMQ_TRANS_MODE_IPC</code> -> <code>libumq_ipc.so</code>, <code>umq_ipc_ops_get</code>, <code>umq_pro_ipc_ops_get</code>, <code>umq_ipc_dfx_ops_get</code></li>
+        <li><code>UMQ_TRANS_MODE_UBMM</code> -> <code>libumq_ubmm.so</code>, <code>umq_ubmm_ops_get</code>, <code>umq_pro_ubmm_ops_get</code>, <code>umq_ubmm_dfx_ops_get</code></li>
+      </ul>
+    </div>
+  </div>
+
+  <h3>Transport ABI Tables</h3>
+  <table>
+    <thead>
+      <tr>
+        <th>Ops table</th>
+        <th>Representative functions</th>
+        <th>Meaning</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><code>umq_ops_t</code></td>
+        <td><code>umq_tp_init</code>, <code>umq_tp_create</code>, <code>umq_tp_bind</code>, <code>umq_tp_buf_alloc</code>, <code>umq_tp_enqueue</code>, <code>umq_tp_dequeue</code>, <code>umq_tp_wait_interrupt</code>, <code>umq_tp_get_topo</code></td>
+        <td>Base lifecycle, control plane, base queue I/O, interrupt, device, route, and memory-pool state operations.</td>
+      </tr>
+      <tr>
+        <td><code>umq_pro_ops_t</code></td>
+        <td><code>umq_tp_post</code>, <code>umq_tp_poll</code>, <code>umq_tp_interrupt_fd_get</code>, <code>umq_tp_get_cq_event</code></td>
+        <td>Enhanced asynchronous API for explicit TX/RX post and completion polling.</td>
+      </tr>
+      <tr>
+        <td><code>umq_dfx_ops_t</code></td>
+        <td><code>umq_tp_stats_flow_control_get</code>, <code>umq_tp_stats_qbuf_pool_get</code>, <code>umq_tp_info_get</code>, <code>umq_tp_stats_io_get</code>, <code>umq_tp_stats_tp_perf_start</code></td>
+        <td>Flow-control, qbuf, queue info, I/O packet, and transport-performance observability.</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <h2>Initialization Path</h2>
+  <p class="section-lead">
+    <code>umq_init</code> is the process-wide setup call. It validates config, records which transport modes are enabled, initializes common resources, loads transport libraries, and calls each backend's init function.
+  </p>
+
+  <div class="call-flow">
+    <div class="step">
+      <strong>1. Validate config</strong>
+      <span>Reject duplicate init, null cfg, too many <code>trans_info</code> entries, or oversized headroom.</span>
+    </div>
+    <div class="step">
+      <strong>2. Configure common state</strong>
+      <span>Seed token-policy random state, configure qbuf block size, initialize config lock, and copy filtered config.</span>
+    </div>
+    <div class="step">
+      <strong>3. Enable modes</strong>
+      <span>Walk <code>cfg->trans_info[]</code> and mark the matching framework entries enabled.</span>
+    </div>
+    <div class="step">
+      <strong>4. Start optional helpers</strong>
+      <span>If flow control is enabled, initialize URPC thread context, timing wheel, manage thread, and listen thread.</span>
+    </div>
+    <div class="step">
+      <strong>5. Load backends</strong>
+      <span>For each enabled mode, <code>dlopen</code> the shared object, resolve ops symbols, load backend dynamic symbols, set logs, and call <code>umq_tp_init</code>.</span>
+    </div>
+  </div>
+
+  <div class="note">
+    <strong>Feature model.</strong>
+    <code>umq_init_cfg_t.feature</code> selects base API, pro API, token policy, stats, perf, flow control, and remote memory access. The feature flags determine which code paths are meaningful after initialization.
+  </div>
+
+  <h3>Transport Mode Notes</h3>
+  <table>
+    <thead>
+      <tr>
+        <th>Mode</th>
+        <th>Implementation status in this checkout</th>
+        <th>Practical meaning</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><code>UMQ_TRANS_MODE_UB</code></td>
+        <td>Implemented by <code>umq_ub</code>.</td>
+        <td>UB transport over URMA resources, with max I/O size documented as 64K.</td>
+      </tr>
+      <tr>
+        <td><code>UMQ_TRANS_MODE_UB_PLUS</code></td>
+        <td>Implemented by <code>umq_ub</code> plus variants.</td>
+        <td>UB transport variant intended for larger I/O, documented as up to 10M.</td>
+      </tr>
+      <tr>
+        <td><code>UMQ_TRANS_MODE_IPC</code></td>
+        <td>Implemented by <code>umq_ipc</code>.</td>
+        <td>Local IPC using shared memory and message rings.</td>
+      </tr>
+      <tr>
+        <td><code>UMQ_TRANS_MODE_UBMM</code></td>
+        <td>Partially implemented in base API; enqueue/dequeue return failure in the plain <code>UBMM</code> ops table.</td>
+        <td>UB memory-mode foundation. In this checkout, practical base data movement is in <code>UBMM_PLUS</code>.</td>
+      </tr>
+      <tr>
+        <td><code>UMQ_TRANS_MODE_UBMM_PLUS</code></td>
+        <td>Implemented by <code>umq_ubmm_plus</code> base ops.</td>
+        <td>OB-memory-backed shared memory with UB notify/rendezvous support.</td>
+      </tr>
+      <tr>
+        <td><code>IB</code>, <code>IB_PLUS</code>, <code>UCP</code></td>
+        <td>Listed in public enum/framework table, but local backend source directories were not present.</td>
+        <td>Treat as mode placeholders unless corresponding backend libraries are installed separately.</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <h2>Create and Bind</h2>
+  <p class="section-lead">
+    UMQ separates queue creation from peer connection. Creation makes a local queue object and backend resources. Binding imports or maps the peer-side resources described by the peer's bind-info blob.
+  </p>
+
+  <pre><code>App A                                        App B
+-----                                        -----
+umq_init(cfg)                                umq_init(cfg)
+umq_create(option) -> umqh_a                 umq_create(option) -> umqh_b
+umq_bind_info_get(umqh_a, local_a)           umq_bind_info_get(umqh_b, local_b)
+             out-of-band exchange of local_a and local_b
+umq_bind(umqh_a, local_b)                    umq_bind(umqh_b, local_a)
+             queues are ready for base enqueue/dequeue or pro post/poll</code></pre>
+
+  <p>
+    The out-of-band exchange is intentionally outside UMQ. The application must carry the bind-info bytes over an existing control channel. In UB mode with token policy enabled, bind info carries token material, so the existing UMDK docs explicitly recommend a secure channel such as TLS.
+  </p>
+
+  <h3>Create Options</h3>
+  <p>
+    <code>umq_create_option_t</code> chooses the transport mode, device selection, queue name, optional RX/TX sizes, RX/TX depths, polling vs interrupt mode, TP mode, TP type, shared receive queue, used ports, priority, and main/sub UMQ flags.
+  </p>
+  <div class="two-col">
+    <div class="card">
+      <h3>Queue mode</h3>
+      <p><span class="tag">UMQ_MODE_POLLING</span> Callers poll/dequeue directly.</p>
+      <p><span class="tag">UMQ_MODE_INTERRUPT</span> Backend event objects can be armed, waited on, and acknowledged.</p>
+    </div>
+    <div class="card">
+      <h3>TP mode and type</h3>
+      <p><span class="tag">RC</span><span class="tag">RM</span><span class="tag">UM</span> map to URMA transport modes.</p>
+      <p><span class="tag">RTP</span><span class="tag">CTP</span><span class="tag">UTP</span> map to URMA/UVS TP types. Route lookup also converts UMQ TP type to UVS TP type.</p>
+    </div>
+  </div>
+
+  <h2>Buffer Model</h2>
+  <p class="section-lead">
+    UMQ data moves through <code>umq_buf_t</code>. A qbuf is both metadata and a pointer to payload. Multiple qbufs can be chained with <code>qbuf_next</code> to represent fragments or batches.
+  </p>
+
+  <table>
+    <thead>
+      <tr>
+        <th>Field</th>
+        <th>How it is used</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><code>qbuf_next</code></td>
+        <td>Links buffers for fragmented messages and batch operations.</td>
+      </tr>
+      <tr>
+        <td><code>umqh</code></td>
+        <td>Identifies the owning queue or <code>UMQ_INVALID_HANDLE</code> for global/common pool buffers.</td>
+      </tr>
+      <tr>
+        <td><code>total_data_size</code></td>
+        <td>Total payload size for the request, stored on the first fragment.</td>
+      </tr>
+      <tr>
+        <td><code>data_size</code> and <code>buf_data</code></td>
+        <td>Valid payload size and payload pointer for each fragment.</td>
+      </tr>
+      <tr>
+        <td><code>mempool_id</code>, <code>token_id</code>, <code>token_value</code></td>
+        <td>Internal tracking for pool ownership and transport memory-registration/import behavior.</td>
+      </tr>
+      <tr>
+        <td><code>status</code> and <code>io_direction</code></td>
+        <td>Completion status and TX/RX direction returned to the application after poll/dequeue.</td>
+      </tr>
+      <tr>
+        <td><code>qbuf_ext</code></td>
+        <td>Extension bytes. The pro API treats this as <code>umq_buf_pro_t</code> for opcode, flags, immediate data, remote SGE, and user context.</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <h3>Allocation Decision</h3>
+  <pre><code>umq_buf_alloc(size, count, umqh, option)
+  if umqh == UMQ_INVALID_HANDLE:
+      allocate from common qbuf pool or huge qbuf pool
+  else:
+      delegate to backend umq_tp_buf_alloc()
+          UB: common qbuf / huge qbuf variants
+          IPC: queue-local shared-memory qbuf pool
+          UBMM/UBMM_PLUS: shared-memory qbuf pool over exported/imported memory</code></pre>
+
+  <p>
+    The common qbuf pool has TLS caches and global pools. The source shows defaults such as a 64-buffer batch count for fetching/returning, a 2048 TLS maximum, dynamic expansion slots, and shrink/expand logic. UB registers common and huge qbuf memory as URMA target segments so those buffers can be used in send/write/read work requests.
+  </p>
+
+  <h3>Split vs Combine</h3>
+  <table>
+    <thead>
+      <tr>
+        <th>Mode</th>
+        <th>Layout</th>
+        <th>Why it matters</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><code>UMQ_BUF_SPLIT</code></td>
+        <td>Metadata and payload are separate.</td>
+        <td>Better when payload pages should be managed/aligned separately.</td>
+      </tr>
+      <tr>
+        <td><code>UMQ_BUF_COMBINE</code></td>
+        <td>Metadata and payload are contiguous.</td>
+        <td>Better for locality and simpler direct payload access through <code>data</code> or <code>buf_data</code>.</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <h2>Base API Data Path</h2>
+  <p class="section-lead">
+    The base API is the simpler queue model. Applications allocate a qbuf, fill it, enqueue it, notify if the backend needs it, then the peer dequeues and frees the returned qbuf.
+  </p>
+
+  <pre><code>Sender:
+  qbuf = umq_buf_alloc(size, 1, umqh, NULL)
+  write payload to qbuf->buf_data
+  umq_enqueue(umqh, qbuf, &amp;bad_qbuf)
+  umq_notify(umqh)             // backend-specific; no-op for plain UB, meaningful for IPC/UBMM
+
+Receiver:
+  qbuf = umq_dequeue(umqh)
+  read payload from qbuf->buf_data
+  umq_buf_free(qbuf)</code></pre>
+
+  <h3>What Happens Inside UB Base Enqueue</h3>
+  <ol>
+    <li>The common facade calls <code>umq_ub_enqueue_impl</code> through <code>umq_tp_enqueue</code>.</li>
+    <li>The UB backend checks that the queue is bound and polls TX completions opportunistically.</li>
+    <li>It converts the qbuf chain into URMA SGEs and <code>urma_jfs_wr_t</code> send work requests.</li>
+    <li>It posts the WR chain with <code>urma_post_jetty_send_wr</code> on the IO Jetty.</li>
+    <li>It increments TX outstanding counters and packet stats.</li>
+  </ol>
+
+  <h3>What Happens Inside UB Base Dequeue</h3>
+  <ol>
+    <li>The common facade calls <code>umq_ub_dequeue_impl</code> through <code>umq_tp_dequeue</code>.</li>
+    <li>The backend polls the receive JFC with <code>urma_poll_jfc</code>.</li>
+    <li>It resolves completion <code>user_ctx</code> back to the original qbuf, fills <code>status</code>, <code>io_direction</code>, and actual payload length.</li>
+    <li>It replenishes RX buffers through <code>umq_ub_fill_rx_buffer</code> for the base API path.</li>
+    <li>The received qbuf is returned to the application.</li>
+  </ol>
+
+  <div class="note ok">
+    <strong>Base API RX behavior.</strong>
+    UB base mode prefills receive buffers during bind. In contrast, pro API users are expected to post RX buffers explicitly with <code>umq_post(..., UMQ_IO_RX, ...)</code>.
+  </div>
+
+  <h2>Pro API Data Path</h2>
+  <p class="section-lead">
+    The pro API exposes lower-level asynchronous behavior. Applications explicitly post TX or RX qbufs and explicitly poll TX, RX, or both completion queues.
+  </p>
+
+  <pre><code>Receiver:
+  rx = umq_buf_alloc(rx_size, rx_depth, umqh, NULL)
+  umq_post(umqh, rx, UMQ_IO_RX, &amp;bad_rx)
+
+Sender:
+  tx = umq_buf_alloc(tx_size, 1, umqh, NULL)
+  ((umq_buf_pro_t *)tx->qbuf_ext)->opcode = UMQ_OPC_SEND
+  umq_post(umqh, tx, UMQ_IO_TX, &amp;bad_tx)
+  umq_poll(umqh, UMQ_IO_TX, tx_done, max)
+
+Receiver:
+  umq_poll(umqh, UMQ_IO_RX, rx_done, max)
+  process rx_done[i]
+  umq_buf_reset(rx_done[i])
+  umq_post(umqh, rx_done[i], UMQ_IO_RX, &amp;bad_rx)</code></pre>
+
+  <h3>Pro Opcodes</h3>
+  <table>
+    <thead>
+      <tr>
+        <th>Opcode</th>
+        <th>Meaning</th>
+        <th>Notes</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><code>UMQ_OPC_SEND</code></td>
+        <td>Message send.</td>
+        <td>Consumes a peer receive buffer and returns TX/RX completions.</td>
+      </tr>
+      <tr>
+        <td><code>UMQ_OPC_SEND_IMM</code></td>
+        <td>Message send with immediate data.</td>
+        <td>Used by user payloads and internal control messages.</td>
+      </tr>
+      <tr>
+        <td><code>UMQ_OPC_WRITE</code>, <code>UMQ_OPC_WRITE_IMM</code></td>
+        <td>Remote memory write, optionally with immediate data.</td>
+        <td>Requires remote segment/import state to be valid.</td>
+      </tr>
+      <tr>
+        <td><code>UMQ_OPC_READ</code></td>
+        <td>Remote memory read.</td>
+        <td>Used by the UBMM_PLUS rendezvous path for large/global buffers.</td>
+      </tr>
+      <tr>
+        <td><code>UMQ_OPC_NOP</code></td>
+        <td>No-op work request.</td>
+        <td>Reserved/utility operation.</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <h3>Pro Poll Semantics</h3>
+  <p>
+    <code>umq_poll</code> can poll <code>UMQ_IO_TX</code>, <code>UMQ_IO_RX</code>, or <code>UMQ_IO_ALL</code>. The common wrapper requires at least two output slots for <code>UMQ_IO_ALL</code>. UB splits an <code>UMQ_IO_ALL</code> poll by first polling TX up to half of the caller's budget, then RX for the remaining budget.
+  </p>
+
+  <h2>UB Backend Deep Dive</h2>
+  <p class="section-lead">
+    The UB backend is the most complete transport in this checkout. It turns UMQ queues into URMA objects and uses URMA/UVS symbols loaded at runtime.
+  </p>
+
+  <h3>UB Context</h3>
+  <p>
+    <code>umq_ub_ctx_t</code> stores the per-device/EID state: lock policy, feature flags, flow-control config, <code>urma_context_t</code>, device attributes, registered target segments, imported remote segment tracking, trans_info, notify address, Jetty lookup table, and RX-consumed counters.
+  </p>
+
+  <h3>UB Queue</h3>
+  <p>
+    <code>ub_queue_t</code> is the backend queue object returned as <code>umqh_tp</code>. It owns or references:
+  </p>
+  <ul>
+    <li>IO and flow-control <code>urma_jetty_t *</code> entries.</li>
+    <li>Receive contexts: <code>jfr_ctx_t</code>, including JFR, JFR JFC, optional JFCE, RX-buffer tracking, and credit pool.</li>
+    <li>Send completion queues: <code>jfs_jfc[]</code> and optional send JFCE.</li>
+    <li>Bind context with imported remote target Jetty and remote target segments.</li>
+    <li>Queue settings: TP mode/type, RX/TX sizes, RX/TX depths, priority, ports, queue state, flow control, and UMQ context.</li>
+  </ul>
+
+  <h3>UB Resource Creation</h3>
+  <ol>
+    <li><code>umq_ub_create_impl</code> selects the device context by <code>option->dev_info</code>.</li>
+    <li>It validates queue parameters and converts UMQ TP mode/type to URMA values.</li>
+    <li>It creates or shares the receive context. Shared RQ mode points a sub-queue to another queue's JFR context.</li>
+    <li>It creates send JFC/JFCE resources when needed.</li>
+    <li>It creates the IO Jetty with <code>urma_create_jetty</code>, using a shared JFR.</li>
+    <li>It allocates a small notify qbuf and creates flow-control resources when enabled.</li>
+    <li>It records the queue in the device's <code>umq_ctx_jetty_table</code> so completions/events can find the queue.</li>
+  </ol>
+
+  <h3>UB Bind Info</h3>
+  <p>
+    UB bind info is serialized as TLV-style content and includes version info, device info, queue info, and optional flow-control info. Important payload includes local target segment information, transport mode, Jetty IDs, order type, target type, TP mode, TP type, token, notify buffer address, RX/TX depth, RX buffer size, queue state, PID, and namespace.
+  </p>
+
+  <h3>UB Bind Execution</h3>
+  <ol>
+    <li>Deserialize peer bind info.</li>
+    <li>Validate compatibility against the local queue.</li>
+    <li>Import the remote IO Jetty with URMA. If flow control is enabled, import the remote flow-control Jetty too.</li>
+    <li>In RC mode, bind the local Jetty to the imported remote target Jetty.</li>
+    <li>For base API mode, prefill RX buffers after the Jetty connection is established.</li>
+    <li>Store remote PID/namespace and import or track peer memory segment state.</li>
+    <li>Initialize remote RX size and send initial flow-control credit request when enabled.</li>
+    <li>Set queue state to <code>QUEUE_STATE_READY</code>.</li>
+  </ol>
+
+  <h3>Route Lookup</h3>
+  <p>
+    <code>umq_get_route_list</code> delegates to the backend <code>umq_tp_get_topo</code>. UB converts <code>UMQ_TP_TYPE_RTP/CTP/UTP</code> to <code>UVS_RTP/UVS_CTP/UVS_UTP</code> and calls <code>uvs_get_path_set</code> with source and destination bonding EIDs. The result is copied into <code>umq_route_list_t</code> with source/destination EIDs, source/destination port IDs, topology type, chip/die counts, and source/destination node IDs.
+  </p>
+
+  <div class="note warning">
+    <strong>Route lookup detail.</strong>
+    In this source, <code>umq_ub_get_route_list_impl</code> rejects TP types greater than or equal to <code>UMQ_TP_TYPE_UTP</code>, which means the current condition appears to accept RTP and CTP but not UTP. Check this before relying on UTP route lookup behavior.
+  </div>
+
+  <h2>IPC Backend Deep Dive</h2>
+  <p class="section-lead">
+    IPC mode is a local-process transport. It does not use URMA. It creates a shared-memory segment, builds a message ring inside it, and uses shared-memory qbuf pools so one process can pass buffer offsets to another.
+  </p>
+
+  <h3>IPC Create</h3>
+  <ol>
+    <li><code>umq_ipc_ctx_init_impl</code> initializes an ID allocator and shared qbuf subsystem.</li>
+    <li><code>umq_ipc_create_impl</code> validates queue mode, allocates <code>umq_ipc_info_t</code>, and fills local ring parameters from <code>umq_create_option_t</code>.</li>
+    <li>The owner side creates a POSIX shared-memory object with <code>shm_open</code>, sizes it with <code>ftruncate</code>, and maps it with <code>mmap</code>.</li>
+    <li>It creates a <code>msg_ring</code> inside the mapped memory.</li>
+    <li>It initializes a local shared-memory qbuf pool in the data area after the transmit/ring region.</li>
+  </ol>
+
+  <h3>IPC Bind and Data Movement</h3>
+  <p>
+    IPC bind info contains the shared-memory name, total size, ring sizes, qbuf-pool data size, headroom, and buffer mode. The peer maps the same shared-memory object, creates a non-owner <code>msg_ring</code>, and initializes a remote shared-memory qbuf pool view.
+  </p>
+  <p>
+    IPC enqueue only accepts qbufs allocated from the local shared-memory pool. It converts qbufs to offsets with <code>umq_shm_qbuf_enqueue</code> and posts offsets into the local <code>msg_ring</code>. The peer dequeues by polling the remote message ring, resolving offsets through <code>umq_shm_qbuf_dequeue</code>, and returning a qbuf pointer in its own mapping.
+  </p>
+  <p>
+    IPC pro <code>post</code>/<code>poll</code> wrappers are present, but their implementation currently returns failure in <code>umq_ipc_impl.c</code>. The usable IPC data path in this source is the base enqueue/dequeue path.
+  </p>
+
+  <h3>IPC Notify and Interrupts</h3>
+  <p>
+    IPC notify uses the message-ring header: it sets <code>cq_event_flag</code>, increments <code>pending_events</code>, and wakes the peer with a futex. Interrupt wait/rearm/ack are implemented on top of these shared counters.
+  </p>
+
+  <h2>UBMM Backend Deep Dive</h2>
+  <p class="section-lead">
+    UBMM combines shared-memory style queueing with UB memory and control-plane support. It initializes an internal UB context, exports local OB memory, imports peer OB memory, then uses message-ring/qbuf mechanisms over imported memory.
+  </p>
+
+  <h3>UBMM Init and Create</h3>
+  <ol>
+    <li><code>umq_ubmm_ctx_init_impl</code> scans <code>trans_info[]</code> for <code>UBMM</code> or <code>UBMM_PLUS</code> entries.</li>
+    <li>It initializes an underlying UB context once and stores the local CNA and UBMM EID from <code>umq_init_cfg_t</code>.</li>
+    <li>It allocates UMQ I/O buffer memory and initializes the qbuf pool.</li>
+    <li><code>umq_ubmm_create_impl</code> creates an underlying UB queue with <code>umq_ub_create_impl</code>.</li>
+    <li>It exports a local OB memory region, creates a local <code>msg_ring</code>, initializes a local shared qbuf pool in the exported memory, and allocates a notify qbuf.</li>
+  </ol>
+
+  <h3>UBMM Bind</h3>
+  <p>
+    UBMM bind info prepends UBMM-specific memory export data to the underlying UB bind info. It carries token ID, UBA, exported size, CNA, notify address, ring sizes, qbuf-pool parameters, and peer EID. Bind first calls <code>umq_ub_bind_impl</code> for the UB queue, then imports the peer OB memory with <code>obmem_import_memory</code>, creates a remote <code>msg_ring</code>, and initializes a remote qbuf pool view.
+  </p>
+
+  <h3>UBMM_PLUS Data Path</h3>
+  <p>
+    <code>UMQ_TRANS_MODE_UBMM_PLUS</code> implements base enqueue/dequeue:
+  </p>
+  <ol>
+    <li>If a qbuf belongs to the UBMM queue, enqueue writes qbuf offsets to the local message ring.</li>
+    <li>If a qbuf is from a global pool, the backend creates a small rendezvous qbuf containing reference-SGE information, records the original qbuf by message ID, and sends that descriptor through the shared-memory ring.</li>
+    <li>The peer dequeues from the remote ring. If the dequeued item is rendezvous data, it issues a UB read through the underlying UB queue to fetch the actual data.</li>
+    <li><code>umq_ubmm_notify_impl</code> sends a UB immediate write to the peer notify buffer so the peer can wake up.</li>
+  </ol>
+
+  <div class="note">
+    <strong>Plain UBMM caveat.</strong>
+    In this source, the plain <code>UMQ_TRANS_MODE_UBMM</code> ops table has base <code>enqueue</code>/<code>dequeue</code> stubs that return failure/null, and pro post/poll stubs return failure. <code>UBMM_PLUS</code> is the path with implemented base data movement.
+  </div>
+
+  <h2>Flow Control</h2>
+  <p class="section-lead">
+    UMQ flow control is mainly implemented in the UB backend. It protects senders from overrunning the peer's receive buffers by granting and returning credits.
+  </p>
+
+  <p>
+    When <code>UMQ_FEATURE_ENABLE_FLOW_CONTROL</code> is set, each UB queue can have an IO Jetty and a flow-control Jetty. The flow-control path sends internal immediate messages for initial credit, credit requests, credit replies, credit returns, and acknowledgments. The sender checks available remote RX window before posting work requests. The receiver updates credit as RX buffers are posted and completions are consumed.
+  </p>
+  <table>
+    <thead>
+      <tr>
+        <th>Config field</th>
+        <th>Meaning</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><code>initial_credit</code></td>
+        <td>Initial amount of receive capacity requested from the peer.</td>
+      </tr>
+      <tr>
+        <td><code>max_credits_request</code></td>
+        <td>Upper bound for credit request size.</td>
+      </tr>
+      <tr>
+        <td><code>use_atomic_window</code></td>
+        <td>Uses atomic maintenance for counters in concurrent send/receive scenarios.</td>
+      </tr>
+      <tr>
+        <td><code>credit_multiple</code></td>
+        <td>Adaptive multiplier for credit request growth/shrink.</td>
+      </tr>
+      <tr>
+        <td><code>return_ratio</code></td>
+        <td>Ratio controlling when held credit is returned.</td>
+      </tr>
+      <tr>
+        <td><code>min_reserved_credit</code></td>
+        <td>Low-water threshold for requesting more peer credit.</td>
+      </tr>
+      <tr>
+        <td><code>timeout_ms</code></td>
+        <td>Idle timeout after which held credit may be actively returned.</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <h2>Interrupts, Events, and DFX</h2>
+  <div class="grid">
+    <div class="card">
+      <h3>Queue interrupts</h3>
+      <p>
+        Public calls <code>umq_rearm_interrupt</code>, <code>umq_wait_interrupt</code>, and <code>umq_ack_interrupt</code> dispatch to backend base ops. Pro calls <code>umq_interrupt_fd_get</code> and <code>umq_get_cq_event</code> dispatch through pro ops.
+      </p>
+      <p>
+        UB maps these to URMA JFC/JFCE behavior. IPC maps interrupt-style notification to shared message-ring counters and futex wake/wait. UBMM delegates to the underlying UB queue for interrupt handling.
+      </p>
+    </div>
+    <div class="card">
+      <h3>Async abnormal events</h3>
+      <p>
+        Device async-event APIs are transport-level calls: <code>umq_async_event_fd_get</code>, <code>umq_get_async_event</code>, and <code>umq_ack_async_event</code>. UB implements these through URMA async-event operations. Applications must acknowledge abnormal events before deleting affected objects.
+      </p>
+    </div>
+    <div class="card">
+      <h3>DFX APIs</h3>
+      <p>
+        <code>umq_dfx_api.c</code> exposes flow-control stats, qbuf-pool stats, UMQ info, I/O packet stats, global perf, and transport perf start/stop/info calls. These either use common perf state or dispatch to <code>umq_dfx_ops_t</code>.
+      </p>
+    </div>
+    <div class="card">
+      <h3>Device and route APIs</h3>
+      <p>
+        <code>umq_dev_info_get</code>, <code>umq_dev_info_list_get</code>, and <code>umq_get_route_list</code> are transport-backed. UB implements device info through URMA device/EID discovery and routes through UVS path-set lookup.
+      </p>
+    </div>
+  </div>
+
+  <h2>How to Choose the API Path</h2>
+  <table>
+    <thead>
+      <tr>
+        <th>Use case</th>
+        <th>Recommended UMQ path</th>
+        <th>Reason</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>Simple message queue over UB or IPC</td>
+        <td>Base API: <code>umq_enqueue</code>, <code>umq_dequeue</code>, <code>umq_notify</code></td>
+        <td>Less application-side queue management. UB base mode handles RX buffer refill automatically.</td>
+      </tr>
+      <tr>
+        <td>Explicit completion handling and RX buffer ownership</td>
+        <td>Pro API: <code>umq_post</code>, <code>umq_poll</code></td>
+        <td>Application controls TX/RX posting and completion polling.</td>
+      </tr>
+      <tr>
+        <td>RDMA-like read/write/send operations over UB</td>
+        <td>Pro API over <code>UMQ_TRANS_MODE_UB</code> or <code>UB_PLUS</code></td>
+        <td><code>umq_buf_pro_t</code> carries opcode, flags, immediate data, remote SGE, and user context.</td>
+      </tr>
+      <tr>
+        <td>Local same-host IPC</td>
+        <td><code>UMQ_TRANS_MODE_IPC</code> base enqueue/dequeue</td>
+        <td>Uses shared memory and offsets, avoiding network/URMA setup.</td>
+      </tr>
+      <tr>
+        <td>Large shared-memory style data with UB wakeup/rendezvous</td>
+        <td><code>UMQ_TRANS_MODE_UBMM_PLUS</code> base enqueue/dequeue</td>
+        <td>Combines OB-memory import/export with message rings and UB reads for rendezvous buffers.</td>
+      </tr>
+      <tr>
+        <td>Latency and health inspection</td>
+        <td>DFX APIs and async-event APIs</td>
+        <td>Flow-control stats, packet stats, qbuf stats, queue info, and abnormal-event reporting are exposed separately from the data path.</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <h2>Important Caveats from the Current Source</h2>
+  <ul>
+    <li>The public enum lists several transport modes, but local source implements UB, UB_PLUS, IPC, UBMM, and UBMM_PLUS. IB/UCP backend source was not present in this checkout.</li>
+    <li>IPC pro <code>post</code>/<code>poll</code> functions currently route to implementation stubs that return failure. IPC's implemented data path is base enqueue/dequeue.</li>
+    <li>Plain UBMM base and pro paths are mostly stubs in the current source. UBMM_PLUS has the implemented base enqueue/dequeue path.</li>
+    <li>UB base API prefills and refills RX buffers. UB pro API does not; the application must post RX buffers.</li>
+    <li>Bind info is application-transported. UMQ does not provide the out-of-band channel.</li>
+    <li>When UB token policy is enabled, bind info contains token-sensitive data and should be exchanged securely.</li>
+    <li>Route lookup depends on UVS topology availability. If UVS has no route/path data, <code>umq_get_route_list</code> cannot synthesize it.</li>
+  </ul>
+
+  <h2>Source Anchors</h2>
+  <table>
+    <thead>
+      <tr>
+        <th>Topic</th>
+        <th>Source files inspected</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>Public API and types</td>
+        <td><code>src/urpc/include/umq/umq_api.h</code>, <code>umq_types.h</code>, <code>umq_pro_api.h</code>, <code>umq_pro_types.h</code></td>
+      </tr>
+      <tr>
+        <td>Common dispatch</td>
+        <td><code>src/urpc/umq/umq_api.c</code>, <code>src/urpc/umq/umq_pro_api.c</code>, <code>src/urpc/umq/umq_inner.h</code></td>
+      </tr>
+      <tr>
+        <td>Transport ABI</td>
+        <td><code>src/urpc/include/umq/transport_layer/umq_tp_api.h</code>, <code>umq_pro_tp_api.h</code>, <code>umq_tp_dfx_api.h</code></td>
+      </tr>
+      <tr>
+        <td>UB backend</td>
+        <td><code>src/urpc/umq/umq_ub/umq_ub_api.c</code>, <code>umq_pro_ub_api.c</code>, <code>core/umq_ub_impl.c</code>, <code>core/private/umq_ub.c</code>, <code>core/private/umq_pro_ub.c</code>, <code>core/private/umq_ub_private.h</code></td>
+      </tr>
+      <tr>
+        <td>IPC backend</td>
+        <td><code>src/urpc/umq/umq_ipc/umq_ipc.c</code>, <code>umq_pro_ipc.c</code>, <code>umq_ipc_impl.c</code></td>
+      </tr>
+      <tr>
+        <td>UBMM backend</td>
+        <td><code>src/urpc/umq/umq_ubmm/umq_ubmm.c</code>, <code>umq_ubmm_plus.c</code>, <code>umq_ubmm_impl.c</code>, <code>umq_pro_ubmm.c</code>, <code>umq_pro_ubmm_plus.c</code>, <code>obmem_common.c</code></td>
+      </tr>
+      <tr>
+        <td>DFX and docs</td>
+        <td><code>src/urpc/umq/umq_dfx_api.c</code>, <code>doc/en/urpc/UMQ Initialize.en.md</code>, <code>UMQ IO.md</code>, <code>UMQ Buffer.md</code>, <code>UMQ Flowcontrol.md</code>, <code>UMQ Abnormal Event.md</code></td>
+      </tr>
+      <tr>
+        <td>Examples</td>
+        <td><code>src/urpc/examples/umq/umq_example_common.c</code>, <code>src/urpc/examples/umq/umq_example_pro.c</code>, <code>src/urpc/examples/umq/connection_setup_tool</code></td>
+      </tr>
+    </tbody>
+  </table>
+
+  <p class="small">
+    This document describes the source as observed locally on 2026-05-10. If the UMDK source changes, re-check the backend ops tables and implementation stubs before relying on mode-specific behavior.
+  </p>
+</main>
+</body>
+</html>

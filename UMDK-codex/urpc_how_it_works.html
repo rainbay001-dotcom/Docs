@@ -1,0 +1,1038 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>URPC Architecture and Runtime Workflow</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --ink: #182033;
+      --muted: #5e6878;
+      --paper: #f7f9fc;
+      --panel: #ffffff;
+      --line: #cdd7e6;
+      --strong-line: #8fa3c0;
+      --blue: #2563eb;
+      --cyan: #0e7490;
+      --green: #15803d;
+      --amber: #b45309;
+      --red: #b91c1c;
+      --violet: #6d28d9;
+      --code: #102039;
+      --code-bg: #eef3fb;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      color: var(--ink);
+      background: var(--paper);
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      line-height: 1.55;
+    }
+
+    main {
+      width: min(1180px, calc(100% - 40px));
+      margin: 0 auto;
+      padding: 34px 0 56px;
+    }
+
+    h1, h2, h3 {
+      margin: 0;
+      line-height: 1.18;
+    }
+
+    h1 {
+      font-size: 34px;
+      letter-spacing: 0;
+    }
+
+    h2 {
+      margin-top: 34px;
+      padding-top: 8px;
+      border-top: 1px solid var(--line);
+      font-size: 24px;
+    }
+
+    h3 {
+      margin-top: 24px;
+      font-size: 18px;
+    }
+
+    p {
+      margin: 10px 0 0;
+    }
+
+    a {
+      color: var(--blue);
+      text-decoration: none;
+    }
+
+    a:hover {
+      text-decoration: underline;
+    }
+
+    code {
+      color: var(--code);
+      background: var(--code-bg);
+      border-radius: 5px;
+      padding: 1px 5px;
+      font-size: 0.94em;
+    }
+
+    pre {
+      margin: 12px 0 0;
+      padding: 14px 16px;
+      overflow: auto;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #0f172a;
+      color: #e2e8f0;
+      line-height: 1.45;
+      font-size: 13px;
+    }
+
+    pre code {
+      color: inherit;
+      background: transparent;
+      padding: 0;
+      border-radius: 0;
+    }
+
+    ul, ol {
+      margin: 10px 0 0 22px;
+      padding: 0;
+    }
+
+    li {
+      margin: 6px 0;
+    }
+
+    table {
+      width: 100%;
+      margin-top: 14px;
+      border-collapse: collapse;
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      overflow: hidden;
+    }
+
+    th, td {
+      padding: 10px 12px;
+      border-bottom: 1px solid var(--line);
+      text-align: left;
+      vertical-align: top;
+      font-size: 14px;
+    }
+
+    th {
+      color: #24324a;
+      background: #edf2f8;
+      font-weight: 700;
+    }
+
+    tr:last-child td {
+      border-bottom: 0;
+    }
+
+    .hero {
+      display: grid;
+      grid-template-columns: 1.05fr 0.95fr;
+      gap: 22px;
+      align-items: stretch;
+      margin-bottom: 26px;
+    }
+
+    .intro,
+    .meta,
+    .panel {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      box-shadow: 0 12px 28px rgba(17, 24, 39, 0.06);
+    }
+
+    .intro {
+      padding: 24px;
+    }
+
+    .meta {
+      padding: 18px;
+    }
+
+    .eyebrow {
+      margin: 0 0 8px;
+      color: var(--cyan);
+      font-weight: 700;
+      letter-spacing: 0;
+      text-transform: uppercase;
+      font-size: 12px;
+    }
+
+    .lede {
+      margin-top: 14px;
+      color: #334155;
+      font-size: 17px;
+    }
+
+    .meta-grid {
+      display: grid;
+      gap: 10px;
+      margin-top: 10px;
+    }
+
+    .meta-item {
+      padding: 10px 12px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #f8fafc;
+    }
+
+    .meta-item strong {
+      display: block;
+      margin-bottom: 2px;
+      font-size: 13px;
+    }
+
+    .meta-item span {
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    .diagram {
+      width: 100%;
+      height: auto;
+      margin-top: 14px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #ffffff;
+    }
+
+    .card-grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 14px;
+      margin-top: 14px;
+    }
+
+    .card {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 14px;
+    }
+
+    .card h3 {
+      margin-top: 0;
+      font-size: 16px;
+    }
+
+    .note {
+      margin-top: 14px;
+      padding: 12px 14px;
+      border-left: 4px solid var(--blue);
+      background: #eef6ff;
+      border-radius: 6px;
+      color: #24324a;
+    }
+
+    .warn {
+      border-left-color: var(--amber);
+      background: #fff7ed;
+    }
+
+    .flow {
+      counter-reset: step;
+      display: grid;
+      gap: 10px;
+      margin-top: 14px;
+    }
+
+    .step {
+      position: relative;
+      padding: 12px 14px 12px 46px;
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+    }
+
+    .step:before {
+      counter-increment: step;
+      content: counter(step);
+      position: absolute;
+      left: 13px;
+      top: 12px;
+      width: 22px;
+      height: 22px;
+      border-radius: 999px;
+      color: #ffffff;
+      background: var(--blue);
+      display: grid;
+      place-items: center;
+      font-size: 12px;
+      font-weight: 700;
+    }
+
+    .tag {
+      display: inline-block;
+      padding: 2px 7px;
+      border-radius: 999px;
+      background: #e0f2fe;
+      color: #075985;
+      font-size: 12px;
+      font-weight: 700;
+    }
+
+    .two-col {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 16px;
+      margin-top: 14px;
+    }
+
+    .source-list {
+      columns: 2;
+      column-gap: 28px;
+    }
+
+    .source-list li {
+      break-inside: avoid;
+    }
+
+    .svg-title {
+      font: 700 16px Inter, Arial, sans-serif;
+      fill: #172033;
+    }
+
+    .svg-text {
+      font: 13px Inter, Arial, sans-serif;
+      fill: #263449;
+    }
+
+    .svg-small {
+      font: 12px Inter, Arial, sans-serif;
+      fill: #5e6878;
+    }
+
+    .svg-tiny {
+      font: 11px Inter, Arial, sans-serif;
+      fill: #64748b;
+    }
+
+    .box {
+      fill: #ffffff;
+      stroke: #9fb0c9;
+      stroke-width: 1.2;
+      rx: 8;
+    }
+
+    .box-blue {
+      fill: #eff6ff;
+      stroke: #60a5fa;
+    }
+
+    .box-green {
+      fill: #f0fdf4;
+      stroke: #86efac;
+    }
+
+    .box-cyan {
+      fill: #ecfeff;
+      stroke: #67e8f9;
+    }
+
+    .box-amber {
+      fill: #fffbeb;
+      stroke: #fbbf24;
+    }
+
+    .box-violet {
+      fill: #f5f3ff;
+      stroke: #a78bfa;
+    }
+
+    .arrow {
+      stroke: #52637a;
+      stroke-width: 1.6;
+      fill: none;
+      marker-end: url(#arrow);
+    }
+
+    .dash {
+      stroke-dasharray: 5 5;
+    }
+
+    @media (max-width: 900px) {
+      main {
+        width: min(100% - 24px, 1180px);
+      }
+
+      .hero,
+      .two-col,
+      .card-grid {
+        grid-template-columns: 1fr;
+      }
+
+      .source-list {
+        columns: 1;
+      }
+    }
+  </style>
+</head>
+<body>
+<main>
+  <section class="hero">
+    <div class="intro">
+      <p class="eyebrow">UMDK / URPC Framework</p>
+      <h1>URPC Architecture and Runtime Workflow</h1>
+      <p class="lede">
+        URPC is the UMDK user-space remote-procedure-call framework. It gives an application a
+        channel, queue, function, memory-segment, poll, and callback model, while hiding the concrete
+        UB transport behind provider and queue operation tables.
+      </p>
+      <p>
+        In the checked source tree, the framework control plane is IP based for server listen and attach,
+        while the data plane maps URPC queues to URMA Jetty resources over UB. This document focuses on
+        the framework path under <code>src/urpc/framework</code>; UMQ is a separate queue subsystem in the
+        same URPC tree and is covered by the companion UMQ HTML.
+      </p>
+    </div>
+
+    <aside class="meta">
+      <p class="eyebrow">Source Snapshot</p>
+      <div class="meta-grid">
+        <div class="meta-item">
+          <strong>Repository</strong>
+          <span><code>/Volumes/KernelDev/umdk</code></span>
+        </div>
+        <div class="meta-item">
+          <strong>Branch and commit</strong>
+          <span><code>master</code> at <code>2d99e487</code></span>
+        </div>
+        <div class="meta-item">
+          <strong>Primary source roots</strong>
+          <span><code>src/urpc/include/framework</code>, <code>src/urpc/framework</code>, <code>doc/en/urpc</code></span>
+        </div>
+        <div class="meta-item">
+          <strong>Concrete transport found</strong>
+          <span><code>QUEUE_TRANS_MODE_JETTY</code> over <code>URMA_TRANSPORT_UB</code></span>
+        </div>
+      </div>
+    </aside>
+  </section>
+
+  <h2>Overall Architecture</h2>
+  <svg class="diagram" viewBox="0 0 1120 650" role="img" aria-label="URPC architecture diagram">
+    <defs>
+      <marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+        <path d="M 0 0 L 10 5 L 0 10 z" fill="#52637a"></path>
+      </marker>
+    </defs>
+
+    <text class="svg-title" x="34" y="34">URPC framework layers</text>
+
+    <rect class="box box-blue" x="34" y="56" width="1052" height="76"></rect>
+    <text class="svg-title" x="56" y="84">Application</text>
+    <text class="svg-text" x="56" y="108">Calls URPC APIs, owns serialization, memory buffers, polling loop, callback policy, and function handlers.</text>
+    <text class="svg-small" x="750" y="87">API examples</text>
+    <text class="svg-tiny" x="750" y="108">urpc_init, channel_create, queue_create, func_call, func_poll</text>
+
+    <rect class="box" x="34" y="170" width="1052" height="246"></rect>
+    <text class="svg-title" x="56" y="198">URPC Framework Library</text>
+
+    <rect class="box box-cyan" x="58" y="222" width="244" height="148"></rect>
+    <text class="svg-text" x="78" y="250">Control plane</text>
+    <text class="svg-small" x="78" y="274">cp.c, IP handshaker, tasks</text>
+    <text class="svg-small" x="78" y="296">server attach and refresh</text>
+    <text class="svg-small" x="78" y="318">queue add, rm, pair, unpair</text>
+    <text class="svg-small" x="78" y="340">TLS-PSK, async events, DFX</text>
+
+    <rect class="box box-green" x="324" y="222" width="222" height="148"></rect>
+    <text class="svg-text" x="344" y="250">Core model</text>
+    <text class="svg-small" x="344" y="274">channel.c and channel.h</text>
+    <text class="svg-small" x="344" y="296">queue.c and queue.h</text>
+    <text class="svg-small" x="344" y="318">function hash tables</text>
+    <text class="svg-small" x="344" y="340">request entry table</text>
+
+    <rect class="box box-amber" x="568" y="222" width="244" height="148"></rect>
+    <text class="svg-text" x="588" y="250">Data plane</text>
+    <text class="svg-small" x="588" y="274">dp.c and protocol.h</text>
+    <text class="svg-small" x="588" y="296">REQ, RSP, ACK_AND_RSP</text>
+    <text class="svg-small" x="588" y="318">poll processing and callbacks</text>
+    <text class="svg-small" x="588" y="340">remote read and response return</text>
+
+    <rect class="box box-violet" x="834" y="222" width="228" height="148"></rect>
+    <text class="svg-text" x="854" y="250">Managers and services</text>
+    <text class="svg-small" x="854" y="274">keepalive and timeout</text>
+    <text class="svg-small" x="854" y="296">notify and cancel</text>
+    <text class="svg-small" x="854" y="318">resource release</text>
+    <text class="svg-small" x="854" y="340">stats, logging, perf recorder</text>
+
+    <path class="arrow" d="M 560 132 L 560 166"></path>
+    <path class="arrow" d="M 180 370 L 180 438"></path>
+    <path class="arrow" d="M 435 370 L 435 438"></path>
+    <path class="arrow" d="M 690 370 L 690 438"></path>
+    <path class="arrow" d="M 948 370 L 948 438"></path>
+
+    <rect class="box" x="34" y="452" width="1052" height="142"></rect>
+    <text class="svg-title" x="56" y="480">Transport provider boundary</text>
+
+    <rect class="box box-blue" x="58" y="506" width="248" height="58"></rect>
+    <text class="svg-text" x="78" y="532">provider_ops_t</text>
+    <text class="svg-small" x="78" y="553">device selection, provider init, mem import</text>
+
+    <rect class="box box-green" x="334" y="506" width="242" height="58"></rect>
+    <text class="svg-text" x="354" y="532">queue_ops_t</text>
+    <text class="svg-small" x="354" y="553">create, bind, send, read, poll, post</text>
+
+    <rect class="box box-amber" x="604" y="506" width="218" height="58"></rect>
+    <text class="svg-text" x="624" y="532">Jetty provider</text>
+    <text class="svg-small" x="624" y="553">QUEUE_TRANS_MODE_JETTY</text>
+
+    <rect class="box box-violet" x="850" y="506" width="212" height="58"></rect>
+    <text class="svg-text" x="870" y="532">URMA / UB device</text>
+    <text class="svg-small" x="870" y="553">Jetty, JFR, JFC, JFCE, target Jetty</text>
+
+    <path class="arrow" d="M 306 535 L 334 535"></path>
+    <path class="arrow" d="M 576 535 L 604 535"></path>
+    <path class="arrow" d="M 822 535 L 850 535"></path>
+
+    <text class="svg-tiny" x="58" y="624">Control plane exchanges metadata; data plane posts URMA work requests and polls completion queues.</text>
+  </svg>
+
+  <h2>What URPC Is</h2>
+  <p>
+    URPC is not a serialization framework like gRPC plus protobuf. The caller prepares request and response
+    memory in <code>urpc_sge_t</code> arrays, places a URPC protocol header in the first SGE, and chooses how
+    completion should be observed. The framework tracks channel state, queue state, request IDs, server function
+    IDs, remote queue imports, memory segment tokens, and transport completion events.
+  </p>
+  <div class="card-grid">
+    <div class="card">
+      <h3>Control Plane</h3>
+      <p>Creates sessions, exchanges server and queue metadata, attaches or detaches servers, and drives queue add, remove, pair, and unpair workflows through task objects.</p>
+    </div>
+    <div class="card">
+      <h3>Data Plane</h3>
+      <p>Formats REQ/RSP protocol headers, selects local and remote queues, posts Jetty send/read work, polls completions, and reports events back to the application.</p>
+    </div>
+    <div class="card">
+      <h3>Provider Layer</h3>
+      <p>Maps URPC generic queues to concrete transport resources. In this checkout, the main framework backend is Jetty over URMA UB.</p>
+    </div>
+  </div>
+
+  <h2>Important Objects</h2>
+  <table>
+    <thead>
+      <tr>
+        <th>Object</th>
+        <th>Where It Lives</th>
+        <th>Purpose</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><code>urpc_ctx</code></td>
+        <td><code>framework/lib/control/cp.h</code></td>
+        <td>Global process state: role, feature flags, device class, subclass, keepalive configuration, skip-post-RX setting, and state.</td>
+      </tr>
+      <tr>
+        <td><code>urpc_channel_info_t</code></td>
+        <td><code>framework/core/channel/channel.h</code></td>
+        <td>Client-side RPC context. Holds local queue list, remote queue list, server nodes, function table, in-flight request table, timer pool, mem-info list, and locks.</td>
+      </tr>
+      <tr>
+        <td><code>queue_local_t</code></td>
+        <td><code>framework/core/queue/queue.h</code></td>
+        <td>Local transport endpoint. Tracks stats, receive buffers, CQ contexts, queue ID, local queue config, bind status, and read cache.</td>
+      </tr>
+      <tr>
+        <td><code>queue_remote_t</code></td>
+        <td><code>framework/core/queue/queue.h</code></td>
+        <td>Imported or materialized remote queue metadata. Holds remote queue ID, server node pointer, remote channel ID, trans mode, type, and sizes.</td>
+      </tr>
+      <tr>
+        <td><code>req_entry_t</code></td>
+        <td><code>framework/core/channel/channel.h</code></td>
+        <td>In-flight request record. It binds request ID, local channel, send queue, callback, user args, timeout state, and data-plane context.</td>
+      </tr>
+      <tr>
+        <td><code>tx_ctx_t</code></td>
+        <td><code>framework/lib/datapath/dp.h</code></td>
+        <td>Transport-side send/read context. It carries user context, SGEs, response SGEs, request ID, channel ID, call mode, and cleanup state.</td>
+      </tr>
+      <tr>
+        <td><code>req_ctx_t</code></td>
+        <td><code>framework/lib/datapath/dp.h</code></td>
+        <td>Server-side received request context. It carries the client channel, server channel, request ID, quick-reply remote queue, stream state, and ACK flag.</td>
+      </tr>
+      <tr>
+        <td><code>queue_ops_t</code></td>
+        <td><code>framework/core/queue/queue.h</code></td>
+        <td>Per-transport queue vtable: create, delete, import, unimport, bind, unbind, send, read, poll, post, wait, modify, and query.</td>
+      </tr>
+      <tr>
+        <td><code>provider_ops_t</code></td>
+        <td><code>framework/core/queue/queue.h</code></td>
+        <td>Per-provider vtable: initialize device context, register memory, import memory, create notifiers, and expose async notifications.</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <h2>Initialization</h2>
+  <p>
+    <code>urpc_init()</code> is the framework entry point. The implementation in <code>cp.c</code> validates the
+    config, ignores <code>SIGPIPE</code>, prepares async events and thread context, initializes optional DFX Unix
+    control sockets, initializes resource-release and queue-ID allocators, then calls <code>provider_init()</code>
+    for the configured transports.
+  </p>
+  <div class="flow">
+    <div class="step"><strong>Validate role, feature flags, and transport info.</strong> Features include timeout, keepalive, multi-EID, hardware UB offload, function-info exchange, multiplexing, and stats behavior.</div>
+    <div class="step"><strong>Initialize process services.</strong> Async event context, thread context, DFX, resource release, queue ID allocator, and manager modules are set up.</div>
+    <div class="step"><strong>Initialize providers.</strong> <code>provider_init()</code> walks configured <code>trans_info[]</code> entries and calls provider vtables registered by constructors.</div>
+    <div class="step"><strong>Initialize role-specific state.</strong> Depending on role, server, client, or server-client state is initialized, then URPC state becomes <code>URPC_STATE_INIT</code>.</div>
+  </div>
+  <p>
+    For the Jetty provider, provider initialization selects an URMA device by device name, IP, or EID. In multi-EID mode, the provider can enable all EIDs for a device name. The provider then opens the URMA context,
+    records device attributes, and prepares memory registration or import state for UB transport.
+  </p>
+
+  <h2>Server Startup and Attach</h2>
+  <p>
+    Server startup and client attach are control-plane operations. <code>urpc_server_start()</code> currently accepts
+    IPv4 or IPv6 listen configuration. <code>SERVER_TYPE_UB</code> is present in the type system, but the listen
+    path in this checkout returns unsupported for UB server listen config.
+  </p>
+  <svg class="diagram" viewBox="0 0 1120 420" role="img" aria-label="URPC control-plane setup flow">
+    <defs>
+      <marker id="arrow2" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+        <path d="M 0 0 L 10 5 L 0 10 z" fill="#52637a"></path>
+      </marker>
+    </defs>
+
+    <text class="svg-title" x="34" y="34">Control-plane setup and metadata exchange</text>
+
+    <rect class="box box-blue" x="44" y="70" width="260" height="80"></rect>
+    <text class="svg-text" x="66" y="100">Server process</text>
+    <text class="svg-small" x="66" y="124">urpc_init()</text>
+    <text class="svg-small" x="66" y="144">urpc_func_register()</text>
+
+    <rect class="box box-cyan" x="44" y="214" width="260" height="80"></rect>
+    <text class="svg-text" x="66" y="244">Server IP listener</text>
+    <text class="svg-small" x="66" y="268">urpc_server_start()</text>
+    <text class="svg-small" x="66" y="288">ip_handshaker_init()</text>
+
+    <rect class="box box-green" x="430" y="70" width="260" height="80"></rect>
+    <text class="svg-text" x="452" y="100">Client process</text>
+    <text class="svg-small" x="452" y="124">urpc_init()</text>
+    <text class="svg-small" x="452" y="144">urpc_channel_create()</text>
+
+    <rect class="box box-amber" x="430" y="214" width="260" height="80"></rect>
+    <text class="svg-text" x="452" y="244">Attach task</text>
+    <text class="svg-small" x="452" y="268">urpc_channel_server_attach()</text>
+    <text class="svg-small" x="452" y="288">WORKFLOW_TYPE_CLIENT_ATTACH_SERVER</text>
+
+    <rect class="box box-violet" x="810" y="118" width="260" height="128"></rect>
+    <text class="svg-text" x="832" y="148">Control messages</text>
+    <text class="svg-small" x="832" y="172">session update, function info</text>
+    <text class="svg-small" x="832" y="194">queue attach, refresh, add, rm</text>
+    <text class="svg-small" x="832" y="216">queue bind, unbind, tp info</text>
+    <text class="svg-small" x="832" y="238">task cancel, server ready</text>
+
+    <path class="arrow" marker-end="url(#arrow2)" d="M 174 150 L 174 214"></path>
+    <path class="arrow" marker-end="url(#arrow2)" d="M 560 150 L 560 214"></path>
+    <path class="arrow" marker-end="url(#arrow2)" d="M 690 254 C 736 254 760 206 810 206"></path>
+    <path class="arrow" marker-end="url(#arrow2)" d="M 810 168 C 724 160 704 110 690 110"></path>
+    <path class="arrow dash" marker-end="url(#arrow2)" d="M 810 224 C 708 332 394 332 304 254"></path>
+
+    <text class="svg-small" x="44" y="350">Blocking mode waits on a semaphore in the callback context. Nonblocking mode returns a task ID and completes through async events.</text>
+  </svg>
+  <p>
+    <code>urpc_channel_server_attach()</code>, <code>urpc_channel_server_refresh()</code>, queue add/remove,
+    and queue pair/unpair all construct a callback context, create a task through <code>task_manager_client_task_create()</code>,
+    then either wait for its semaphore or return a task ID for nonblocking mode.
+  </p>
+
+  <h2>Channel and Queue Setup</h2>
+  <p>
+    A channel is the RPC session object. It does not send by itself; it owns queue references and request tracking.
+    The actual data path goes through a local queue and an imported or materialized remote queue.
+  </p>
+  <div class="flow">
+    <div class="step"><strong>Create a channel.</strong> <code>urpc_channel_create()</code> allocates <code>urpc_channel_info_t</code>, assigns an ID, initializes list heads, locks, server-node state, request-entry table state, and provider binding.</div>
+    <div class="step"><strong>Create local queues.</strong> <code>urpc_queue_create(QUEUE_TRANS_MODE_JETTY, cfg)</code> allocates a queue ID, calls <code>ops-&gt;create_local_queue()</code>, initializes per-queue slabs, and optionally hooks timeout notification state.</div>
+    <div class="step"><strong>Attach to a server.</strong> The client exchanges channel, queue, and function metadata over the IP control plane. If function-info exchange is enabled, server function name-to-ID mappings are copied into the client channel table.</div>
+    <div class="step"><strong>Add queues to the channel.</strong> <code>urpc_channel_queue_add()</code> adds local queues by handle or remote queues by queue ID through control-plane tasks.</div>
+    <div class="step"><strong>Pair queues.</strong> <code>urpc_channel_queue_pair()</code> validates local/remote roles and status, then runs a pair task. In the Jetty backend, pairing eventually calls <code>urma_bind_jetty()</code> to advise the local Jetty of the remote target Jetty.</div>
+  </div>
+  <p class="note">
+    The channel can hold multiple local and remote queues. If an application does not pin a queue in
+    <code>urpc_call_option_t</code>, the framework can choose from the channel queue lists.
+  </p>
+
+  <h2>Jetty Transport Mapping</h2>
+  <p>
+    The framework transport abstraction is deliberately thin. The queue code registers <code>g_urpc_send_recv_ops</code>
+    with <code>mode = QUEUE_TRANS_MODE_JETTY</code>. That vtable points to Jetty implementations for local queue creation,
+    remote queue creation and import, send, read, receive post, completion poll, interrupt wait, queue bind, and queue status modify.
+  </p>
+  <table>
+    <thead>
+      <tr>
+        <th>URPC Operation</th>
+        <th>Jetty Backend Behavior</th>
+        <th>Source Anchor</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>Local queue create</td>
+        <td>Allocates URPC queue object, validates config, creates JFCE when interrupt mode is used, creates JFS JFC and JFR JFC, creates JFR, then creates the Jetty.</td>
+        <td><code>queue_send_recv.c</code>, <code>jetty_public_func.c</code></td>
+      </tr>
+      <tr>
+        <td>Remote queue import</td>
+        <td>Creates a remote queue object from exchanged queue metadata and imports the remote target Jetty through the provider.</td>
+        <td><code>channel.c</code>, <code>queue_send_recv.c</code></td>
+      </tr>
+      <tr>
+        <td>Pair or bind</td>
+        <td>Calls <code>urma_bind_jetty(local_jetty, imported_tjetty)</code> for Jetty remote queues, then records the remote Jetty ID and bind state.</td>
+        <td><code>queue_send_recv.c</code></td>
+      </tr>
+      <tr>
+        <td>Send</td>
+        <td>Converts URPC SGEs to URMA SGEs using the provider index inside the memory handle, chooses inline send when size permits, and posts <code>URMA_OPC_SEND</code> with <code>urma_post_jetty_send_wr()</code>.</td>
+        <td><code>jetty_public_func.c</code></td>
+      </tr>
+      <tr>
+        <td>Receive post</td>
+        <td>Converts posted RX buffers to URMA receive SGEs and calls <code>urma_post_jetty_recv_wr()</code>.</td>
+        <td><code>jetty_public_func.c</code></td>
+      </tr>
+      <tr>
+        <td>Remote read</td>
+        <td>Builds a read work request using local destination memory and imported remote target segment token, then posts <code>URMA_OPC_READ</code> on the Jetty send queue.</td>
+        <td><code>dp.c</code>, <code>jetty_public_func.c</code></td>
+      </tr>
+      <tr>
+        <td>Poll</td>
+        <td>Polls TX completions from the JFS JFC and RX completions from the JFR JFC using <code>urma_poll_jfc()</code>, then converts completion records into URPC queue messages.</td>
+        <td><code>queue_send_recv.c</code></td>
+      </tr>
+      <tr>
+        <td>Interrupt mode</td>
+        <td>Waits on JFCE-backed JFC events with <code>urma_wait_jfc()</code>, acknowledges them, and rearms the JFC.</td>
+        <td><code>jetty_public_func.c</code></td>
+      </tr>
+    </tbody>
+  </table>
+
+  <h2>Function IDs and Dispatch</h2>
+  <p>
+    Server-side functions are registered by name with <code>urpc_func_register()</code>. The implementation initializes
+    a function module, allocates a private method ID, combines it with the configured device class and subclass, and inserts
+    the handler into both ID and name hash maps.
+  </p>
+  <pre><code>function id layout:
+
+device_class: 12 bits
+sub_class:    12 bits
+private bit:   1 bit
+method:       23 bits
+
+server:
+  urpc_func_register(name, handler) -> full func_id
+
+client:
+  attach or refresh -> function info exchange
+  urpc_func_id_get(channel, name) -> server func_id copied into channel table</code></pre>
+  <p>
+    On the server, <code>urpc_func_exec()</code> looks up synchronous handlers by method ID and invokes the registered function.
+    <code>urpc_func_async_exec()</code> does the same for async handlers and passes the request context plus queue handle to the application, so the application can call <code>urpc_func_return()</code> later.
+  </p>
+
+  <h2>Data-Plane Call Flow</h2>
+  <svg class="diagram" viewBox="0 0 1120 540" role="img" aria-label="URPC request and response data-plane flow">
+    <defs>
+      <marker id="arrow3" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+        <path d="M 0 0 L 10 5 L 0 10 z" fill="#52637a"></path>
+      </marker>
+    </defs>
+
+    <text class="svg-title" x="34" y="34">Request, poll, execute, and response path</text>
+
+    <rect class="box box-blue" x="44" y="72" width="250" height="108"></rect>
+    <text class="svg-text" x="66" y="102">Client app</text>
+    <text class="svg-small" x="66" y="126">build SGEs and REQ header</text>
+    <text class="svg-small" x="66" y="148">urpc_func_call()</text>
+    <text class="svg-small" x="66" y="168">poll or wait for result</text>
+
+    <rect class="box box-green" x="374" y="72" width="250" height="108"></rect>
+    <text class="svg-text" x="396" y="102">Client URPC datapath</text>
+    <text class="svg-small" x="396" y="126">select local and remote queue</text>
+    <text class="svg-small" x="396" y="148">allocate req_entry and tx_ctx</text>
+    <text class="svg-small" x="396" y="168">queue-&gt;ops-&gt;send()</text>
+
+    <rect class="box box-amber" x="704" y="72" width="250" height="108"></rect>
+    <text class="svg-text" x="726" y="102">URMA Jetty transport</text>
+    <text class="svg-small" x="726" y="126">URMA_OPC_SEND</text>
+    <text class="svg-small" x="726" y="148">TX and RX completions</text>
+    <text class="svg-small" x="726" y="168">JFS JFC and JFR JFC</text>
+
+    <rect class="box box-cyan" x="704" y="260" width="250" height="108"></rect>
+    <text class="svg-text" x="726" y="290">Server URPC datapath</text>
+    <text class="svg-small" x="726" y="314">urpc_func_poll()</text>
+    <text class="svg-small" x="726" y="336">process REQ</text>
+    <text class="svg-small" x="726" y="358">return req_ctx to app</text>
+
+    <rect class="box box-violet" x="374" y="260" width="250" height="108"></rect>
+    <text class="svg-text" x="396" y="290">Server app</text>
+    <text class="svg-small" x="396" y="314">urpc_func_exec()</text>
+    <text class="svg-small" x="396" y="336">or async handler</text>
+    <text class="svg-small" x="396" y="358">urpc_func_return()</text>
+
+    <rect class="box box-green" x="44" y="260" width="250" height="108"></rect>
+    <text class="svg-text" x="66" y="290">Client completion</text>
+    <text class="svg-small" x="66" y="314">poll RSP or ACK_AND_RSP</text>
+    <text class="svg-small" x="66" y="336">match req_id to req_entry</text>
+    <text class="svg-small" x="66" y="358">callback or poll event</text>
+
+    <path class="arrow" marker-end="url(#arrow3)" d="M 294 126 L 374 126"></path>
+    <path class="arrow" marker-end="url(#arrow3)" d="M 624 126 L 704 126"></path>
+    <path class="arrow" marker-end="url(#arrow3)" d="M 829 180 L 829 260"></path>
+    <path class="arrow" marker-end="url(#arrow3)" d="M 704 314 L 624 314"></path>
+    <path class="arrow" marker-end="url(#arrow3)" d="M 374 314 L 294 314"></path>
+    <path class="arrow dash" marker-end="url(#arrow3)" d="M 499 260 C 610 210 720 210 829 260"></path>
+    <path class="arrow dash" marker-end="url(#arrow3)" d="M 704 338 C 570 444 372 444 238 368"></path>
+
+    <text class="svg-small" x="44" y="430">The first SGE must contain the URPC protocol header. The framework does not serialize user payloads; it only interprets its own header and SGE metadata.</text>
+    <text class="svg-small" x="44" y="456">A request ID ties the sent REQ to the later RSP. The request-entry table owns callback, timeout, and cleanup state until completion.</text>
+  </svg>
+
+  <div class="flow">
+    <div class="step"><strong>Client calls <code>urpc_func_call()</code>.</strong> The function validates SGEs, gets the channel, selects a local queue and remote queue, allocates a <code>tx_ctx_t</code>, and, unless early-response mode is used, allocates a <code>req_entry_t</code>.</div>
+    <div class="step"><strong>URPC fills the request header.</strong> <code>urpc_req_fill_basic_info()</code> and <code>urpc_req_fill_req_info_without_dma()</code> write protocol version, type, function ID, request total size, request ID, client channel, and <code>function_defined</code>.</div>
+    <div class="step"><strong>URPC posts transport send.</strong> The local queue vtable converts the SGEs to URMA SGEs and posts <code>URMA_OPC_SEND</code> to the imported target Jetty.</div>
+    <div class="step"><strong>Server polls.</strong> <code>urpc_func_poll()</code> drains notify events, then calls <code>queue-&gt;ops-&gt;poll()</code>. RX completions are decoded by <code>process_rx_msg()</code>.</div>
+    <div class="step"><strong>Server reports the request.</strong> For <code>URPC_MSG_REQ</code>, the server creates <code>req_ctx_t</code>, creates a quick-reply remote queue from source queue info, and reports <code>POLL_EVENT_REQ_RECVED</code>.</div>
+    <div class="step"><strong>Application executes.</strong> The server can call <code>urpc_func_exec()</code> for synchronous handlers, or the async handler can keep <code>req_ctx_t</code> and return later.</div>
+    <div class="step"><strong>Server responds.</strong> <code>urpc_func_return()</code> fills the response header, optionally encrypts, then posts another queue send to the client's remote queue.</div>
+    <div class="step"><strong>Client polls response.</strong> Client-side poll sees <code>URPC_MSG_RSP</code> or <code>URPC_MSG_ACK_AND_RSP</code>, parses request ID, looks up <code>req_entry_t</code>, reports the completion event or releases the waiting <code>urpc_func_poll_wait()</code> caller, and frees the request entry.</div>
+  </div>
+
+  <h2>Protocol Headers</h2>
+  <table>
+    <thead>
+      <tr>
+        <th>Header</th>
+        <th>Used For</th>
+        <th>Key Fields</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><code>urpc_req_head_t</code></td>
+        <td>Client-to-server request.</td>
+        <td>Version, type, ACK flag, DMA count, 48-bit function ID, total request size, request ID, client channel, <code>function_defined</code>, optional DMA table.</td>
+      </tr>
+      <tr>
+        <td><code>urpc_ack_head_t</code></td>
+        <td>Standalone acknowledgement path. The current <code>urpc_func_call()</code> code rejects ACK-only call mode in the normal path.</td>
+        <td>Version, type, request ID range, request ID, client channel.</td>
+      </tr>
+      <tr>
+        <td><code>urpc_rsp_head_t</code></td>
+        <td>Server-to-client response, including combined ACK plus RSP.</td>
+        <td>Version, type, status, request ID range, request ID, client channel, <code>function_defined</code>, response total size, return data offsets.</td>
+      </tr>
+      <tr>
+        <td><code>urpc_keepalive_head_t</code></td>
+        <td>Keepalive manager messages.</td>
+        <td>Keepalive version, response bit, status, local queue ID, server manager channel, reserved/security bytes.</td>
+      </tr>
+      <tr>
+        <td><code>urpc_ctl_head_t</code></td>
+        <td>Control-plane task messages.</td>
+        <td>Version, opcode, error code, encryption/keepalive flags, channel, data size, control opcode, task ID.</td>
+      </tr>
+      <tr>
+        <td><code>urpc_security_exthdr_t</code></td>
+        <td>Data-plane encryption extension header.</td>
+        <td>AES IV and authentication tag fields.</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <h2>Polling and Event Model</h2>
+  <p>
+    URPC is poll-driven. The application can poll one queue by passing a queue handle in <code>urpc_poll_option_t</code>,
+    or poll every local queue in a channel by setting the queue handle to <code>URPC_INVALID_HANDLE</code>. The framework
+    first reports queued abort or timeout notifications, then polls transport completions, then processes read-cache work.
+  </p>
+  <div class="two-col">
+    <div class="panel" style="padding: 14px;">
+      <h3>TX Completions</h3>
+      <p>
+        TX completion records come from the JFS JFC. The queue backend converts them into <code>TX_SEND</code>
+        queue messages. The datapath then reports send success, send error, response-sent, read-return, or internal-message cleanup depending on <code>tx_ctx_t</code>.
+      </p>
+    </div>
+    <div class="panel" style="padding: 14px;">
+      <h3>RX Completions</h3>
+      <p>
+        RX completion records come from the JFR JFC. The datapath parses the first SGE as a URPC header,
+        validates protocol version and type, then emits request-received, request-response, combined ACK-response, or error events.
+      </p>
+    </div>
+  </div>
+  <p>
+    Interrupt mode is available through <code>urpc_queue_interrupt_fd_get()</code> and the Jetty JFCE path. In that mode,
+    a caller can integrate the queue with an event loop by waiting for the underlying interrupt file descriptor, then polling
+    URPC completions.
+  </p>
+
+  <h2>Memory and Remote Read</h2>
+  <p>
+    URPC requires memory registration for data-plane SGEs. A memory handle stores provider-specific target segment handles,
+    so the Jetty backend can pick the handle matching the queue provider index. The API also exposes memory segment
+    registration, token query, remote-access enable or disable, and remote read through <code>urpc_ref_read()</code>.
+  </p>
+  <div class="flow">
+    <div class="step"><strong>Local buffer ownership stays with the application.</strong> URPC uses SGEs and registered memory handles; it does not own application serialization or payload layout.</div>
+    <div class="step"><strong>Send uses local target segment handles.</strong> <code>send_recv_send()</code> converts each non-data-zone SGE to an URMA SGE using <code>mem_h</code> and provider index.</div>
+    <div class="step"><strong>Remote read uses tokens.</strong> <code>urpc_ref_read()</code> obtains the real remote queue for the request context, builds source and destination SGEs, looks up the imported target segment by server channel and token, then posts <code>URMA_OPC_READ</code>.</div>
+  </div>
+
+  <h2>Security</h2>
+  <p>
+    <code>urpc_ssl_config_set()</code> configures TLS-PSK for the control plane after <code>urpc_init()</code>. The
+    security documentation says TLS 1.2 and TLS 1.3 are supported, and enabling SSL can read <code>/dev/random</code>,
+    which may block if the system entropy pool is low.
+  </p>
+  <p>
+    The data-plane path has extension hooks for encryption and decryption keyed by <code>function_defined</code>.
+    The protocol includes a security extension header with IV and tag fields, and the datapath calls extension operations
+    around request and response processing when SSL or function-defined extensions require it.
+  </p>
+
+  <h2>DFX, Admin, and Observability</h2>
+  <p>
+    URPC has several operational hooks. Queue stats and error stats are maintained in the queue layer. A Unix-domain
+    DFX server is initialized when <code>unix_domain_file_path</code> is configured. <code>urpc_admin</code> connects to
+    a process-local socket path and can send administrative requests. The framework also exposes async event retrieval,
+    async-event file descriptor access, task cancellation, performance-recorder registration, and log configuration.
+  </p>
+  <table>
+    <thead>
+      <tr>
+        <th>Mechanism</th>
+        <th>What It Helps With</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><code>urpc_queue_stats_get()</code> and <code>urpc_queue_err_stats_get()</code></td>
+        <td>Per-queue request, response, read, ACK, and error counters.</td>
+      </tr>
+      <tr>
+        <td><code>urpc_async_event_get()</code> and <code>urpc_async_event_fd_get()</code></td>
+        <td>Nonblocking task completions, provider events, and application event-loop integration.</td>
+      </tr>
+      <tr>
+        <td><code>urpc_channel_task_cancel()</code></td>
+        <td>Cancel a control-plane task by task ID.</td>
+      </tr>
+      <tr>
+        <td><code>urpc_perf_record_register()</code></td>
+        <td>Hook framework timing points such as function call, poll, return, transport post, send, read, and poll.</td>
+      </tr>
+      <tr>
+        <td><code>urpc_admin</code></td>
+        <td>External process-local DFX control through Unix-domain IPC.</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <h2>How URPC Relates To UMQ</h2>
+  <p>
+    The URPC source tree contains both <code>framework</code> and <code>umq</code>. The framework path described here
+    does not call the public UMQ API directly for normal RPC transport. Instead, it uses <code>queue_ops_t</code> and
+    <code>provider_ops_t</code> under <code>src/urpc/framework/core/queue</code>. The concrete backend found in this
+    checkout is a Jetty send/receive provider implemented under <code>framework/core/queue/jetty</code>.
+  </p>
+  <p>
+    UMQ is still part of the broader URPC component area. It provides a separate message-queue API and separate UB,
+    IPC, and UBMM transport modes. For this repository snapshot, treat UMQ as a neighboring subsystem, not the direct
+    data-plane object behind <code>urpc_func_call()</code>.
+  </p>
+
+  <h2>Typical API Sequence</h2>
+  <pre><code>server:
+  urpc_init(&amp;cfg)
+  urpc_func_register(&amp;handler_info, &amp;func_id)
+  urpc_server_start(&amp;control_plane_cfg)
+  qh = urpc_queue_create(QUEUE_TRANS_MODE_JETTY, &amp;qcfg)
+  urpc_queue_rx_post(qh, rx_sges, rx_sge_num)
+  loop:
+    n = urpc_func_poll(server_chid_or_channel, &amp;poll_opt, msgs, max)
+    for each POLL_EVENT_REQ_RECVED:
+      urpc_func_exec(func_id, args, args_num, &amp;rsps, &amp;rsps_num)
+      urpc_func_return(qh, req_ctx, &amp;return_wr, &amp;return_opt)
+
+client:
+  urpc_init(&amp;cfg)
+  chid = urpc_channel_create()
+  urpc_channel_server_attach(chid, &amp;server_host, &amp;connect_opt)
+  qh = urpc_queue_create(QUEUE_TRANS_MODE_JETTY, &amp;qcfg)
+  urpc_channel_queue_add(chid, qh, local_attr, &amp;connect_opt)
+  remote_qh = urpc_channel_queue_query(chid, &amp;query_attr)
+  urpc_channel_queue_add(chid, remote_qh, remote_attr, &amp;connect_opt)
+  urpc_channel_queue_pair(chid, qh, remote_qh, &amp;connect_opt)
+  req_h = urpc_func_call(chid, &amp;call_wr, &amp;call_opt)
+  n = urpc_func_poll(chid, &amp;poll_opt, msgs, max)
+  or urpc_func_poll_wait(chid, req_h, &amp;poll_opt, &amp;rsp_msg, timeout)</code></pre>
+
+  <h2>Practical Notes</h2>
+  <ul>
+    <li>The first SGE passed to <code>urpc_func_call()</code> must be valid and large enough for <code>urpc_req_head_t</code>.</li>
+    <li>The framework does not define payload serialization. The application must agree on payload layout, endianness, and versioning.</li>
+    <li>ACK-only mode exists in the protocol, but the normal <code>urpc_func_call()</code> implementation logs that ACK call mode is not supported.</li>
+    <li>Control-plane listen configuration currently supports IPv4 and IPv6, not UB listen mode.</li>
+    <li>Queue creation is per transport mode. In this checkout, the framework queue mode to focus on is <code>QUEUE_TRANS_MODE_JETTY</code>.</li>
+    <li>When timeout or keepalive features are enabled, more manager state is created: notify tables, timer pools, manage channels, and keepalive probe tasks.</li>
+    <li>Nonblocking control-plane APIs return task IDs; completions should be consumed through async events.</li>
+  </ul>
+
+  <h2>Source Map</h2>
+  <ul class="source-list">
+    <li><code>src/urpc/include/framework/urpc_framework_api.h</code> - public URPC framework API.</li>
+    <li><code>src/urpc/include/framework/urpc_framework_types.h</code> - config, queue, function, poll, memory, event, and security types.</li>
+    <li><code>src/urpc/framework/lib/control/cp.c</code> - init, uninit, server start, channel API, queue API, memory API, SSL config, async events.</li>
+    <li><code>src/urpc/framework/lib/control/ip/task_manager.c</code> - client task creation and control-plane workflow scheduling.</li>
+    <li><code>src/urpc/framework/lib/control/ip/task_engine.c</code> - task execution and callback handling.</li>
+    <li><code>src/urpc/framework/lib/control/ip/ip_handshaker.c</code> - IP listener and handshaker path.</li>
+    <li><code>src/urpc/framework/lib/control/ip/transport.c</code> - control-plane transport helpers.</li>
+    <li><code>src/urpc/framework/core/channel/channel.c</code> - channel allocation, request-entry table, queue references, remote queue import, server nodes.</li>
+    <li><code>src/urpc/framework/core/channel/server_channel.c</code> - server-side channel mapping.</li>
+    <li><code>src/urpc/framework/core/queue/queue.c</code> - provider and queue registration, queue ID allocator, stats, per-queue slabs.</li>
+    <li><code>src/urpc/framework/core/queue/queue.h</code> - queue objects, queue ops, provider ops, queue messages.</li>
+    <li><code>src/urpc/framework/core/queue/jetty/provider_ops_jetty.c</code> - Jetty provider initialization over URMA UB.</li>
+    <li><code>src/urpc/framework/core/queue/jetty/queue_send_recv.c</code> - Jetty queue create, bind, poll, modify, and ops table.</li>
+    <li><code>src/urpc/framework/core/queue/jetty/jetty_public_func.c</code> - Jetty send, post receive, wait, read, config validation, memory token helpers.</li>
+    <li><code>src/urpc/framework/lib/datapath/dp.c</code> - call, poll, response processing, remote read, function return.</li>
+    <li><code>src/urpc/framework/lib/datapath/dp_ext.c</code> - function-defined extension hooks.</li>
+    <li><code>src/urpc/framework/lib/func.c</code> - function ID allocation, function registration, function info exchange table helpers, sync and async dispatch.</li>
+    <li><code>src/urpc/framework/protocol/protocol.h</code> - REQ, ACK, RSP, keepalive, control, and security extension headers.</li>
+    <li><code>doc/en/urpc/URPC Framework API.md</code> - official usage flow and control/data-plane diagrams.</li>
+    <li><code>doc/en/urpc/URPC Security.md</code> - TLS-PSK and security notes.</li>
+  </ul>
+</main>
+</body>
+</html>
