@@ -17,7 +17,15 @@ The question driving this doc:
 
 ## 0. The test command, for reference
 
-Server pod:
+> **Current runner** (as of 2026-05-11): see §10.12. The reporter has
+> switched from `ub_performance_client` to `urma_perftest send_lat`,
+> which is open-source under `src/urma/tools/urma_perftest/` and uses
+> JFS+JFR (not Jetty). Same kernel link-setup path; different userland
+> entry. The k8s pod commands below are kept here because the early
+> sections (§2 log timestamping, §3 strace) were written against them
+> and remain valid examples.
+
+Server pod (original test, kept for §2/§3 examples):
 
 ```bash
 kubectl exec -it -n default auto-master-brpc1 -- bash -c '
@@ -70,11 +78,16 @@ events in wall-clock.
 | Want a permanent stable probe for the driver   | define tracepoints (§5) |
 | Want to ship a long-running observability tool | raw eBPF / libbpf (§7) |
 
-For "is the codex `tp-cache` patch attacking the right thing?" the
-shortest path is: **§2 to confirm the magnitude → §6 to attribute time
-to a kernel function → re-run on the patched kernel and compare**. The
-ftrace and tracepoint sections are background for when you want to make
-the probes permanent.
+For "is the codex `tp-cache` patch attacking the right thing?" on the
+current `urma_perftest send_lat` runner with host access:
+
+1. **§10.13** minimal trace setup (8–11 functions, `tracing_thresh=1000`) — one ~10-line trace per first-RPC, identifies which of the 5 phases holds the wall-clock
+2. **§10.11** VTP cache verification — add `ubcore_create_vtpn` / `ubcore_reuse_vtpn` to confirm cache hit/miss
+3. **§10.4** zero-instrumentation check — `dmesg | grep consumes:` after bumping `g_ubcore_log_level=6` (see §10.4 for the gate gotcha)
+4. Apply codex patch, re-run, compare durations
+
+The ftrace and tracepoint sections (§4–§5) are background for when
+you want permanent in-tree probes rather than ad-hoc tracing.
 
 ## 2. Log-line timestamping — no privilege, no rebuild
 
@@ -1293,6 +1306,12 @@ over a different transport, with `active_tp` playing the
 
 ### 10.7 ftrace target list — covering all three flows
 
+> **Superseded:** §10.13 has the converged minimal baseline (8–11 functions
+> + `tracing_thresh=1000` + `max_graph_depth=1`). Use that first. The
+> wider 22-function filter below is appropriate only after you've
+> narrowed the dominant phase from §10.13's output and want to descend
+> into that phase's internals.
+
 For function-graph tracing of the full link-setup path:
 
 ```bash
@@ -1391,6 +1410,844 @@ grep -rn "ubcore_nl_send_wait\b" /Volumes/KernelDev/kernel/drivers/ub/
 The earlier comment on `rainbay001-dotcom/UMDK#1` citing
 `ubcore_nl_send_wait` should be corrected; this section's call chain
 is the accurate one for the reporter's environment.
+
+### 10.10 Fourth-round corrections after deeper code reading
+
+Even §10.3's graph is wrong in four concrete ways. Another agent went
+through the source more carefully and surfaced these; verified against
+`/Volumes/KernelDev/kernel/drivers/ub/` on 2026-05-11.
+
+#### Correction A — the ioctl entry isn't `UBURMA_CMD_ADVISE_JETTY`
+
+`ADVISE_JETTY` is a separate ioctl about EID advertising. **There is no
+function called `ubcore_advise_jetty`** in this tree
+(`grep -rn ubcore_advise_jetty drivers/ub/urma/ubcore/` returns
+nothing).
+
+Link setup is triggered by:
+
+```
+ioctl(fd, UBURMA_CMD_IMPORT_JFR   or  UBURMA_CMD_IMPORT_JETTY)
+  → uburma_cmd_import_jfr      uburma_cmd.c:3204
+      └─ ubcore_import_jfr     ubcore_jetty.c:1511
+```
+
+(symmetric for `_IMPORT_JETTY` → `ubcore_import_jetty` at
+`ubcore_jetty.c:2476`.)
+
+#### Correction B — `get_tp_list` is sequential with VTP activation, not nested inside it
+
+§10.3 drew `ubcore_get_tp_list` as a child of
+`ubcore_connect_vtp_ctrlplane`. It isn't. They're sibling steps in a
+sequence:
+
+```
+ubcore_import_jfr  (jetty.c:1511)
+  ├─ ubcore_check_ctrlplane_compat(dev->ops->import_jfr)
+  │     udma provides import_jfr_ex but NOT import_jfr   → returns true
+  │     → delegates to compat path:
+  │
+  └─ ubcore_import_jfr_compat   connect_adapter.c:1105
+        ├─ ubcore_fill_get_tp_cfg
+        ├─ STEP 1:  ubcore_get_tp_list                    connect_adapter.c:1133
+        │              → dev->ops->get_tp_list = udma_get_tp_list
+        │              → CM exchange or firmware ctrlq to discover peer TP descriptor
+        ├─ STEP 2:  ubcore_exchange_tp_info               connect_adapter.c:1145
+        │              (only for RM + RTP)
+        │              another CM exchange
+        └─ STEP 3:  ubcore_import_jfr_ex                  connect_adapter.c:1157
+                     └─ dev->ops->import_jfr_ex = udma_import_jfr_ex
+                     └─ for TRANSPORT_UB + RM/UM:
+                         └─ STEP 4:  ubcore_connect_vtp_ctrlplane   jetty.c:~1614
+                                       (vtpn cache lookup, miss path)
+                                       └─ STEP 5:  ubcore_active_tp
+                                                     → udma_active_tp → ubase_ctrlq → MUE
+```
+
+So a single first-RPC link setup performs up to **five sequential
+phases**, any one of which can hold the wall-clock:
+
+1. `get_tp_list` — peer TP descriptor discovery
+2. `exchange_tp_info` — secondary exchange (RM+RTP only)
+3. `import_jfr_ex` — driver-side jfr import
+4. `connect_vtp_ctrlplane` — vtpn alloc + cache wire-up
+5. `active_tp` — firmware install via ctrlq
+
+`ubcore_get_tp_list` and `ubcore_active_tp` are the two self-instrumented
+ones (`UBCORE_DRV_TP_THRESHOLD_MS = 1` ms gate, log via
+`ubcore_log_info_rl` — see §10.4 for the level-gate gotcha). Phases
+2/3/4 have no `consumes:` log; you need ftrace to see them.
+
+#### Correction C — `ub_cm` doesn't call `ubmad_post_send` directly
+
+There's a higher-level wrapper between CM and the raw MAD send:
+
+```
+ub_cm builds CONN_REQ / CONN_RESP / SINGLE_REQ / CLOSE_REQ
+  → registered cm-send op = ubmad_ubc_send         ubcm/ubmad_datapath.c:1155
+        ├─ validates msg_type
+        ├─ sets send_buf->src_eid from dev_priv->eid_info.eid
+        ├─ logs "ubc dev: ... s_eid: ... d_eid: ..."  via ubcore_log_info_rl
+        └─ ubmad_post_send                         ubcm/ubmad_datapath.c:768
+              └─ ubcore_post_jetty_send_wr         (data path)
+                    └─ udma_post_jetty_send_wr     hw/udma/
+                          └─ udma_post_one_wr      → SEND WQE on MAD jetty SQ
+```
+
+Registration: `ub_cm.c:350`:
+```c
+ubcore_register_cm_send_ops(ubmad_ubc_send);
+```
+
+So `ubmad_ubc_send` is what ub_cm calls when it has a message to send,
+and `ubmad_post_send` is the lower-level WQE-posting primitive.
+
+#### Correction D — receive path is normalized before reaching `ubcm_recv_handler`
+
+§10.3 drew `ubmad_recv_work_handler → ubcm_recv_handler`. The actual
+path has three more steps in between, and they do significant work:
+
+```
+ubmad_jfce_handler_r        (RX CQE event)                   ubmad_datapath.c:1429
+  └─ ubmad_recv_work_handler                                  ubmad_datapath.c:1266
+        └─ ubmad_process_msg  (dispatch by msg_type)         ubmad_datapath.c:1110
+              switch (msg->msg_type) {
+              case UBMAD_UBC_CONN_REQ: ubmad_process_conn_data   ubmad_datapath.c:991
+              case UBMAD_UBC_CONN_RESP: ubmad_process_conn_resp  ubmad_datapath.c:1023  ← the interesting one
+              case UBMAD_UBC_SINGLE_REQ: ubmad_process_conn_single
+              case UBMAD_CLOSE_REQ:     ubmad_process_close_req
+              }
+```
+
+For `CONN_RESP` specifically, `ubmad_process_conn_resp` does
+**deduplication via the msn (message sequence number) hash list**:
+
+```c
+/* ubmad_datapath.c:1046–1058 */
+msn_mgr = &tjetty->msn_mgr;
+spin_lock_irqsave(&msn_mgr->msn_hlist_lock, flag);
+hlist_for_each_entry_safe(cur, next, &msn_mgr->msn_hlist[hash], node) {
+    if (cur->msn == msg->msn) {
+        hlist_del(&cur->node);     /* ← effective ack: removes outstanding request */
+        kfree(cur);
+        goto effective_resp;
+    }
+}
+/* if msn not found, this is a duplicate / late ack; drop silently */
+ubcore_log_info_rl("redundant ack. msn %llu seid " EID_FMT "\n", ...);
+return 0;
+
+effective_resp:
+    ret = ubmad_cm_process_msg(...);    /* finally hand to agent recv_handler */
+```
+
+Then `ubmad_cm_process_msg` (`ubmad_datapath.c:968`) **normalizes
+msg_type to `UBMAD_UBC_CONN_REQ` regardless of the actual incoming
+type** before invoking the agent's recv_handler:
+
+```c
+/* line 977-978 */
+recv_cr.msg_type = UBMAD_UBC_CONN_REQ;       /* "only CONN_REQ valid for recv_handler" */
+agent_priv->agent.recv_handler(&agent_priv->agent, &recv_cr);
+```
+
+That's why `ubcm_recv_handler` at `ub_cm.c:148` only has a
+`case UBMAD_UBC_CONN_REQ` branch — every CM message, including
+responses, arrives there labeled as CONN_REQ. The actual req-vs-resp
+distinction was already made by the time we get here.
+
+#### Correction E (consequence) — there's no `wait_for_completion` in the CM path
+
+Comment at `ub_mad_priv.h:220` explicitly says:
+
+```
+/* try to find msn_node in msn_hlist when timeout.
+ * If find, repost and re-add work [...]
+ */
+```
+
+So the CM is **asynchronous with retransmit, not synchronous
+wait-and-block**. When `ubmad_ubc_send` posts a CONN_REQ, the caller
+returns immediately; an outstanding `msn_node` is parked in the
+tjetty's hash list; a periodic timer scans for entries that haven't
+been acked and reposts the message. Receipt of CONN_RESP fires the
+hash-list remove, ending that retransmit cycle.
+
+This means the "MAD reply wait" I named as the dominant first-RPC
+holder in §10.5 doesn't exist as drawn. The actual blocking points
+on the first-RPC critical path are:
+
+1. **`ubcore_get_tp_list`** — `udma_get_tp_list` likely calls into
+   firmware via ctrlq, which uses `wait_for_completion_timeout` at
+   `ubase_ctrlq.c:662`. So `get_tp_list` is a real synchronous wait
+   even though the CM exchange isn't.
+2. **`ubcore_active_tp`** — confirmed synchronous via ctrlq.
+3. **`udma_exchange_tp_info` / `ubcore_exchange_tp_info`** — if RM+RTP,
+   this may also be synchronous.
+
+So the actual first-RPC wait is one or more **ctrlq** waits, possibly
+chained, not a CM-MAD wait. The codex `udma-tp-cache` patch caches
+across these by short-circuiting the discovery of an already-known
+TP descriptor.
+
+#### Corrected ftrace filter
+
+> **Superseded:** §10.13 has the converged minimal baseline. Use that
+> first; treat the 29-function list below as a "fully widened" reference
+> rather than the recommended starting point.
+
+Adding the missing functions:
+
+```bash
+cat > set_graph_function << 'EOF'
+ubcore_import_jfr
+ubcore_import_jetty
+ubcore_import_jfr_compat
+ubcore_import_jetty_compat
+ubcore_get_tp_list
+ubcore_exchange_tp_info
+ubcore_import_jfr_ex
+ubcore_import_jetty_ex
+ubcore_connect_vtp_ctrlplane
+ubcore_active_tp
+udma_active_tp
+udma_get_tp_list
+udma_import_jfr_ex
+udma_import_jetty_ex
+udma_ctrlq_set_active_tp_ex
+udma_k_ctrlq_create_active_tp_msg
+ubase_ctrlq_send_msg
+__ubase_ctrlq_send
+ubase_ctrlq_wait_completed
+ubmad_ubc_send
+ubmad_post_send
+ubcore_post_jetty_send_wr
+udma_post_jetty_send_wr
+ubmad_jfce_handler_r
+ubmad_recv_work_handler
+ubmad_process_msg
+ubmad_process_conn_resp
+ubmad_cm_process_msg
+ubcm_recv_handler
+EOF
+```
+
+#### How to keep this straight going forward
+
+Five rules, painfully learned over three rounds of being wrong:
+
+1. **Grep for callers before naming a function as the hot spot.** A function that's defined but uncalled (`ubcore_nl_send_wait`) does nothing.
+2. **The function-name-on-the-ioctl is not always the right kernel entry.** `UBURMA_CMD_ADVISE_JETTY` does not get handled by `ubcore_advise_jetty` (no such function). Always check `uburma_cmd*.c` for the dispatcher table and trace down from there.
+3. **Compat vs. modern path matters.** If the driver registers `ops->X_ex` but not `ops->X`, the compat path runs — which adds extra steps before reaching the modern path. udma is currently compat for `import_jfr` / `import_jetty`.
+4. **CM is async + retransmit, not sync wait.** Look for `wait_for_completion` calls in the actual function bodies of the alleged blocker. If you can't find one, the wait is somewhere else.
+5. **The msg_type at the recv_handler is always `CONN_REQ`** — the runtime distinction is in `ubmad_process_*` dispatch, not in the recv_handler switch.
+
+### 10.11 VTP cache mechanics
+
+`vtpn` (Virtual TP Number) is the kernel-side cached handle that sits
+above the actual hardware TP. The cache is `dev->ht[UBCORE_HT_CP_VTPN]`,
+a hash table keyed by `tp_handle.value`.
+
+#### Cache lookup path
+
+`ubcore_connect_vtp_ctrlplane` (`ubcore_vtp.c:1201`):
+
+```c
+// 1. try to reuse existing vtpn  (line 1211)
+vtpn = ubcore_find_get_vtpn_ctrlplane(dev, active_tp_cfg);
+if (vtpn != NULL)
+    return ubcore_reuse_vtpn(dev, vtpn);   // cache HIT — fast path, no firmware
+
+// 2. alloc new vtpn  (line 1216)
+vtpn = ubcore_create_vtpn(dev, param, active_tp_cfg, udata);
+
+// 3. add vtpn to hash table  (line 1223)
+ret = ubcore_find_add_vtpn_ctrlplane(dev, vtpn, &exist_vtpn);
+if (ret == -EEXIST && exist_vtpn != NULL) {
+    // raced with another thread; reuse the winner
+    exist_vtpn = ubcore_reuse_vtpn(dev, exist_vtpn);
+    (void)ubcore_free_vtpn_ctrlplane(vtpn);
+    return exist_vtpn;
+}
+
+// 4. firmware install via dev->ops->active_tp
+//    (this is the slow step — the chained ctrlq round-trip(s))
+```
+
+#### When VTP is activated
+
+`ubcore_jetty.c:1612–1615`:
+
+```c
+if (dev->transport_type == UBCORE_TRANSPORT_UB &&
+    (cfg->trans_mode == UBCORE_TP_RM ||
+     cfg->trans_mode == UBCORE_TP_UM)) {
+    ...
+    vtpn = ubcore_connect_vtp_ctrlplane(...);
+}
+```
+
+Two conditions, both required:
+
+- **`transport_type == UBCORE_TRANSPORT_UB`** — UB family device (vs. IB, RoCE, etc.)
+- **`trans_mode == UBCORE_TP_RM` or `UBCORE_TP_UM`** — Reliable Message or Unreliable Message. `UBCORE_TP_RC` (Reliable Connection, Jetty-based) goes through a different path.
+
+For `urma_perftest send_lat -d bonding_dev_0`: bonding_dev_0 is a UB device, default trans_mode for JFR is RM → both conditions met, vtpn is created.
+
+#### Lifecycle and refcount
+
+- **First import** to a peer: cache miss → `ubcore_create_vtpn` + `ubcore_active_tp` (slow, firmware).
+- **Second import** to the same peer's tp_handle, while the first is still alive: cache hit → `ubcore_reuse_vtpn` (immediate, no firmware).
+- **`ubcore_unimport_jfr`** drops vtpn refcount. When refcount → 0 and no other importers are alive, the vtpn is freed (`ubcore_free_vtpn`, `ubcore_vtp.c:920`, with a `wait_for_completion(&vtpn->comp)` for the cleanup synchronization — note this is **not** the link-setup wait).
+- **Back-to-back test runs**: if both runs call `unimport_jfr` at cleanup, the second run pays the full first-RPC cost again. Cache only helps overlapping importers, not sequential ones.
+
+#### How to verify cache behavior from a trace
+
+Add to the filter:
+
+```bash
+cat >> set_graph_function << 'EOF'
+ubcore_create_vtpn
+ubcore_reuse_vtpn
+ubcore_find_get_vtpn_ctrlplane
+EOF
+```
+
+Then:
+
+```bash
+grep -c "ubcore_create_vtpn" trace       # 1 → cache MISS, full firmware install
+grep -c "ubcore_reuse_vtpn" trace        # 1 → cache HIT, no firmware
+```
+
+Exactly one of those should appear per `urma_import_jfr` invocation.
+
+### 10.12 `urma_perftest send_lat` — the test runner currently in use
+
+The reporter on UMDK#1 has switched from `ub_performance_client` to
+`urma_perftest send_lat`:
+
+```bash
+# server
+urma_perftest send_lat -n 10 -s 2 -I 128 -d bonding_dev_0 --single_path -p 0
+# client
+urma_perftest send_lat -n 10 -s 2 -I 128 -d bonding_dev_0 --single_path -p 0 -S X.X.X.X
+```
+
+`-n 10`: 10 iterations after first-RPC. `-s 2`: 2-byte messages. `-d
+bonding_dev_0`: the UB device. `--single_path`: bonding aggregates
+multiple physical links, this restricts to one. `-S X.X.X.X`: client
+mode, server IP for the OOB TCP handshake.
+
+#### URMA verb sequence
+
+`urma_perftest send_lat` uses the JFS+JFR (not Jetty) RM model. From
+`src/urma/tools/urma_perftest/perftest_resources.c`:
+
+```
+urma_create_context                  line 224       no kernel link setup
+urma_create_jfc      × 2 (s + r)     lines 380/387  local CQ
+urma_create_jfs                      line 443       local SQ (client)
+urma_create_jfr                      line 488       local RQ (server)
+                                                    ────── peer descriptors exchanged
+                                                    ────── over OOB TCP (perftest_communication.c)
+urma_import_jfr                      line 1397      ★ this triggers link setup
+                                                       → ioctl(UBURMA_CMD_IMPORT_JFR)
+                                                       → ubcore_import_jfr → compat path → 5 phases
+urma_advise_jfr                      line 1405      NO kernel handler (see below)
+urma_post_jfs_wr  × N                                steady-state sends, reuse cached vtpn
+urma_unimport_jfr                                   refcount drop, may free vtpn
+```
+
+#### `urma_advise_jfr` has no kernel handler
+
+Verified from the dispatch table at `uburma_cmd.c:4886`
+(`g_uburma_cmd_handlers[]`): entries exist for `UBURMA_CMD_IMPORT_JFR`,
+`UBURMA_CMD_IMPORT_JETTY`, `UBURMA_CMD_BIND_JETTY`, etc., but
+**`UBURMA_CMD_ADVISE_JFR` and `UBURMA_CMD_ADVISE_JETTY` are absent**.
+The opcodes are defined (`uburma_cmd.h:66`) and have TLV input
+descriptors (`uburma_cmd_tlv.c:2187,2195`), but no handler — so the
+ioctl returns without entering ubcore. `urma_advise_jfr` is effectively
+userspace-only bookkeeping that records which JFS is bound to which
+imported JFR for the next `post_jfs_wr` call.
+
+This means **the only kernel link-setup work fires from
+`urma_import_jfr`, not from `urma_advise_jfr`**. The advise call is a
+red herring for timing purposes (the function name from earlier graphs
+saying "ADVISE_JETTY → link setup" was wrong — see §10.10 Correction A).
+
+#### Expected trace shape with `-n 10`
+
+With the §10.13 minimal trace filter:
+
+- **Exactly one** outer entry (`ubcore_import_jfr` or `ubcore_import_jetty`) per test invocation, holding the cumulative link-setup wall-clock
+- **The 5 phase children** (get_tp_list, exchange_tp_info if RM+RTP, import_jfr_ex, connect_vtp_ctrlplane, active_tp) summing roughly to the parent's duration
+- **No further entries** for the 9 follow-up sends — they all reuse the cached vtpn and run sub-µs, below `tracing_thresh=1000`
+
+Trace should be 5–8 lines total. The `urma_perftest` binary also prints
+end-to-end latency at completion (per-iteration min/avg/max), giving
+the userland wall-clock anchor we kept missing in earlier rounds.
+
+#### Bonding caveat
+
+`bonding_dev_0` is a UB-bonding aggregate device. The kernel takes a
+slightly different path through `ubcore_connect_bonding.c` when
+`ubcore_is_bonding_dev(dev)` is true. In the modern (non-compat) path,
+this calls `ubcore_connect_exchange_udata_when_import_jetty`
+(`ubcore_connect_bonding.c:497`) before reaching
+`ubcore_connect_vtp_ctrlplane`. The compat path that udma actually
+runs may handle bonding internally instead — the trace will show which
+by presence or absence of that function. Worth keeping in the filter
+just to confirm.
+
+### 10.13 Minimal trace setup — converged on (use this first)
+
+Supersedes earlier filter lists in §10.6 / §10.7 / §10.10's
+"Corrected ftrace filter". Use this 8-to-11-function setup as the
+baseline; only widen the filter after you've identified the slow
+phase.
+
+```bash
+cd /sys/kernel/debug/tracing
+
+# 1. open the ubcore log gate (otherwise dmesg shows nothing — see §10.4)
+echo 6 | sudo tee /sys/module/ubcore/parameters/g_ubcore_log_level
+
+# 2. reset tracer state
+echo nop > current_tracer
+echo > trace
+echo > set_graph_function
+echo > set_ftrace_notrace
+echo 0 > tracing_on
+
+# 3. only these functions are graph-traced
+cat > set_graph_function << 'EOF'
+ubcore_import_jfr
+ubcore_import_jetty
+ubcore_get_tp_list
+ubcore_exchange_tp_info
+ubcore_import_jfr_ex
+ubcore_import_jetty_ex
+ubcore_connect_vtp_ctrlplane
+ubcore_active_tp
+ubcore_create_vtpn
+ubcore_reuse_vtpn
+ubcore_connect_exchange_udata_when_import_jetty
+EOF
+
+# 4. hide everything < 1 ms — kills the is_eid_match/find_primary_eid_in_ues flood
+echo 1000 > tracing_thresh           # microseconds
+
+# 5. depth for nested phases inside ubcore_import_*
+#    NOTE: original draft used depth=1 which hides children entirely (§10.15.B);
+#    depth=5 exposes the 5 nested phases inside the compat path
+echo 5 > max_graph_depth
+
+# 6. minimal columns
+echo 0 > options/funcgraph-cpu
+echo 0 > options/funcgraph-proc
+echo 1 > options/funcgraph-abstime
+echo 1 > options/funcgraph-tail
+echo 1 > options/funcgraph-duration
+
+# 7. roomy buffer
+echo 16384 > buffer_size_kb
+
+# 8. arm the tracer
+echo function_graph > current_tracer
+echo 1 > tracing_on
+
+# --- in another shell, run the test ---
+# urma_perftest send_lat -n 10 -s 2 -I 128 -d bonding_dev_0 --single_path -p 0 -S <server>
+# wait until it prints latency stats
+
+echo 0 > tracing_on
+cat trace
+```
+
+Why each piece matters:
+
+- **`tracing_thresh=1000`** is the most powerful single knob. It tells
+  function_graph to only emit exits with duration above 1 ms. This
+  kills the entire sub-ms inner-call flood at the source — no awk
+  post-processing needed.
+- **`max_graph_depth=1`** means each listed function is traced as a
+  top-level entry; we don't descend into its non-listed children.
+  Combined with the threshold, this keeps the trace to one line per
+  phase per first-RPC.
+- **11 functions in `set_graph_function`** = the two ioctl entries +
+  the 5 sequential phases + 2 ex-wrappers + 2 vtpn cache markers + 1
+  bonding wrapper. At most ~10 lines of output for a clean first-RPC.
+
+Reading the output (durations marked: `+ ≥10µs, ! ≥100µs, # ≥1ms, *
+≥10ms, @ ≥100ms, $ ≥1s`):
+
+```
+# tracer: function_graph
+12345.000 | $ 902.123 ms |  ubcore_import_jfr() {
+12345.001 | * 14.234 ms  |    ubcore_get_tp_list();
+12345.015 | @ 802.012 ms |    ubcore_exchange_tp_info();   (only if RM+RTP)
+12345.817 | # 1.456 ms   |    ubcore_import_jfr_ex();
+12345.819 | * 84.001 ms  |    ubcore_connect_vtp_ctrlplane();
+              | (no entry) |       ubcore_create_vtpn();   (sub-ms, hidden)
+```
+
+The marker on the parent (`$` = ≥ 1 s, `@` = ≥ 100 ms) tells you the
+total; the markers on the children tell you which phase to chase next.
+
+Once you know the dominant phase, **then** widen the filter to that
+phase's internals (e.g., if `active_tp` dominates, add `udma_active_tp`,
+`udma_ctrlq_set_active_tp_ex`, `ubase_ctrlq_send_msg`,
+`ubase_ctrlq_wait_completed` to confirm the firmware ctrlq wait holds
+the time). Don't widen everything at once.
+
+### 10.14 Bot status on the issue thread
+
+As of 2026-05-11, the `@claude` bot on `rainbay001-dotcom/UMDK#1`
+fails on every invocation with `SDK execution error: ... process
+exited with code 1` after ~15 s of processing. Both `gh run rerun
+... --failed` retries reproduced the failure. XiangShan and ubturbo's
+identical `@v1` workflows ran cleanly in the same period.
+
+Suspected cause: the issue thread has grown to 20+ comments with
+several long technical posts (the corrections + minimal-trace +
+perftest guidance), and the SDK appears to choke on the large fetched
+context. The action's logs show no structured API error (no 401, 429,
+500); just a generic SDK crash mid-stream.
+
+Decision: **manual-driven debugging on this issue from here on**.
+Comments are posted from the owner account directly. The bot will be
+left alone until the thread is naturally shorter or the upstream
+action releases a fix. Don't re-invoke `@claude` on this thread; the
+bot's prior answers were also wrong on most of the call-chain
+specifics (see §10.10 for the history).
+
+### 10.15 JinDou's first concrete trace data (2026-05-11)
+
+After several rounds of source-only analysis, JinDou finally captured
+real data with the §10.13 minimal filter.
+
+#### Test invocation
+
+```
+[server] urma_perftest send_lat -n 5 -s 2 -d bonding_dev_0 --single_path -p 0
+[client] urma_perftest send_lat -n 5 -s 2 -d bonding_dev_0 --single_path -p 0 -S X.X.X.X
+```
+
+Both sides run as `urma_pe-*` userspace processes.
+
+#### Userland numbers (from perftest output)
+
+```
+URMA_SEND Latency Test
+ Transport mode : UB          Trans mode : URMA_TM_RM    JETTY mode : DUPLEX
+ bytes  iterations  t_min[us]  t_max[us]  t_median[us]  t_avg[us]  ...
+ 2      5           3.47       3.70       3.47           3.47       ...
+```
+
+Steady-state latency `t_avg = 3.47 µs` — healthy. perftest does **not**
+print a first-RPC number; that has to be measured externally (see §10.15.D
+below).
+
+#### A. The trace, two lines only
+
+```
+# tracer: function_graph
+# TIME      CPU TASK             DURATION                  FUNCTION CALLS
+411567.479648 | 32) urma_pe-3707176 | * 43189.13 us |  } /* ubcore_import_jetty [ubcore] */
+411567.567113 | 32) urma_pe-3707176 | * 87454.16 us |  } /* ubcore_import_jetty [ubcore] */
+```
+
+Reconstructing entry times from `exit_timestamp − duration`:
+
+| Call | Entered | Exited | Duration |
+|---|---|---|---|
+| 1st | 411567.436459 | 411567.479648 | 43.19 ms |
+| 2nd | 411567.479659 | 411567.567113 | 87.45 ms |
+
+Calls are **sequential, not nested** — the 2nd entered ~11 µs after the
+1st exited, both at depth 0 (top-level entries by their indentation).
+End-to-end wall-clock from "1st enters" to "2nd exits": **130.65 ms**
+(matches the sum of the two durations).
+
+#### B. Why only two lines — `max_graph_depth=1` was too tight
+
+My §10.13 draft set `max_graph_depth=1`, which hides all children. The
+5 nested phases (`get_tp_list`, `exchange_tp_info`, `import_jetty_ex`,
+`connect_vtp_ctrlplane`, `active_tp`) all live at depth 2–4 inside
+`ubcore_import_jetty_compat`, so they were filtered. The §10.13
+listing has been corrected to `max_graph_depth=5`; rerun should
+expose them.
+
+Setup gotcha: `set_graph_function` controls where graphing **starts**;
+once graphing begins from a listed entry, descendants are traced up to
+`max_graph_depth`. So listing the inner phases in `set_graph_function`
+doesn't promote them to depth-0 unless they're called from a
+non-graphed context. Bumping the depth limit is the right knob.
+
+#### C. The "130 ms vs 905 ms" attribution mistake
+
+In my initial reply to JinDou I wrote: "URMA-level link setup is only
+130 ms; the remaining 775 ms of the original 905 ms lives in higher
+layers." That was wrong as a subtraction:
+
+- 130 ms came from `urma_perftest send_lat` (URMA-only stack), this run
+- 905 ms came from `ub_performance_client` (brpc + ubsocket + URMA),
+  a different run on a different test app potentially with different
+  kernel state
+
+The two numbers cannot be subtracted to attribute a layer-by-layer
+breakdown. The discipline rule from §10.15.D applies: anchor any
+kernel observation to a userland wall-clock from the **same run**
+before claiming causation.
+
+#### D. Measuring end-to-end first-RPC for `urma_perftest send_lat`
+
+perftest prints `t_min/t_max/t_avg` for the N iterations *after warmup*,
+not the first-RPC wall-clock. To capture the latter, wrap in bash:
+
+```bash
+t0=$(date +%s.%N)
+urma_perftest send_lat -n 1 -s 2 -d bonding_dev_0 --single_path -p 0 -S X.X.X.X
+t1=$(date +%s.%N)
+echo "wall = $(echo "$t1 - $t0" | bc) s"
+```
+
+With `-n 1` (single iteration), this counts: process startup → URMA
+context/jetty create → OOB TCP descriptor exchange → `urma_import_jetty`
+(the 130 ms kernel slice we see) → one send → teardown. The bash-level
+wrapping includes fork/exec/libc init overhead — a few tens of ms on a
+busy host — so the wall-clock will be ≥ 130 ms.
+
+If the bash wall-clock is e.g. 200 ms and the kernel slice is 130 ms,
+the ~70 ms difference is userspace + TCP exchange. If it's much higher,
+there's userspace mystery to chase.
+
+Until JinDou runs this, we have a kernel-slice number (130 ms) but no
+end-to-end anchor for this test.
+
+### 10.16 The function chain inside `ubcore_import_jetty`
+
+Two branches in the body (`ubcore_jetty.c:2476–2538`). udma always
+takes the **compat** branch because it registers `import_jetty_ex` but
+not the legacy `import_jetty`, so `ubcore_check_ctrlplane_compat`
+returns true at line 2488. The bonding driver may register
+`import_jetty` directly, in which case the **non-compat (bonding)**
+branch runs.
+
+#### Top-level `ubcore_import_jetty` body
+
+```
+ubcore_import_jetty(dev, cfg, udata)        jetty.c:2476
+│
+├── ubcore_check_ctrlplane_compat(dev->ops->import_jetty)        jetty.c:2488
+│       └── TRUE (udma)  → return ubcore_import_jetty_compat(...)    [§10.16 compat tree]
+│       └── FALSE (driver registers ->import_jetty directly) → fall through
+│
+├── if (ubcore_is_bonding_dev(dev)):                              jetty.c:2491
+│       └── ubcore_connect_exchange_udata_when_import_jetty(cfg, udata, false, dev)
+│                                                                ubcore_connect_bonding.c:497
+│           ├── ubcore_get_bonding_ue_idx_from_udata
+│           ├── ubcore_find_physical_device(dev, ue_idx)
+│           ├── create_session_for_exchange_udata(physical_dev, ...)
+│           ├── send_jetty_info_req(physical_dev, session_id, &req, ue_idx)
+│           ├── ubcore_session_wait(session)              ← BLOCKING WAIT
+│           ├── copy_to_user(...)
+│           └── self-instrumented:
+│                if duration > UBCORE_EXC_THRESHOLD_MS:
+│                    "[EXC_INFO]exchange_jetty_info consumes: %llu"
+│
+├── tjetty = dev->ops->import_jetty(dev, cfg, udata)              jetty.c:2498
+│       └── bonding driver's import_jetty implementation
+│           (driver-specific; local-side TP install for this side)
+│
+├── tjetty->cfg = *cfg
+│   tjetty->ub_dev = dev
+│   mutex_init(&tjetty->lock)
+│
+├── if (!ubcore_is_bonding_dev(dev) &&                            jetty.c:2512
+│       transport_type == UBCORE_TRANSPORT_UB &&
+│       (trans_mode == RM || UM || is_create_rc_shared_tp(...))):
+│       │
+│       └── vtpn = ubcore_connect_vtp(dev, &vtp_param)
+│           (NOTE: bonding branch SKIPS this — explicit !is_bonding check)
+│
+└── return tjetty
+```
+
+#### Compat-path tree — the chain udma actually runs
+
+`ubcore_import_jetty_compat` in `ubcore_connect_adapter.c:~1162`
+(mirrors `ubcore_import_jfr_compat` at 1105):
+
+```
+ubcore_import_jetty_compat(dev, cfg, udata)
+│
+├── ubcore_fill_get_tp_cfg(dev, &get_tp_cfg, cfg)
+├── active_tp_cfg.tp_attr.tx_psn = random
+│
+├── (if RM + RTP + share_tp): ubcore_get_rm_stp_list(...)
+│    else:                                                                    ★ Phase 1
+│         ubcore_get_tp_list(dev, &get_tp_cfg, &tp_cnt, &tp_list, NULL)        ubcore_tp.c:26
+│            ├── dev->ops->get_tp_list = udma_get_tp_list
+│            └── self-instrumented:
+│                   if duration > THRESHOLD_MS:
+│                       "[DRV_INFO]get_tp_list consumes: %llu"
+│
+├── active_tp_cfg.tp_handle = tp_list.tp_handle
+│
+├── (if RM + RTP):                                                            ★ Phase 2
+│       ubcore_exchange_tp_info(dev, &get_tp_cfg, &active_tp_cfg, cfg, udata)
+│            (secondary CM exchange via MAD — likely skipped on JinDou's run)
+│
+└── tjetty = ubcore_import_jetty_ex(dev, cfg, &active_tp_cfg, udata)          ★ Phase 3
+        │                                                                     ubcore_jetty.c:2541
+        ├── dev->ops->import_jetty_ex = udma_import_jetty_ex
+        │     (udma's driver-side jetty install)
+        │
+        └── if (TRANSPORT_UB && (RM || UM || share_tp_rc)):
+                │
+                └── (if share_tp+RM+RTP):
+                │        ubcore_connect_rm_svrtp_ctrlplane(...)
+                │   else:                                                     ★ Phase 4
+                │        ubcore_connect_vtp_ctrlplane(dev, &vtp_param,
+                │                                     &active_tp_cfg, udata)  ubcore_vtp.c:1201
+                │            │
+                │            ├── ubcore_find_get_vtpn_ctrlplane(dev, ...)     (cache lookup)
+                │            │     └── HIT → ubcore_reuse_vtpn → return (no Phase 5)
+                │            │
+                │            ├── ubcore_create_vtpn(dev, ...)                 ubcore_vtp.c:830
+                │            │     └── alloc, init_completion, kref_init
+                │            │
+                │            ├── ubcore_find_add_vtpn_ctrlplane(dev, ...)     (cache install)
+                │            │
+                │            └── ubcore_active_tp(dev, &active_tp_cfg, vtpn)  ★ Phase 5
+                │                  │                                          ubcore_vtp.c:1129
+                │                  ├── start = ktime_get_ns()
+                │                  ├── ret = dev->ops->active_tp(dev, active_tp_cfg)
+                │                  │     └── udma_active_tp                    udma_ctrlq_tp.c:981
+                │                  │           └── udma_ctrlq_set_active_tp_ex  udma_ctrlq_tp.c:717
+                │                  │                 └── udma_k_ctrlq_create_active_tp_msg
+                │                  │                                            udma_ctrlq_tp.c:677
+                │                  │                       └── ubase_ctrlq_send_msg
+                │                  │                                            ubase_ctrlq.c:926
+                │                  │                             └── __ubase_ctrlq_send
+                │                  │                                            ubase_ctrlq.c:884
+                │                  │                                   └── ubase_ctrlq_wait_completed
+                │                  │                                            ubase_ctrlq.c:645
+                │                  │                                         └── wait_for_completion_timeout
+                │                  │                                            ubase_ctrlq.c:662
+                │                  │                                            ← BLOCKING WAIT for firmware
+                │                  ├── duration = (ktime_get_ns() - start)
+                │                  └── self-instrumented:
+                │                        if duration > THRESHOLD_MS:
+                │                            "[DRV_INFO]active_tp init consumes: %llu"
+```
+
+#### Where the host CPU actually blocks (in this chain)
+
+Two explicit `wait_for_completion*` calls on the synchronous import
+path:
+
+1. **`ubcore_session_wait`** (`ubcore_connect_bonding.c:567`) — only on
+   the **bonding branch** (line 2491). Waits for the physical-device
+   message handler to ack `msg_jetty_info_req`. Self-instrumented via
+   `[EXC_INFO]exchange_jetty_info consumes:`.
+2. **`wait_for_completion_timeout`** (`ubase_ctrlq.c:662`) — on the
+   **compat branch** inside `active_tp`. Waits for the SoC's MUE
+   firmware to ack `UDMA_CMD_CTRLQ_ACTIVE_TP`. Timeout is
+   `csq->tx_timeout` (typically 1 s).
+
+Whichever branch runs, the host CPU spends most of its synchronous
+wait time in one of these two.
+
+### 10.17 Why two `ubcore_import_jetty` per first-RPC: ubmgr ping
+
+JinDou's trace shows **two** `ubcore_import_jetty` entries in the
+order shown above (43 ms then 87 ms). Userspace makes **one** call
+(`perftest_resources.c:1540`), so the second entry comes from inside
+the kernel.
+
+#### The source
+
+`drivers/ub/urma/ubcore/ubmgr/ubmgr_ping.c:73`:
+
+```c
+static struct ubmgr_ping_tjetty_entry *
+__ping_tjetty_new_entry(struct ubcore_device *dev, union ubcore_eid *dst_eid,
+                        uint32_t eid_index, uint32_t remote_jetty_id)
+{
+    struct ubcore_tjetty_cfg cfg = {
+        .id.eid = *dst_eid,
+        .id.id = remote_jetty_id,
+        .trans_mode = UBCORE_TP_RM,
+        .type = UBCORE_JETTY,
+        .tp_type = UBCORE_CTP,              /* Control TP, not data TP */
+        .eid_index = eid_index,
+    };
+    struct ubcore_tjetty *tjetty = ubcore_import_jetty(dev, &cfg, NULL);
+    ...
+}
+```
+
+`ubmgr` is the **UB Manager** — the kernel subsystem that maintains
+keepalive/probe handshakes with peer EIDs. When a peer EID is
+encountered for the first time, ubmgr fires a CTP (Control TP) import
+to install a control channel for liveness checks. The entry is cached
+in a per-EID hash table (`PING_TJETTY_HASH_SIZE`); subsequent
+first-RPCs to the same EID skip it.
+
+This call passes `udata = NULL` (kernel context, no userland udata),
+and `tp_type = UBCORE_CTP` (control transport pair) rather than
+`UBCORE_RTP` (reliable data TP).
+
+#### Likely attribution for JinDou's two entries
+
+| Order | Duration | Caller | What it's doing |
+|---|---|---|---|
+| 1st (43 ms) | shorter | `__ping_tjetty_new_entry` (ubmgr) | CTP install — kernel-internal probe/keepalive TP |
+| 2nd (87 ms) | longer  | perftest's `urma_import_jetty` from line 1540 | RTP install for the actual data path (the 5-phase compat chain on the physical device backing bonding_dev_0) |
+
+This is the **most likely** ordering: when perftest opens its first
+connection to the peer EID, ubmgr notices an EID-it-hasn't-seen and
+fires its CTP import; once that completes, perftest's
+`urma_import_jetty` proceeds and runs the full 5-phase compat path.
+
+Could also be reversed (perftest's call first, ubmgr's after) —
+depends on whether ubmgr's ping is triggered eagerly on peer
+discovery or lazily on user import. The trace doesn't distinguish
+without `funcgraph-proc=1` annotation showing the task name per call
+(ubmgr typically runs in kworker context; perftest is `urma_pe-*`).
+
+#### How to confirm
+
+Add to `set_graph_function`:
+
+```
+__ping_tjetty_new_entry
+__ping_tjetty_find
+ubmgr_ping_send
+ubcore_unimport_jetty
+```
+
+…and re-enable per-process annotations:
+
+```bash
+echo 1 > /sys/kernel/debug/tracing/options/funcgraph-proc
+```
+
+Now each `ubcore_import_jetty` entry should have either:
+- `urma_pe-NNNN` (perftest userspace call) immediately preceding it,
+  with no `__ping_tjetty_*` ancestor, **OR**
+- `kworker-NNNN` task + `__ping_tjetty_new_entry` at the top of its
+  call stack.
+
+Implication for cache evaluation: the codex `udma-tp-cache` patch
+targets the **data TP** (perftest's call), but the **ubmgr CTP**
+install is a separate event that the patch may or may not affect.
+If the 43 ms CTP install is a real cost on every first-encounter, the
+patch needs to cache it too — or ubmgr needs its own cache. Worth
+checking when JinDou runs the cache patch A/B.
 
 ## 11. TRACE_EVENT internals — how the macro actually works
 
