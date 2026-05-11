@@ -1802,6 +1802,13 @@ just to confirm.
 
 ### 10.13 Minimal trace setup — converged on (use this first)
 
+> **Refined by §10.18.G.** This section's `tracing_thresh=1000` is OK
+> as a first-pass sanity check ("is the kernel slice big at all?"),
+> but it hides the inner phase decomposition because the hot inner
+> phases are sub-ms (e.g., `get_tp_list` at 151 µs, `import_jetty_ex`
+> at 234 µs on JinDou's real trace). For a real phase breakdown,
+> prefer `tracing_thresh=0` + `max_graph_depth=3` from §10.18.G.
+
 Supersedes earlier filter lists in §10.6 / §10.7 / §10.10's
 "Corrected ftrace filter". Use this 8-to-11-function setup as the
 baseline; only widen the filter after you've identified the slow
@@ -2161,7 +2168,20 @@ path:
 Whichever branch runs, the host CPU spends most of its synchronous
 wait time in one of these two.
 
-### 10.17 Why two `ubcore_import_jetty` per first-RPC: ubmgr ping
+### 10.17 ~~Why two `ubcore_import_jetty` per first-RPC: ubmgr ping~~ (HYPOTHESIS, INCORRECT — see §10.18)
+
+> **Superseded by §10.18.** JinDou's depth-expanded retrace shows
+> **both `ubcore_import_jetty` entries are on the same task
+> (`urma_pe-4046358`)**, not one in userspace context and one in
+> kworker context. The ubmgr ping hypothesis below predicted the
+> second call would be a kworker; that prediction is falsified. The
+> actual reason for two entries is that the URMA userspace library
+> expands one `urma_import_jetty` call into two kernel-side ioctls
+> when the device is bonded (one for the bonding aggregate via the
+> ubagg driver, one for the underlying physical device via udma's
+> compat path). Section kept below for the iteration record.
+
+
 
 JinDou's trace shows **two** `ubcore_import_jetty` entries in the
 order shown above (43 ms then 87 ms). Userspace makes **one** call
@@ -2248,6 +2268,224 @@ install is a separate event that the patch may or may not affect.
 If the 43 ms CTP install is a real cost on every first-encounter, the
 patch needs to cache it too — or ubmgr needs its own cache. Worth
 checking when JinDou runs the cache patch A/B.
+
+### 10.18 Concrete phase-level timing from JinDou's depth-expanded retrace (2026-05-11)
+
+JinDou opened a fresh issue **UMDK#2** ("性能打点计时v2") with a
+re-run trace, this time at `max_graph_depth=3` and `tracing_thresh`
+lowered so the phase children are visible. The data here supersedes
+the speculation in §10.15–10.17.
+
+#### A. Test setup
+
+```
+[client] urma_perftest send_lat -n 5 -s 2 -d bonding_dev_0 --single_path -p 0 -S 141.62.32.91
+```
+
+Userland reports `t_avg = 3.47 µs` steady-state (5 iterations after
+warmup). Connection establishment fires once, captured by the trace.
+
+#### B. The 16.74 ms breakdown — actual phase timings
+
+Two top-level `ubcore_import_jetty` entries, both on the same task
+(`urma_pe-4046358`, CPU 46):
+
+```
+1st ubcore_import_jetty   10867.93 µs  (urma_pe-4046358, CPU 46)
+│   path: NON-compat (bonding aggregate via ubagg driver)
+│
+├── ubcore_connect_exchange_udata_when_import_jetty   10848.91 µs (99.8% of this call)
+│   │
+│   ├── ktime_get                            0.36 µs
+│   ├── ubcore_get_bonding_ue_idx_from_udata 0.17 µs
+│   ├── ubcore_find_physical_device          1.25 µs
+│   ├── create_session_for_exchange_udata    1.78 µs
+│   ├── ubcore_session_get_id                0.13 µs
+│   ├── send_jetty_info_req                  4828.45 µs  ★ network RTT 1
+│   ├── ubcore_session_wait                  6012.63 µs  ★ blocking wait on peer
+│   ├── __check_object_size                  0.23 µs
+│   ├── ktime_get                            0.21 µs
+│   ├── ubcore_session_ref_release           0.67 µs
+│   └── ubcore_put_device                    0.15 µs
+│
+├── ubagg_import_jetty                       16.71 µs    (local-side install)
+│   ├── fill_udata                           15.66 µs
+│   └── kmalloc_trace                        0.30 µs
+│
+└── __mutex_init                             0.13 µs
+
+2nd ubcore_import_jetty   5876.33 µs    (urma_pe-4046358, CPU 46)
+│   path: COMPAT (udma's import_jetty_compat → import_jetty_ex)
+│
+└── ubcore_import_jetty_compat               5874.96 µs
+    │
+    ├── ubcore_fill_get_tp_cfg               0.54 µs
+    ├── ubcore_get_tp_list                   151.14 µs    (local, via cache)
+    ├── get_random_u32                       0.97 µs      (tx_psn)
+    ├── ubcore_exchange_tp_info              5486.23 µs  ★ network RTT 2 (CM)
+    └── ubcore_import_jetty_ex               233.70 µs    (hardware write)
+
+[Parallel kworker activity, CPU 64, kworker-4046361]
+│   (runs concurrent with the userspace wait in 1st import)
+│
+├── ubcore_get_tp_list                       200.44 µs
+│   ├── ktime_get                            0.79 µs
+│   ├── udma_get_tp_list                     197.46 µs
+│   │   ├── udma_ctrlq_get_tpid_list         193.77 µs   (hardware ctrlq query)
+│   │   └── udma_ctrlq_store_one_tpid        1.47 µs
+│   └── ktime_get                            0.43 µs
+│
+└── ubcore_active_tp                         192.83 µs
+    ├── ktime_get                            0.41 µs
+    ├── udma_active_tp                       191.18 µs
+    │   └── udma_ctrlq_set_active_tp_ex      190.22 µs   (hardware ctrlq cmd)
+    └── ktime_get                            0.41 µs
+
+Total wall-clock = 10867.93 + 5876.33 = 16.74 ms
+```
+
+#### C. Control-plane RTT dominates — 97.5% of the time
+
+```
+control-plane fabric exchanges:    16.33 ms  (97.5%)
+  ├── send_jetty_info_req            4.83 ms
+  ├── ubcore_session_wait            6.01 ms
+  └── ubcore_exchange_tp_info        5.49 ms
+
+local hardware ctrlq operations:    0.59 ms  (3.5%)
+  ├── udma_ctrlq_get_tpid_list       0.19 ms  (kworker)
+  ├── udma_ctrlq_set_active_tp_ex    0.19 ms  (kworker)
+  ├── ubcore_get_tp_list (userspace) 0.15 ms
+  └── ubcore_import_jetty_ex         0.23 ms
+
+local logic + driver overhead:      ~0.04 ms (<1%)
+```
+
+The host CPU spends **almost all** its 16.74 ms on **synchronous
+network round-trips** (jetty info exchange + TP info exchange). The
+firmware/MUE-side ctrlq work is fast — under 600 µs total — and runs
+**concurrently in a kworker** during the userspace `session_wait`.
+This overturns the earlier hypothesis (§10.5, §10.6) that the
+firmware install is the bottleneck. **The bottleneck on this trace is
+peer CM coordination over the UB fabric.**
+
+#### D. The parallel kworker pattern
+
+A critical observation that affects how to think about optimization:
+`ubcore_get_tp_list` (200 µs) and `ubcore_active_tp` (193 µs) run on
+**CPU 64 in a kworker context**, *while* the userspace task on CPU 46
+is blocked in `ubcore_session_wait`. The local hardware programming
+is *already overlapped* with the network wait — making it faster
+wouldn't help end-to-end latency.
+
+Mechanism (inferred): the local kernel receives an inbound CM message
+from the peer (in response to our outbound jetty_info_req), processes
+it in a workqueue, programs local hardware via ctrlq, and uses the
+result to satisfy the userspace `session_wait` completion.
+
+#### E. What this means for the codex `udma-tp-cache` patch
+
+The patch caches TP descriptors so subsequent connections can skip
+some discovery work. Looking at where the time goes on this trace:
+
+| Cached step | Time saved | Effect on 16.74 ms total |
+|---|---|---|
+| `ubcore_get_tp_list` only | ~150 µs | negligible (< 1%) |
+| `ubcore_get_tp_list` + `udma_ctrlq_*` (hardware bringup) | ~600 µs | ~3% |
+| `ubcore_get_tp_list` + `udma_ctrlq_*` + `ubcore_exchange_tp_info` | ~6.1 ms | ~36% |
+| ALL of the above + `send_jetty_info_req` + `session_wait` | 16.3 ms | ~97% |
+
+If the patch only covers `get_tp_list` and `active_tp` results (likely
+based on its name), it saves **at most ~600 µs / 16.74 ms ≈ 3%** of
+first-RPC latency on this test. To get a meaningful speedup, the
+cache would have to cover the two CM-network exchanges
+(`send_jetty_info_req`/`session_wait` and `exchange_tp_info`) — which
+is a different code path (`ubcore_connect_bonding.c` + `ubcm/`), not
+the udma driver.
+
+**Reading the actual patch diff is now blocking** for a real impact
+estimate. The 130 ms → 16.74 ms discrepancy (§F) further muddies
+this — if the steady state is already 16 ms, the patch's headroom is
+much smaller than we thought.
+
+#### F. The 130 ms vs 16.74 ms discrepancy
+
+JinDou's earlier trace (§10.15, max_graph_depth=1) showed
+`43.19 + 87.45 = 130.65 ms`. This new trace (max_graph_depth=3) shows
+`10.87 + 5.88 = 16.74 ms`. Same command, same device, both on
+`worker1` against the same `141.62.32.91` server. The link-setup time
+changed by ~8× across runs.
+
+Likely causes, ordered by probability:
+
+1. **Warm state on the second run.** Even though `urma_perftest`
+   calls `urma_unimport_jetty` at cleanup, some kernel-side state
+   (CM hash tables, EID resolution caches, fabric route caches, peer
+   liveness state) may persist across processes for the same
+   destination EID. The first trace was the first cold connection of
+   the test session; the second trace was a warm reconnect. The 130
+   ms → 16.74 ms ≈ 8× speedup is consistent with skipping some
+   discovery / setup that's already cached in non-perftest-controlled
+   state.
+2. **Server state difference.** The peer may have processed the first
+   run and kept its side warm.
+3. **Different test command flags** (lower probability — they look
+   identical in JinDou's pastes).
+
+**To disambiguate**: have JinDou run the test sequence
+"reboot/unload-reload modules → run perftest → trace → run perftest
+again → trace" and compare. If the first run is 130 ms and the
+second is 16.74 ms, that's confirmation. We can then ask "what state
+is sticky across processes?" — likely answer: the kernel-side EID
+resolution cache and/or the local CM session state with the peer.
+
+#### G. Updated filter list (incorporating the new findings)
+
+Adding what the trace surfaced as significant; dropping JFR-only and
+unconfirmed entries:
+
+```bash
+cat > set_graph_function << 'EOF'
+ubcore_import_jetty
+ubcore_connect_exchange_udata_when_import_jetty
+send_jetty_info_req
+ubcore_session_wait
+ubagg_import_jetty
+ubcore_import_jetty_compat
+ubcore_get_tp_list
+udma_get_tp_list
+udma_ctrlq_get_tpid_list
+ubcore_exchange_tp_info
+ubcore_import_jetty_ex
+ubcore_active_tp
+udma_active_tp
+udma_ctrlq_set_active_tp_ex
+EOF
+echo 3 > max_graph_depth
+echo 1 > options/funcgraph-proc      # show task name so we can tell urma_pe vs kworker
+echo 0 > tracing_thresh               # remove threshold — we want everything inside
+```
+
+`tracing_thresh=0` is OK here because `max_graph_depth=3` already
+prevents the inner-noise flood. With `funcgraph-proc=1` the
+userspace-vs-kworker distinction becomes visible (the parallel
+hardware-programming pattern is only obvious when you can see CPU
+46/`urma_pe` and CPU 64/`kworker` interleave).
+
+#### H. Implication for the §10.13 minimal baseline
+
+§10.13's recommendation of `tracing_thresh=1000` (1 ms) is **too
+aggressive** if the hot inner phases are sub-ms (as they are here —
+`get_tp_list` is 151 µs, `import_jetty_ex` is 234 µs). For a real
+phase breakdown, prefer `tracing_thresh=0` + `max_graph_depth=3`
+(this section's recipe) over `tracing_thresh=1000` +
+`max_graph_depth=1` (§10.13's recipe). The latter is fine as a
+first "is the kernel slice big at all?" sanity check, but it hides
+the inner phase decomposition that's actually informative.
+
+§10.13 is left as-is to preserve the iteration record; readers
+should treat §10.18.G's filter + settings as the current preferred
+baseline.
 
 ## 11. TRACE_EVENT internals — how the macro actually works
 
