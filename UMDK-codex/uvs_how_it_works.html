@@ -1,0 +1,657 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>UVS in UMDK</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --ink: #172033;
+      --muted: #5d6778;
+      --paper: #f7f9fc;
+      --panel: #ffffff;
+      --line: #cfd7e6;
+      --strong-line: #93a4bf;
+      --blue: #2563eb;
+      --cyan: #0891b2;
+      --green: #15803d;
+      --amber: #b45309;
+      --red: #b91c1c;
+      --violet: #7c3aed;
+      --code: #102039;
+      --code-bg: #eef3fb;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      color: var(--ink);
+      background: var(--paper);
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      line-height: 1.55;
+    }
+
+    main {
+      width: min(1180px, calc(100% - 40px));
+      margin: 0 auto;
+      padding: 34px 0 56px;
+    }
+
+    h1, h2, h3 {
+      margin: 0;
+      line-height: 1.18;
+      letter-spacing: 0;
+    }
+
+    h1 {
+      font-size: 34px;
+    }
+
+    h2 {
+      margin-top: 34px;
+      padding-top: 8px;
+      border-top: 1px solid var(--line);
+      font-size: 24px;
+    }
+
+    h3 {
+      margin-top: 24px;
+      font-size: 18px;
+    }
+
+    p {
+      margin: 10px 0 0;
+    }
+
+    a {
+      color: var(--blue);
+      text-decoration: none;
+    }
+
+    a:hover {
+      text-decoration: underline;
+    }
+
+    code {
+      color: var(--code);
+      background: var(--code-bg);
+      border-radius: 4px;
+      padding: 1px 5px;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+      font-size: 0.93em;
+    }
+
+    pre {
+      overflow-x: auto;
+      margin: 12px 0 0;
+      padding: 14px 16px;
+      color: #f8fafc;
+      background: #172033;
+      border-radius: 8px;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+      font-size: 13px;
+      line-height: 1.5;
+    }
+
+    pre code {
+      color: inherit;
+      background: transparent;
+      padding: 0;
+    }
+
+    ul, ol {
+      margin: 10px 0 0 22px;
+      padding: 0;
+    }
+
+    li + li {
+      margin-top: 6px;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-top: 14px;
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      overflow: hidden;
+    }
+
+    th, td {
+      padding: 10px 12px;
+      border-bottom: 1px solid var(--line);
+      text-align: left;
+      vertical-align: top;
+      font-size: 14px;
+    }
+
+    th {
+      color: #24324d;
+      background: #eaf0f9;
+      font-weight: 700;
+    }
+
+    tr:last-child td {
+      border-bottom: 0;
+    }
+
+    .hero {
+      padding: 26px;
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      box-shadow: 0 18px 40px rgba(23, 32, 51, 0.08);
+    }
+
+    .eyebrow {
+      margin: 0 0 8px;
+      color: var(--cyan);
+      font-size: 13px;
+      font-weight: 700;
+      letter-spacing: 0;
+      text-transform: uppercase;
+    }
+
+    .subtitle {
+      max-width: 940px;
+      color: #334155;
+      font-size: 17px;
+    }
+
+    .diagram-wrap {
+      margin-top: 18px;
+      padding: 18px;
+      background: #f8fafc;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      overflow-x: auto;
+    }
+
+    .diagram {
+      width: 100%;
+      min-width: 860px;
+      height: auto;
+      display: block;
+    }
+
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 14px;
+      margin-top: 16px;
+    }
+
+    .panel {
+      padding: 16px;
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+    }
+
+    .panel h3 {
+      margin-top: 0;
+    }
+
+    .callout {
+      margin-top: 16px;
+      padding: 14px 16px;
+      border-left: 4px solid var(--amber);
+      background: #fffbeb;
+      border-radius: 6px;
+    }
+
+    .ok {
+      border-left-color: var(--green);
+      background: #f0fdf4;
+    }
+
+    .warn {
+      border-left-color: var(--red);
+      background: #fef2f2;
+    }
+
+    .tag {
+      display: inline-block;
+      margin: 0 6px 6px 0;
+      padding: 3px 8px;
+      color: #1f3a5f;
+      background: #eaf2ff;
+      border: 1px solid #c7ddff;
+      border-radius: 999px;
+      font-size: 12px;
+      font-weight: 700;
+    }
+
+    .source-list li {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+      font-size: 13px;
+    }
+
+    @media (max-width: 860px) {
+      main {
+        width: min(100% - 24px, 1180px);
+        padding-top: 24px;
+      }
+
+      h1 {
+        font-size: 28px;
+      }
+
+      .grid {
+        grid-template-columns: 1fr;
+      }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <section class="hero">
+      <p class="eyebrow">UMDK / URMA control plane</p>
+      <h1>UVS: topology and route selection for UnifiedBus</h1>
+      <p class="subtitle">
+        In this UMDK checkout, UVS is the user-visible topology and route-selection layer packaged as
+        <code>libtpsa.so</code>. Applications and higher-level UMDK components use its APIs to create
+        aggregate devices, publish topology, and translate bonding EIDs into physical EID/path choices
+        before URMA or UMQ creates transport resources.
+      </p>
+
+      <div class="diagram-wrap" aria-label="UVS architecture diagram">
+        <svg class="diagram" viewBox="0 0 1120 560" role="img">
+          <defs>
+            <marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto" markerUnits="strokeWidth">
+              <path d="M0,0 L0,6 L9,3 z" fill="#334155"></path>
+            </marker>
+            <style>
+              .box { fill: #ffffff; stroke: #93a4bf; stroke-width: 1.5; rx: 8; }
+              .box-blue { fill: #eff6ff; stroke: #2563eb; }
+              .box-cyan { fill: #ecfeff; stroke: #0891b2; }
+              .box-green { fill: #f0fdf4; stroke: #15803d; }
+              .box-amber { fill: #fffbeb; stroke: #b45309; }
+              .box-violet { fill: #f5f3ff; stroke: #7c3aed; }
+              .title { font: 700 16px Inter, sans-serif; fill: #172033; }
+              .small { font: 13px Inter, sans-serif; fill: #475569; }
+              .tiny { font: 12px Inter, sans-serif; fill: #64748b; }
+              .line { stroke: #334155; stroke-width: 1.5; fill: none; marker-end: url(#arrow); }
+              .dash { stroke: #64748b; stroke-width: 1.5; stroke-dasharray: 5 5; fill: none; marker-end: url(#arrow); }
+            </style>
+          </defs>
+
+          <rect class="box box-blue" x="24" y="42" width="220" height="98"></rect>
+          <text class="title" x="48" y="74">Applications</text>
+          <text class="small" x="48" y="100">UMQ, URPC, tools</text>
+          <text class="tiny" x="48" y="122">Examples: UMQ route lookup, urma_ping</text>
+
+          <rect class="box box-cyan" x="306" y="34" width="250" height="116"></rect>
+          <text class="title" x="330" y="66">UVS public API</text>
+          <text class="small" x="330" y="92">uvs_api.h</text>
+          <text class="tiny" x="330" y="116">uvs_set_topo_info()</text>
+          <text class="tiny" x="330" y="134">uvs_get_route_list(), uvs_get_path_set()</text>
+
+          <rect class="box box-cyan" x="306" y="190" width="250" height="104"></rect>
+          <text class="title" x="330" y="222">libtpsa.so implementation</text>
+          <text class="small" x="330" y="248">tpsa_api.c, uvs_cmd_tlv.c</text>
+          <text class="tiny" x="330" y="270">validates input and builds TLV ioctl payloads</text>
+
+          <rect class="box box-amber" x="616" y="36" width="222" height="112"></rect>
+          <text class="title" x="640" y="68">/dev/ubcore/ubcore</text>
+          <text class="small" x="640" y="94">UBCORE_UVS_CMD</text>
+          <text class="tiny" x="640" y="118">set/get topo, route list, path set</text>
+
+          <rect class="box box-amber" x="616" y="190" width="222" height="104"></rect>
+          <text class="title" x="640" y="222">/dev/ubagg</text>
+          <text class="small" x="640" y="248">aggregate device ioctl</text>
+          <text class="tiny" x="640" y="270">create/delete agg dev, EID to dev name</text>
+
+          <rect class="box box-green" x="894" y="34" width="202" height="116"></rect>
+          <text class="title" x="918" y="66">Kernel ubcore</text>
+          <text class="small" x="918" y="92">ubcore_uvs_cmd.c</text>
+          <text class="tiny" x="918" y="116">global topo map</text>
+          <text class="tiny" x="918" y="134">route and path selection</text>
+
+          <rect class="box box-green" x="894" y="190" width="202" height="104"></rect>
+          <text class="title" x="918" y="222">Kernel UBAGG</text>
+          <text class="small" x="918" y="248">bonding/aggregate dev</text>
+          <text class="tiny" x="918" y="270">maps aggregate EID to devices</text>
+
+          <rect class="box box-violet" x="616" y="354" width="222" height="116"></rect>
+          <text class="title" x="640" y="386">URMA / UDMA setup</text>
+          <text class="small" x="640" y="412">get_tp_list, active_tp</text>
+          <text class="tiny" x="640" y="436">creates and activates TP/CTP/UTP resources</text>
+
+          <rect class="box box-blue" x="894" y="354" width="202" height="116"></rect>
+          <text class="title" x="918" y="386">UB datapath</text>
+          <text class="small" x="918" y="412">queues, Jetty, JFR/JFS</text>
+          <text class="tiny" x="918" y="436">normal data movement after setup</text>
+
+          <path class="line" d="M244 91 C266 91 280 91 306 91"></path>
+          <path class="line" d="M431 150 L431 190"></path>
+          <path class="line" d="M556 242 C580 242 592 242 616 242"></path>
+          <path class="line" d="M556 92 C580 92 592 92 616 92"></path>
+          <path class="line" d="M838 92 C862 92 872 92 894 92"></path>
+          <path class="line" d="M838 242 C862 242 872 242 894 242"></path>
+          <path class="dash" d="M727 148 L727 190"></path>
+          <path class="dash" d="M727 294 L727 354"></path>
+          <path class="line" d="M838 412 C862 412 872 412 894 412"></path>
+
+          <text class="tiny" x="132" y="172">route/topology queries</text>
+          <text class="tiny" x="592" y="176">ioctl boundary</text>
+          <text class="tiny" x="746" y="330">selected EIDs feed link setup</text>
+        </svg>
+      </div>
+    </section>
+
+    <h2>Short Answer</h2>
+    <p>
+      UVS is the part of the UMDK/URMA stack that owns topology visibility and route/path selection for
+      UnifiedBus. It is not the fast datapath and it is not the UDMA hardware driver. It is a control-plane
+      library/API layer that lets software say: "given source and destination bonding EIDs, which concrete
+      primary or port EIDs should I use for RTP, CTP, or UTP?"
+    </p>
+    <p>
+      The local source names the user-space library target <code>tpsa</code>, installs
+      <code>libtpsa.so</code>, and exposes public headers <code>uvs_api.h</code> and
+      <code>uvs_types.h</code>. The logs identify the component as <code>libuvs</code>.
+    </p>
+
+    <div class="grid">
+      <section class="panel">
+        <h3>What UVS Does</h3>
+        <ul>
+          <li>Maintains a topology model made of nodes, aggregate devices, UEs, primary EIDs, port EIDs, and links.</li>
+          <li>Pushes topology into kernel <code>ubcore</code> and <code>ubagg</code>.</li>
+          <li>Creates and deletes aggregate devices through <code>/dev/ubagg</code>.</li>
+          <li>Answers route queries from bonding EID pairs.</li>
+          <li>Answers path-set queries with concrete source/destination EIDs and port identifiers.</li>
+        </ul>
+      </section>
+
+      <section class="panel">
+        <h3>What UVS Does Not Do</h3>
+        <ul>
+          <li>It does not post work requests or move payload data.</li>
+          <li>It does not directly create TP resources in UDMA.</li>
+          <li>It does not replace <code>liburma</code>; it complements URMA by choosing paths before URMA setup.</li>
+          <li>It is not the same thing as kernel <code>ubcore</code>, although it uses <code>ubcore</code> ioctls.</li>
+        </ul>
+      </section>
+    </div>
+
+    <h2>Where It Lives</h2>
+    <table>
+      <thead>
+        <tr>
+          <th>Layer</th>
+          <th>Path</th>
+          <th>Role</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>User API</td>
+          <td><code>src/urma/lib/uvs/core/include/uvs_api.h</code></td>
+          <td>Public UVS API: aggregate devices, topology, route list, path set.</td>
+        </tr>
+        <tr>
+          <td>User implementation</td>
+          <td><code>src/urma/lib/uvs/core/tpsa_api.c</code></td>
+          <td>Validates API inputs and dispatches to ioctl helpers.</td>
+        </tr>
+        <tr>
+          <td>Command encoding</td>
+          <td><code>src/urma/lib/uvs/core/uvs_cmd_tlv.c</code></td>
+          <td>Builds TLV attributes for set-topology, get-topology, get-route-list, and get-path-set commands.</td>
+        </tr>
+        <tr>
+          <td>Device ioctl helpers</td>
+          <td><code>src/urma/lib/uvs/core/uvs_ubagg_ioctl.c</code></td>
+          <td>Opens <code>/dev/ubagg</code> and <code>/dev/ubcore/ubcore</code>, then submits UVS ioctls.</td>
+        </tr>
+        <tr>
+          <td>Kernel command receiver</td>
+          <td><code>drivers/ub/urma/ubcore/ubcore_uvs_cmd.c</code></td>
+          <td>Parses UVS commands, updates global topology, and answers route/path queries.</td>
+        </tr>
+        <tr>
+          <td>Kernel topology logic</td>
+          <td><code>drivers/ub/urma/ubcore/ubcore_topo_info.c</code></td>
+          <td>Stores global topology and computes route/path results.</td>
+        </tr>
+        <tr>
+          <td>Consumers</td>
+          <td><code>src/urpc/umq/umq_ub</code>, <code>src/urma/tools/urma_ping</code></td>
+          <td>UMQ loads <code>libtpsa.so</code> dynamically; <code>urma_ping</code> links against <code>tpsa</code>.</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <h2>Public API Surface</h2>
+    <table>
+      <thead>
+        <tr>
+          <th>API</th>
+          <th>Purpose</th>
+          <th>Kernel/backend path</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><code>uvs_create_agg_dev()</code></td>
+          <td>Create an aggregate/bonding device identified by an aggregate EID.</td>
+          <td><code>/dev/ubagg</code>, <code>UVS_UBAGG_CMD_CREATE_DEV</code></td>
+        </tr>
+        <tr>
+          <td><code>uvs_delete_agg_dev()</code></td>
+          <td>Remove an aggregate device.</td>
+          <td><code>/dev/ubagg</code>, <code>UVS_UBAGG_CMD_DELETE_DEV</code></td>
+        </tr>
+        <tr>
+          <td><code>uvs_get_device_name_by_eid()</code></td>
+          <td>Map EID to aggregate device name.</td>
+          <td><code>/dev/ubagg</code>, <code>UVS_UBAGG_CMD_GET_DEV_NAME</code></td>
+        </tr>
+        <tr>
+          <td><code>uvs_set_topo_info()</code></td>
+          <td>Push a topology buffer into the kernel. The API comment says this topology comes from MXE.</td>
+          <td><code>/dev/ubagg</code> and <code>/dev/ubcore/ubcore</code></td>
+        </tr>
+        <tr>
+          <td><code>uvs_get_topo_info()</code></td>
+          <td>Read the current topology map from kernel <code>ubcore</code>.</td>
+          <td><code>UBCORE_CMD_GET_TOPO</code></td>
+        </tr>
+        <tr>
+          <td><code>uvs_get_route_list()</code></td>
+          <td>Return route EIDs for a source/destination bonding EID pair.</td>
+          <td><code>UBCORE_CMD_GET_ROUTE_LIST</code>, then <code>ubcore_get_route_list()</code></td>
+        </tr>
+        <tr>
+          <td><code>uvs_get_path_set()</code></td>
+          <td>Return concrete paths with source/destination EIDs and port IDs.</td>
+          <td><code>UBCORE_CMD_GET_PATH_SET</code>, then <code>ubcore_get_path_set()</code></td>
+        </tr>
+      </tbody>
+    </table>
+
+    <h2>Topology Model</h2>
+    <p>
+      UVS topology is built around <code>struct urma_topo_node</code> in user space and the matching
+      <code>struct ubcore_topo_node</code> in the kernel. A node records:
+    </p>
+    <ul>
+      <li><code>type</code>: topology type. The code handles <code>FULLMESH_1D</code> and <code>CLOS</code>.</li>
+      <li><code>super_node_id</code> and <code>node_id</code>: logical placement of this host/node.</li>
+      <li><code>is_current</code>: marks the local node in the topology map.</li>
+      <li><code>links[IODIE_NUM][PORT_NUM]</code>: peer node, peer die, and peer port for direct links.</li>
+      <li><code>agg_devs[DEV_NUM]</code>: aggregate devices indexed by device id.</li>
+    </ul>
+    <p>
+      Each aggregate device contains an aggregate EID plus per-die UE records. Each UE has one
+      <code>primary_eid</code> and an array of <code>port_eid</code> values. UVS translates aggregate or
+      bonding EIDs into these physical EIDs when callers ask for routes or paths.
+    </p>
+
+    <h2>Command Flow</h2>
+    <h3>Setting topology</h3>
+    <ol>
+      <li>Management software calls <code>uvs_set_topo_info(topo_buf, node_size, node_num)</code>.</li>
+      <li><code>tpsa_api.c</code> checks that <code>node_size == sizeof(struct urma_topo_node)</code>.</li>
+      <li>UVS writes the topology to <code>/dev/ubagg</code> with <code>uvs_ubagg_ioctl_set_topo()</code>.</li>
+      <li>UVS writes the same topology to <code>/dev/ubcore/ubcore</code> with <code>uvs_ubcore_ioctl_set_topo()</code>.</li>
+      <li>Kernel <code>ubcore_cmd_set_topo()</code> creates or updates the global <code>ubcore_topo_map</code>.</li>
+      <li>Kernel code calls <code>ubcore_create_jetty_rsrc()</code> for primary EIDs on the current node.</li>
+      <li>Kernel code calls <code>ubmgr_notify_set_topo()</code> so the manager side can react to the new topology.</li>
+    </ol>
+
+    <h3>Querying a path set</h3>
+    <ol>
+      <li>A caller such as UMQ calls <code>uvs_get_path_set(src_bonding_eid, dst_bonding_eid, tp_type, multi_path, out)</code>.</li>
+      <li><code>libtpsa.so</code> validates the EIDs and TP type, then opens <code>/dev/ubcore/ubcore</code>.</li>
+      <li>It sends <code>UVS_CMD_GET_TOPO_PATH_EID</code> as a TLV payload.</li>
+      <li>Kernel <code>ubcore_cmd_get_path_set()</code> calls <code>ubcore_get_path_set()</code>.</li>
+      <li><code>ubcore_get_path_set()</code> finds source and destination aggregate devices in the global topology map.</li>
+      <li>The kernel fills <code>ubcore_path_set</code> with selected physical EIDs and port IDs.</li>
+      <li>User space receives <code>uvs_path_set_t</code>. For <code>FULLMESH_1D</code>, user space currently filters the returned paths based on <code>multi_path</code>.</li>
+    </ol>
+
+    <h2>Route and Path Semantics</h2>
+    <p>
+      The naming is easy to confuse. <code>uvs_get_route_list()</code> returns route EIDs in a compact
+      list. <code>uvs_get_path_set()</code> returns richer path records: topology type, source/destination
+      node IDs, chip/die counts, source and destination port identifiers, and physical source/destination
+      EIDs for each path.
+    </p>
+    <table>
+      <thead>
+        <tr>
+          <th>Query</th>
+          <th>Input</th>
+          <th>Output</th>
+          <th>Typical use</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><code>uvs_get_route_list()</code></td>
+          <td>Source/destination bonding EIDs and route flags.</td>
+          <td><code>uvs_route_list_t</code> containing source/destination EID pairs.</td>
+          <td>Find EIDs for TP setup or diagnostics.</td>
+        </tr>
+        <tr>
+          <td><code>uvs_get_path_set()</code></td>
+          <td>Source/destination bonding EIDs, TP type, and <code>multi_path</code>.</td>
+          <td><code>uvs_path_set_t</code> with port IDs, node IDs, topo type, and EID pairs.</td>
+          <td>UMQ route selection and topology-aware transport setup.</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <h3>Topology-specific behavior</h3>
+    <ul>
+      <li>For <code>FULLMESH_1D</code>, the kernel first adds primary paths, then port paths. User-space UVS filters the result for <code>multi_path</code> because the kernel currently returns all EIDs.</li>
+      <li>For <code>CLOS</code>, <code>multi_path == true</code> and <code>RTP</code> currently returns an empty path set.</li>
+      <li>For <code>CLOS</code>, <code>multi_path == true</code> and <code>CTP</code> uses primary EID path logic.</li>
+      <li>For non-multipath <code>CTP</code> or <code>RTP</code>, the kernel uses port path logic.</li>
+    </ul>
+
+    <h2>Relationship to URMA, UMQ, and TP Creation</h2>
+    <p>
+      UVS sits before the normal URMA link setup path. It answers "which EIDs should this connection use?"
+      URMA and UDMA then use those EIDs to create and activate transport resources.
+    </p>
+    <pre><code>topology provider / management system
+  -> uvs_set_topo_info()
+  -> kernel ubcore global topo map
+  -> uvs_get_path_set() or uvs_get_route_list()
+  -> selected local/peer EIDs
+  -> URMA/UMQ connection setup
+  -> UDMA get_tp_list / active_tp
+  -> normal UB datapath</code></pre>
+    <p>
+      UMQ uses this relationship directly. The UMQ UB implementation dynamically loads <code>libtpsa.so</code>,
+      resolves <code>uvs_get_path_set</code>, converts UMQ TP types to UVS TP types, then copies the returned
+      path set into UMQ route records.
+    </p>
+
+    <div class="callout ok">
+      <strong>Why this matters for first-link latency:</strong>
+      if the topology is already known, UVS can provide peer/local EID pairs before the first transport is
+      created. That makes it a natural source of warmup candidates for a TP-list prefetch design. If topology
+      has not been pushed yet, UVS route/path queries either fail or return no useful path, so a warmup pass
+      based on UVS will silently have nothing meaningful to prefetch unless the caller logs that condition.
+    </div>
+
+    <h2>Operational Notes</h2>
+    <ul>
+      <li>The CMake target is <code>tpsa</code>, installed as <code>/usr/lib64/libtpsa.so</code>.</li>
+      <li>The public headers are installed under <code>/usr/include/ub/umdk/urma</code>.</li>
+      <li>UVS logs use the <code>URMA|libuvs</code> tag.</li>
+      <li>The rsyslog config routes <code>URMA|libuvs</code> messages to <code>/var/log/umdk/tpsa/%programname%.log</code>.</li>
+      <li>The environment variable <code>UVS_LOG_LEVEL</code> controls library log verbosity.</li>
+      <li><code>urma_admin</code> still shows legacy EID commands marked "only for uvs"; these are not the same as the normal control-plane path.</li>
+    </ul>
+
+    <h2>Failure Modes to Check</h2>
+    <table>
+      <thead>
+        <tr>
+          <th>Symptom</th>
+          <th>Likely cause</th>
+          <th>Where to check</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><code>uvs_get_route_list()</code> or <code>uvs_get_path_set()</code> fails.</td>
+          <td>Global topology map has not been set or bonding EID is not present.</td>
+          <td><code>ubcore_get_global_topo_map()</code>, <code>ubcore_get_topo_info_by_agg_eid()</code>.</td>
+        </tr>
+        <tr>
+          <td>Warmup code based on UVS schedules zero routes.</td>
+          <td><code>uvs_set_topo_info()</code> has not run yet, or topology was pushed after driver probe.</td>
+          <td>UVS logs, kernel <code>ubcore_cmd_set_topo()</code>, route/path return counts.</td>
+        </tr>
+        <tr>
+          <td>Route exists but TP creation is still slow.</td>
+          <td>UVS only selected EIDs; first <code>get_tp_list</code> still performs control-queue TP allocation.</td>
+          <td>UDMA <code>get_tp_list</code> and <code>active_tp</code> timing logs.</td>
+        </tr>
+        <tr>
+          <td><code>FULLMESH_1D</code> returns unexpected extra paths.</td>
+          <td>The kernel returns all EIDs and user-space UVS applies a temporary filter based on <code>multi_path</code>.</td>
+          <td><code>uvs_filter_path_set()</code> in <code>tpsa_api.c</code>.</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <h2>How to Read the Code</h2>
+    <ol>
+      <li>Start with <code>uvs_api.h</code> to understand public objects: <code>uvs_route_t</code>, <code>uvs_route_list_t</code>, <code>uvs_path_set_t</code>, and <code>urma_topo_node</code>.</li>
+      <li>Read <code>tpsa_api.c</code> to see API validation and the call into ioctl helpers.</li>
+      <li>Read <code>uvs_cmd_tlv.c</code> to see how each command maps to a TLV payload.</li>
+      <li>Read <code>uvs_ubagg_ioctl.c</code> to see which device node each operation uses.</li>
+      <li>Read kernel <code>ubcore_uvs_cmd.c</code> to see command dispatch and topology creation.</li>
+      <li>Read kernel <code>ubcore_topo_info.c</code> to understand route/path selection behavior.</li>
+      <li>Read UMQ <code>umq_symbol_private.c</code> and <code>umq_ub_impl.c</code> for a real consumer of <code>uvs_get_path_set()</code>.</li>
+    </ol>
+
+    <h2>Source Evidence</h2>
+    <ul class="source-list">
+      <li>/Volumes/KernelDev/umdk/src/urma/lib/uvs/core/include/uvs_api.h</li>
+      <li>/Volumes/KernelDev/umdk/src/urma/lib/uvs/core/tpsa_api.c</li>
+      <li>/Volumes/KernelDev/umdk/src/urma/lib/uvs/core/tpsa_ioctl.h</li>
+      <li>/Volumes/KernelDev/umdk/src/urma/lib/uvs/core/uvs_cmd_tlv.c</li>
+      <li>/Volumes/KernelDev/umdk/src/urma/lib/uvs/core/uvs_ubagg_ioctl.c</li>
+      <li>/Volumes/KernelDev/kernel/drivers/ub/urma/ubcore/ubcore_uvs_cmd.c</li>
+      <li>/Volumes/KernelDev/kernel/drivers/ub/urma/ubcore/ubcore_topo_info.c</li>
+      <li>/Volumes/KernelDev/umdk/src/urpc/umq/umq_ub/core/private/umq_symbol_private.c</li>
+      <li>/Volumes/KernelDev/umdk/src/urpc/umq/umq_ub/core/umq_ub_impl.c</li>
+      <li>/Volumes/KernelDev/umdk/umdk.spec</li>
+    </ul>
+  </main>
+</body>
+</html>

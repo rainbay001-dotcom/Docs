@@ -2,7 +2,7 @@
 
 This directory tracks Codex findings about openEuler UMDK, with the current focus on the URMA and UDMA stack.
 
-Last updated: 2026-04-27
+Last updated: 2026-05-11
 
 ## Local Repositories
 
@@ -32,9 +32,11 @@ Two local document directories were found:
 - [UMDK/RDMA terminology mapping and comparison](./umdk-rdma-terminology-and-comparison.md)
 - [UB-Mesh context and UMDK mapping](./ub-mesh-context-and-umdk-mapping.md)
 - [UMDK component architecture](./umdk-component-architecture.md)
+- [UVS topology and route selection](./uvs_how_it_works.html)
 - [End-to-end platform workflow](./end-to-end-platform-workflow.md)
 - [Architecture diagrams and workflows](./architecture-diagrams-and-workflows.md)
 - [UMQ architecture and workflows](./umq-architecture-and-workflows.md)
+- [UB MAD VTP link setup flow](./ub-mad-vtp-link-setup-flow.md)
 - [HiSilicon IMP interface](./hisilicon-imp-interface.md)
 - [UB root bus, udev, and device enumeration](./ub-root-bus-udev-device-enumeration.md)
 - [UB and PCIe probe process comparison](./ub-vs-pcie-probe-process-comparison.md)
