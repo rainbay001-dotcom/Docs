@@ -2487,6 +2487,389 @@ the inner phase decomposition that's actually informative.
 should treat §10.18.G's filter + settings as the current preferred
 baseline.
 
+### 10.19 UMDK#2 rounds 4–5: the topo-scan finding (overturns §10.18's "97.5% CM RTT" claim)
+
+The §10.18 framing — "97.5% of first-RPC latency is two CM-fabric
+RTTs" — was wrong. JinDou's deeper retraces on UMDK#2 (rounds 4 and
+5, comments `4418773243` and `4418968474`) walked the call stack
+inside `ubmad_post_send` and found a different culprit. This section
+records the actual breakdown.
+
+#### A. The hot path is a CPU-bound linear scan, not a network exchange
+
+`ubmad_post_send` calls `ubcore_get_main_primary_eid` to resolve the
+destination EID before the WQE is even built. That function lives at
+`ubcore_topo_info.c:452` and calls into `ubcore_get_primary_eid`
+(line 353), which **linearly scans the entire topology table**.
+
+Verified against the actual source:
+
+```c
+/* ubcore_topo_info.c:353 */
+int ubcore_get_primary_eid(...) {
+    for (node_id = 0; node_id < g_ubcore_topo_map->node_num; node_id++) {
+        for (dev_id = 0; dev_id < DEV_NUM; dev_id++) {       /* DEV_NUM = 256 */
+            ...
+            find_primary_eid_in_ues(agg_dev, ...);
+        }
+    }
+}
+
+/* ubcore_topo_info.c:306 — called by the above */
+static int find_primary_eid_in_ues(...) {
+    /* iterates IODIE_NUM(2) × (1 + PORT_NUM(9)) = 20 ports per agg_dev
+       calling is_eid_match() each time */
+}
+```
+
+Constants from `ubcore_topo_info.h:18–24`:
+- `MAX_NODE_NUM = 64`
+- `DEV_NUM = 256`
+- `IODIE_NUM = 2`
+- `PORT_NUM = 9`
+
+In JinDou's fabric (`urma_admin show topo` reports 22 active nodes ×
+256 dev slots ≈ 5,605 agg_devs), each `ubcore_get_main_primary_eid`
+call performs:
+
+- **5,605 `find_primary_eid_in_ues` invocations** (one per agg_dev slot)
+- **117,678 `is_eid_match` invocations** (~21 per agg_dev × 5,605)
+
+Per call: ~4.9 ms of CPU at ~42 ns per scalar compare. **No hash. No
+early-out. No cache.**
+
+The call site that matters: `ubmad_post_send` at
+`ubcm/ubmad_datapath.c:817` invokes this on every outbound MAD before
+the actual send (`ubmad_do_post_send`, 2–7 µs).
+
+#### B. Per-RPC budget — 8 calls × 4.9 ms ≈ 39 ms of pure CPU
+
+A single first-RPC setup fires `ubcore_get_main_primary_eid` roughly
+eight times:
+
+- 3 large CM exchanges (`send_jetty_info_req`, `send_seg_info_req`,
+  `send_create_req` / `ubcore_exchange_tp_info`), each posting at
+  least one MAD that goes through `ubmad_post_send` and triggers a
+  scan
+- Plus other smaller MAD posts (per JinDou's round-5 data, 8 total
+  call sites observed)
+
+Total CPU cost across the link-setup path: ~39 ms (under ftrace
+overhead this ballooned to 38 ms in one site alone; unloaded estimate
+based on cycle-counting the inner loop is ~4.9 ms per call).
+
+#### C. What "CM RTT" actually was in §10.18
+
+The §10.18 numbers attributed to "CM RTT" were:
+
+| Phase | §10.18 attribution (wrong) | Actual breakdown (round 4) |
+|---|---|---|
+| `send_jetty_info_req` 4.83 ms | "network RTT 1" | ~4.83 ms `ubcore_get_main_primary_eid` + ~7 µs actual send |
+| `ubcore_session_wait` 6.01 ms | "blocking wait on peer" | this part actually IS a wait, but the cold-state value of 6 ms shrank to 0.45 ms in warm-state round-3 retrace — so it's variable and not the dominant invariant |
+| `ubcore_exchange_tp_info` 5.49 ms | "network RTT 2 (CM)" | ~4.89 ms `ubcore_get_main_primary_eid` + ~600 µs actual exchange |
+
+Bulk of each "RTT" row is CPU scan **before** the packet leaves the
+wire. The real wire-RTT-plus-server-processing is a few hundred
+microseconds in warm state, not milliseconds.
+
+#### D. Cold vs. warm: the 130 ms → 16 ms drift
+
+JinDou's first trace showed 130 ms total; later retraces showed
+16.74 ms warm, then 11.4 ms even warmer. `ubcore_session_wait`
+specifically dropped from 6,012 µs to 452 µs across rounds for the
+same test setup, **same command, same minutes apart**.
+
+Likely sticky state: the local CM session-with-peer state, EID
+resolution caches, or fabric route caches. `urma_perftest`'s
+`urma_unimport_jetty` at cleanup drops user-facing handles but
+doesn't tear down all ubcore-internal state.
+
+A cold-vs-warm modprobe protocol (`modprobe -r udma ubagg uburma
+ubcore && modprobe ...`) was proposed in §10.18.F but **was never
+executed by JinDou on UMDK#2**. Still the right experiment to
+disambiguate "what's already cached in the kernel between runs" from
+"what the codex patch would add."
+
+#### E. Implication for codex `udma-tp-cache` — now strongly suspected irrelevant
+
+The patch lives in `drivers/ub/urma/hw/udma/`. The hot spot is in
+`drivers/ub/urma/ubcore/ubcore_topo_info.c` + `ubcm/ubmad_datapath.c`
+— one or two layers above udma. A udma-layer cache cannot
+short-circuit a scan in ubcore-layer code.
+
+For the patch to help, it would need to live somewhere it could
+short-circuit `ubcore_get_main_primary_eid` — e.g., a primary-EID
+cache keyed by destination EID, or a topo-table hash. None of those
+are udma-side.
+
+**Still blocking**: `git diff master..codex/udma-tp-cache --
+drivers/ub/urma/` was never run. Closing this loop takes 30 seconds
+and would let us stop speculating.
+
+#### F. What the bot got right vs. wrong on UMDK#2
+
+The 25-comment dialog with `@claude[bot]` on UMDK#2 produced the
+right end-state but iterated through several wrong intermediates,
+each corrected only after JinDou pushed back:
+
+| Bot claim | Verdict | Round corrected |
+|---|---|---|
+| "97% of first-RPC latency is CM-fabric RTT" | ❌ wrong | round 4 |
+| "`ubcore_session_wait` is the dominant single item at 6.01 ms" | ❌ cold-state artifact | round 3 (dropped to 0.45 ms warm) |
+| "Stages 5/6 are ftrace-invisible" | ❌ wrong | corrected next reply after JinDou's pushback |
+| "5,605 = UE count" | ❌ unit error | round 5 (5,605 = agg_dev slots = node_num × DEV_NUM) |
+| File:line citations late in thread (`admin_cmd_show.c:1176-1198`, `topo_info.h:28,52,61`) | unverified | treat as plausible-not-confirmed |
+
+Pattern: the bot was a useful interlocutor on a fresh thread (UMDK#2
+is short enough for the SDK not to crash), but a poor primary analyst
+on fast-moving data. JinDou's rigor — re-running with deeper depth
+and pushing back on overconfident claims — is what produced the
+correct answer.
+
+### 10.20 Testing scale and concurrency
+
+The conversation with the human revealed three distinct questions
+that were getting conflated:
+
+1. **Does sequential link setup get slower as N grows?** (per-import
+   state growth — topo table fills, hash chains get longer, etc.)
+2. **Do concurrent link setups contend?** (lock-hold time, server-side
+   serialization, fabric queue depth saturation)
+3. **Does the topo-scan dominate equally at all N?** (CPU cost grows
+   linearly per call regardless of concurrency)
+
+Different tests answer different questions. Recording the test
+recipes here so they don't get re-derived.
+
+#### A. Plan B — sequential `-J N` in one process (no patch)
+
+Tests sequential scaling. `urma_perftest` has `-J / --jettys N` but
+gates it to bandwidth tests at `perftest_parameters.c:677`:
+
+```c
+if (cfg->type != PERFTEST_BW && cfg->jettys > 1) {
+    fprintf(stderr, "Multiple jettys only available on band width tests.\n");
+    return -1;
+}
+```
+
+So use `send_bw` and ignore the bandwidth measurement — ftrace will
+capture only the import phase:
+
+```bash
+# server
+urma_perftest send_bw -J 100 -n 1 -s 2 -d bonding_dev_0 --single_path -p 0 \
+  > /tmp/srv.out 2>&1 &
+
+# client (with §10.18.G ftrace armed)
+ftrace_arm
+urma_perftest send_bw -J 100 -n 1 -s 2 -d bonding_dev_0 --single_path -p 0 \
+  -S $SERVER > /tmp/cli.out
+ftrace_disarm
+
+# extract per-import durations in trace-time order
+awk '/\}\s*\/\*\s*ubcore_import_jetty/{
+  if (match($0, /([0-9.]+) us/, m)) print NR, m[1]
+}' /tmp/trace | head -300
+```
+
+`-n 1 -s 2`: one iteration per jetty, 2-byte messages — the
+post-setup test phase exits in microseconds. Setup is what takes
+time, and the trace filter captures only setup-related functions.
+
+What you'd see:
+- 200 `ubcore_import_jetty` exit lines for `-J 100` (each call
+  expands to 2 kernel-side imports on a bonded device: aggregate-via-ubagg
+  + physical-via-compat, per §10.17–10.18)
+- If durations stay flat across the 200, sequential scaling is clean
+- If duration grows with sequence number, there's compounding per-import
+  state — likely topo table growth or hash collision rate growth
+
+**The for loop at `perftest_resources.c:1540` is serial in one
+thread.** `urma_import_jetty` is synchronous; iteration `i+1` only
+begins after iteration `i`'s ioctl returns. So Plan B exercises
+sequential scaling, not concurrency.
+
+#### B. Plan A — parallel bash processes (rolling wave)
+
+Tests concurrent contention at the cross-process granularity (separate
+fds, separate URMA contexts, separate userspace state).
+
+```bash
+# server — one listener per port
+N=32
+for i in $(seq 1 $N); do
+  urma_perftest send_lat -n 5 -s 2 -d bonding_dev_0 --single_path \
+    -p $((9000+i)) > /tmp/srv-$i.out 2>&1 &
+done
+
+# client (ftrace armed)
+SERVER=141.62.32.91
+ftrace_arm
+t0=$(date +%s.%N)
+for i in $(seq 1 $N); do
+  /usr/bin/time -f "%e" -o /tmp/cli-$i.time \
+    urma_perftest send_lat -n 5 -s 2 -d bonding_dev_0 --single_path \
+    -p $((9000+i)) -S $SERVER > /tmp/cli-$i.out 2>&1 &
+done
+wait
+t1=$(date +%s.%N)
+ftrace_disarm
+echo "wave = $(echo "$t1 - $t0" | bc) s"
+cat /tmp/cli-*.time | sort -n | awk 'NR==1{min=$1} {max=$1; sum+=$1}
+  END{printf "min=%s max=%s avg=%.3f\n", min, max, sum/NR}'
+```
+
+**What `&` does**: the loop iterates serially, but each iteration
+fork+execs in the background. So all N processes run concurrently —
+but starts are **staggered by the per-fork latency** (~1–2 ms each).
+With N=32, client 32 begins ~30–60 ms after client 1. Plus each
+`urma_perftest` has its own libc+URMA init + OOB TCP before the
+import ioctl fires.
+
+Net effect: rolling wave, not perfectly simultaneous ioctls. Good
+enough for long-lived contention (e.g., a 5 ms mutex hold during
+topo scan that all N clients hit). Bad for sub-ms transient
+contention.
+
+#### C. Plan A+ — barrier-file synchronization
+
+Tighter release timing for cases where Plan A's stagger hides a
+short transient contention. Pre-spawn N shells that busy-wait on a
+file, then release them all at once:
+
+```bash
+rm -f /tmp/go
+N=32
+for i in $(seq 1 $N); do
+  (
+    while [ ! -f /tmp/go ]; do : ; done   # spin so release is immediate
+    /usr/bin/time -f "%e" -o /tmp/cli-$i.time \
+      urma_perftest send_lat -n 5 -s 2 -d bonding_dev_0 --single_path \
+      -p $((9000+i)) -S $SERVER > /tmp/cli-$i.out 2>&1
+  ) &
+done
+sleep 1                  # let all N reach the barrier
+touch /tmp/go            # release simultaneously
+wait
+```
+
+This synchronizes the release within ~µs, but each shell still does
+its own `urma_perftest` startup before reaching `urma_import_jetty`.
+So the **ioctls** still stagger by 5–30 ms — just the bash dispatch
+is synchronized.
+
+#### D. Plan C — pthread fan-out in one process (real concurrent ioctls)
+
+The cleanest stress test: one process, one URMA context, N pthreads
+each calling `urma_import_jetty` simultaneously. Requires a patch to
+`perftest_resources.c`:
+
+```c
+struct import_arg {
+    perftest_context_t *ctx;
+    perftest_config_t *cfg;
+    uint32_t idx;
+    urma_rjetty_t rjetty;
+    urma_bondp_rjetty_t bondp_rjetty;
+    bool use_bondp;
+    int result;
+};
+
+static void *parallel_import_worker(void *arg)
+{
+    struct import_arg *a = arg;
+    a->ctx->import_tjetty[a->idx] = urma_import_jetty(
+        a->ctx->urma_ctx,
+        a->use_bondp ? &a->bondp_rjetty.base : &a->rjetty,
+        &g_perftest_token);
+    a->result = (a->ctx->import_tjetty[a->idx] == NULL) ? -1 : 0;
+    return NULL;
+}
+
+/* in connect_jetty_default(), replace the serial loop body with:
+ *
+ *   pthread_t *threads = calloc(ctx->jetty_num, sizeof(pthread_t));
+ *   struct import_arg *args = calloc(ctx->jetty_num, sizeof(*args));
+ *   struct timespec t0, t1;
+ *   clock_gettime(CLOCK_MONOTONIC, &t0);
+ *   for (i = 0; i < ctx->jetty_num; i++) {
+ *       args[i] = (struct import_arg){ .ctx = ctx, .cfg = cfg, .idx = i,
+ *           .rjetty = rjetty_arr[i], .bondp_rjetty = bondp_arr[i],
+ *           .use_bondp = use_bondp_arr[i] };
+ *       pthread_create(&threads[i], NULL, parallel_import_worker, &args[i]);
+ *   }
+ *   for (i = 0; i < ctx->jetty_num; i++) pthread_join(threads[i], NULL);
+ *   clock_gettime(CLOCK_MONOTONIC, &t1);
+ *   fprintf(stderr, "parallel import of %u: %.3f ms\n", ctx->jetty_num,
+ *           (t1.tv_sec - t0.tv_sec) * 1000.0 +
+ *           (t1.tv_nsec - t0.tv_nsec) / 1e6);
+ */
+```
+
+Build with `-lpthread`. After this patch, `urma_perftest send_bw -J
+64 ...` fires 64 concurrent `ioctl(IMPORT_JETTY)` syscalls on the
+same fd within microseconds of each other — the strictest test of
+any per-fd / per-context kernel-side lock.
+
+#### E. Optional patch: `--setup-only` flag
+
+If you only ever care about setup timing, a tiny patch eliminates
+the post-setup test phase entirely:
+
+```c
+/* in perftest_parameters.c options + struct */
+{"setup-only", no_argument, NULL, PERFTEST_OPT_SETUP_ONLY},
+
+case PERFTEST_OPT_SETUP_ONLY:
+    cfg->setup_only = true;
+    break;
+
+/* in main() or test-runner entry, after connect_jetty(): */
+if (cfg->setup_only) {
+    fprintf(stderr, "setup complete, exiting\n");
+    cleanup_ctx(ctx);
+    return 0;
+}
+```
+
+Also worth deleting the `-J > 1 only on BW tests` check at
+`perftest_parameters.c:677` so `send_lat -J 100 --setup-only` becomes
+valid. Together, ~15 lines of patch.
+
+#### F. Recommended order on an idle test system
+
+1. **Plan B** first — `send_bw -J 100 -n 1 -s 2`, no patch, one
+   process. Establishes sequential per-import baseline. ~5 minutes.
+2. **Plan A** next — N parallel processes via the bash loop. Reveals
+   cross-process contention. ~10 minutes per N value.
+3. **Plan C** only if A doesn't reproduce the suspected pathology.
+   The patch is ~30 lines. Provides true concurrent ioctls on one fd.
+
+#### G. What to grep for in the trace
+
+Per-import duration ranked by slowest:
+
+```bash
+awk '/\}\s*\/\*\s*ubcore_import_jetty/{
+    if (match($0, /([0-9.]+) us/, m)) print m[1], NR
+}' trace | sort -rn | head -20
+```
+
+If under contention (Plan A or C) the slowest import is 10× the
+fastest, you've found a serialization hot spot. Next step: grep the
+trace for which phase grew — usually `ubcore_get_tp_list`,
+`ubcore_session_wait`, or `ubcore_exchange_tp_info` if locking on
+the topo table or peer session.
+
+For the topo-scan hypothesis specifically (§10.19), expect each
+`ubcore_get_main_primary_eid` call to take ~4.9 ms regardless of
+concurrency — it's per-CPU work. If N parallel imports each get
+4.9 ms of scan time on N different CPUs, total wall-clock for the
+wave is bounded by max-per-CPU rather than sum. If instead one core
+serializes all scans (e.g., topo table mutex), wall-clock grows
+linearly with N. The trace will distinguish these.
+
 ## 11. TRACE_EVENT internals — how the macro actually works
 
 ### 11.1 Where `TRACE_EVENT` is defined
