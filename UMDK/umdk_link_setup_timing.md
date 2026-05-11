@@ -2734,30 +2734,94 @@ contention.
 
 #### C. Plan A+ — barrier-file synchronization
 
-Tighter release timing for cases where Plan A's stagger hides a
-short transient contention. Pre-spawn N shells that busy-wait on a
-file, then release them all at once:
+Plain `for...& done` stagers starts by ~1–2 ms per iteration (bash
+forks each iteration sequentially before moving to the next). For
+N=32 that's 30–60 ms between client 1 and client N. The barrier-file
+pattern eliminates most of that stagger by pre-forking all N
+subshells in a wait state, then releasing them atomically.
 
 ```bash
-rm -f /tmp/go
+rm -f /tmp/go                                      # 1. barrier closed
 N=32
 for i in $(seq 1 $N); do
   (
-    while [ ! -f /tmp/go ]; do : ; done   # spin so release is immediate
-    /usr/bin/time -f "%e" -o /tmp/cli-$i.time \
+    while [ ! -f /tmp/go ]; do : ; done            # 2. spin, waiting for release
+    /usr/bin/time -f "%e" -o /tmp/cli-$i.time \    # 3. fires once /tmp/go appears
       urma_perftest send_lat -n 5 -s 2 -d bonding_dev_0 --single_path \
       -p $((9000+i)) -S $SERVER > /tmp/cli-$i.out 2>&1
   ) &
 done
-sleep 1                  # let all N reach the barrier
-touch /tmp/go            # release simultaneously
+sleep 1                                            # 4. give all N time to reach the spin
+touch /tmp/go                                      # 5. release — atomic from N's perspective
 wait
 ```
 
-This synchronizes the release within ~µs, but each shell still does
-its own `urma_perftest` startup before reaching `urma_import_jetty`.
-So the **ioctls** still stagger by 5–30 ms — just the bash dispatch
-is synchronized.
+**Step-by-step**:
+
+1. `rm -f /tmp/go` — ensure the file doesn't exist. "Gate closed."
+2. Loop forks N subshells in the background; each immediately enters
+   `while [ ! -f /tmp/go ]; do : ; done`. `:` is bash's no-op; the
+   loop just spins checking whether the file appeared. Cost per
+   iteration: one `stat()` syscall, ~µs.
+3. `sleep 1` — gives the loop time to fork all N subshells and let
+   them reach the spin loop. Without this you'd race: some subshells
+   might still be in fork/exec when you signal.
+4. `touch /tmp/go` — the release. One `creat()` syscall. As soon as
+   it returns, all N subshells see the file on their next iteration
+   of the spin loop.
+5. All N subshells fall through `while` and start their command
+   essentially together.
+
+**Stagger comparison**:
+
+| Method | Time between 1st and Nth start | Why |
+|---|---|---|
+| Plain `for...& done` | ~1–2 ms × N (≈ 30–60 ms for N=32) | bash forks each iteration sequentially |
+| Barrier with busy-spin `do : ; done` | ~µs across all N | spin checks at ~µs granularity |
+| Barrier with `sleep 0.001` poll | ~1 ms | check granularity = sleep interval |
+| Barrier with `inotifywait /tmp/go` | sub-µs | kernel signals waiters on file creation |
+
+Busy-spin (`do : ; done`) is the simplest and gets ~µs sync. The
+downside is CPU burn during the `sleep 1` window before release —
+N cores spinning. For N up to a few hundred on an idle system it's
+fine.
+
+**Why "tighter" still isn't tight enough for kernel-side ioctl
+stress**: the barrier synchronizes **bash-level dispatch**, not the
+syscalls that hit the kernel. After the release, each
+`urma_perftest` process still has to do:
+
+1. Process startup (`execve`, libc init, dynamic linker): ~5–15 ms
+2. `urma_init` / `urma_create_context` / device open: ~1–5 ms
+3. `urma_create_jfs / jfr / jetty`: ~1 ms total
+4. OOB TCP connect to the server and exchange descriptors: ~5–20 ms
+5. *Then* finally `urma_import_jetty` → `ioctl(UBURMA_CMD_IMPORT_JETTY)`
+
+By the time step 5 fires, each process has done 10–40 ms of pre-work,
+varying with OS scheduling. So the **ioctls** that actually exercise
+the kernel topo scan still spread out over 10s of ms — even though
+the **bash** commands started within microseconds. Barrier-file
+solves "when do the shell commands fire" but not "when do the
+syscalls arrive."
+
+**When barrier-file IS the right tool**:
+
+- When the stagger from `for...& done` (30–60 ms) is comparable to or
+  larger than what you're trying to measure.
+- When you need to compare "all N run at once" vs "N run sequentially"
+  without writing C.
+- When the bottleneck is multi-process scheduling, FD-table
+  contention, or anything else where each process needs its own
+  context.
+- Lightweight benchmarks (network ping, simple syscalls, etc.).
+
+For the UMDK-specific question "does the kernel topo scan serialize
+under concurrent imports?" — barrier-file is a middle-ground option:
+tighter than plain `&`, looser than pthreads. Reasonable to try after
+Plan A to rule out "the stagger was hiding the contention." If Plan A
+and barrier-A produce the same result, the contention either doesn't
+exist or has a millisecond-or-longer hold time (which would show up
+under either pattern).
 
 #### D. Plan C — pthread fan-out in one process (real concurrent ioctls)
 
