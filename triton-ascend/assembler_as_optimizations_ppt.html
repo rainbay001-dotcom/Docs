@@ -549,184 +549,173 @@ P4_A[<span class="num">31</span>]= (V4[<span class="num">31</span>] == V5[<span 
 <!-- SLIDE 6.5 — TINY EXAMPLE: 4 blocks × 4 elements, iter 0 walked through -->
 <!-- =================================================================== -->
 <div class="slide">
-  <div class="slide-title-bar"><h2>6. Tiny example — 4 K-blocks × 4 elements, iter 0 step-by-step</h2></div>
+  <div class="slide-title-bar"><h2>6. Tiny example — same data as the bool walkthrough, walked through the asm</h2></div>
 
-  <p>Setup: 1 query row (<code>i=0</code>), 4 key-blocks of 4 elements
-  each = 16 key positions. Imagined VL = 4 lanes per vreg for visual
-  clarity (real A5 has VL = 64 i32 lanes — same logic, larger numbers).
-  Each VLOOP iter's 2 passes cover 2 of the 4 K-blocks; the other 2
-  would be handled by a second launch (or by extending the body to 4
-  passes — same logical pattern).</p>
+  <p>Using the <i>identical</i> input data from
+  <code>mask_kernel_bool_walkthrough_ppt.html</code> — but now traced
+  through the asm's 2-pass body. <b>M = N = 4</b>; split N into
+  <b>2 K-blocks of 2 elements</b> (so pass A handles columns 0–1, pass
+  B handles columns 2–3). Imagined VL = 2 lanes for illustration
+  (real A5 VL = 64).</p>
+
+  <table style="margin-bottom: 10px">
+    <tr><th>Input vector</th><th>Values</th><th>Split into K-blocks</th></tr>
+    <tr><td><code>q_attn</code> (column-broadcast)</td><td><code>[1, 1, 2, 2]</code></td><td>not split (one scalar per row)</td></tr>
+    <tr><td><code>k_attn</code> (row-broadcast)</td><td><code>[0, 1, 1, 2]</code></td><td><b>block 0 = [0, 1]</b> at <code>[S10]</code> · <b>block 1 = [1, 2]</b> at <code>[S16]</code></td></tr>
+  </table>
 
   <div class="col2">
     <div>
-      <h3>The output row M[0, 0..15] — 4 blocks of 4 lanes</h3>
+      <h3>How registers V4 (yellow) and V5 (blue / green) hold the data</h3>
 
-      <svg viewBox="0 0 600 280" width="100%" style="font-family:'SF Mono',Menlo,Consolas,monospace; font-size:11px;">
-        <!-- 4 blocks of 4 lanes each, side by side -->
-        <g>
-          <!-- block 0: pass A -->
-          <rect x="10" y="20" width="140" height="22" fill="#bbdefb" stroke="#1565c0"/>
-          <text x="80" y="36" text-anchor="middle" fill="#0d47a1" font-weight="bold">Block 0 — pass A</text>
-          <rect x="10" y="50" width="140" height="40" fill="#fff3e0" stroke="#e65100" stroke-width="2"/>
-          <line x1="45"  y1="50" x2="45"  y2="90" stroke="#e65100" stroke-width="0.5"/>
-          <line x1="80"  y1="50" x2="80"  y2="90" stroke="#e65100" stroke-width="0.5"/>
-          <line x1="115" y1="50" x2="115" y2="90" stroke="#e65100" stroke-width="0.5"/>
-          <g text-anchor="middle" fill="#bf360c" font-size="11">
-            <text x="27" y="68">j=0</text>
-            <text x="62" y="68">j=1</text>
-            <text x="97" y="68">j=2</text>
-            <text x="132" y="68">j=3</text>
-            <text x="27" y="82">★</text>
-            <text x="62" y="82">★</text>
-            <text x="97" y="82">★</text>
-            <text x="132" y="82">★</text>
-          </g>
+      <p>V4 and V5 are <b>two distinct registers</b>. V5 gets <b>reloaded</b>
+      between passes — so the "blue V5" and "green V5" boxes in the previous
+      version showed <i>the same register at two different points in time</i>,
+      with different data each time. Below, V5 is shown twice as a
+      <b>timeline</b> (V5@A → V5@B) to make that clearer.</p>
 
-          <!-- block 1: pass B -->
-          <rect x="155" y="20" width="140" height="22" fill="#c8e6c9" stroke="#2e7d32"/>
-          <text x="225" y="36" text-anchor="middle" fill="#1b5e20" font-weight="bold">Block 1 — pass B</text>
-          <rect x="155" y="50" width="140" height="40" fill="#fff3e0" stroke="#e65100" stroke-width="2"/>
-          <line x1="190" y1="50" x2="190" y2="90" stroke="#e65100" stroke-width="0.5"/>
-          <line x1="225" y1="50" x2="225" y2="90" stroke="#e65100" stroke-width="0.5"/>
-          <line x1="260" y1="50" x2="260" y2="90" stroke="#e65100" stroke-width="0.5"/>
-          <g text-anchor="middle" fill="#bf360c" font-size="11">
-            <text x="172" y="68">j=4</text>
-            <text x="207" y="68">j=5</text>
-            <text x="242" y="68">j=6</text>
-            <text x="277" y="68">j=7</text>
-            <text x="172" y="82">★</text>
-            <text x="207" y="82">★</text>
-            <text x="242" y="82">★</text>
-            <text x="277" y="82">★</text>
-          </g>
-
-          <!-- block 2: another launch -->
-          <rect x="300" y="20" width="140" height="22" fill="#eeeeee" stroke="#9e9e9e"/>
-          <text x="370" y="36" text-anchor="middle" fill="#424242" font-weight="bold">Block 2 — (next launch)</text>
-          <rect x="300" y="50" width="140" height="40" fill="#f5f5f5" stroke="#bdbdbd" stroke-dasharray="3,2"/>
-          <g text-anchor="middle" fill="#9e9e9e" font-size="11">
-            <text x="317" y="68">j=8</text>
-            <text x="352" y="68">j=9</text>
-            <text x="387" y="68">j=10</text>
-            <text x="422" y="68">j=11</text>
-          </g>
-
-          <!-- block 3 -->
-          <rect x="445" y="20" width="140" height="22" fill="#eeeeee" stroke="#9e9e9e"/>
-          <text x="515" y="36" text-anchor="middle" fill="#424242" font-weight="bold">Block 3 — (next launch)</text>
-          <rect x="445" y="50" width="140" height="40" fill="#f5f5f5" stroke="#bdbdbd" stroke-dasharray="3,2"/>
-          <g text-anchor="middle" fill="#9e9e9e" font-size="11">
-            <text x="462" y="68">j=12</text>
-            <text x="497" y="68">j=13</text>
-            <text x="532" y="68">j=14</text>
-            <text x="567" y="68">j=15</text>
-          </g>
-        </g>
-
-        <!-- legend -->
-        <text x="10" y="115" font-size="11" fill="#555">★ = computed by THIS launch's iter 0 (i=0). Both blocks 0 and 1 need <tspan font-weight="bold" fill="#bf360c">q_attn[0]</tspan> — same row.</text>
-
-        <!-- q feeding both -->
-        <rect x="140" y="150" width="160" height="48" fill="#ffe082" stroke="#f57c00" stroke-width="2" rx="6"/>
-        <text x="220" y="170" text-anchor="middle" font-weight="bold" fill="#bf360c" font-size="13">V4 = q_attn[0]</text>
-        <text x="220" y="186" text-anchor="middle" fill="#5d4037" font-size="10">(broadcast to all 4 lanes via brc_b32)</text>
-
-        <!-- arrows from q to block 0 and block 1 -->
-        <line x1="180" y1="150" x2="80"  y2="92" stroke="#bf360c" stroke-width="2" marker-end="url(#arr2)"/>
-        <line x1="260" y1="150" x2="225" y2="92" stroke="#bf360c" stroke-width="2" marker-end="url(#arr2)"/>
-
-        <!-- k_attn_A and k_attn_B inputs -->
-        <rect x="10" y="220" width="140" height="40" fill="#bbdefb" stroke="#1565c0" rx="4"/>
-        <text x="80" y="240" text-anchor="middle" fill="#0d47a1" font-weight="bold" font-size="12">V5 = k_attn[0..3]</text>
-        <text x="80" y="254" text-anchor="middle" fill="#555" font-size="10">from [S10] — block 0</text>
-        <line x1="80" y1="220" x2="80" y2="92" stroke="#1565c0" stroke-width="1.5" marker-end="url(#arr2)"/>
-
-        <rect x="155" y="220" width="140" height="40" fill="#c8e6c9" stroke="#2e7d32" rx="4"/>
-        <text x="225" y="240" text-anchor="middle" fill="#1b5e20" font-weight="bold" font-size="12">V5 = k_attn[4..7]</text>
-        <text x="225" y="254" text-anchor="middle" fill="#555" font-size="10">from [S16] — block 1 (reloaded)</text>
-        <line x1="225" y1="220" x2="225" y2="92" stroke="#2e7d32" stroke-width="1.5" marker-end="url(#arr2)"/>
-
+      <svg viewBox="0 0 600 380" width="100%" style="font-family:'SF Mono',Menlo,Consolas,monospace; font-size:11px;">
         <defs>
-          <marker id="arr2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+          <marker id="arr3" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
             <path d="M 0 0 L 10 5 L 0 10 z" fill="#666"/>
           </marker>
         </defs>
+
+        <!-- V4 register: loaded ONCE per iter -->
+        <rect x="10" y="20" width="220" height="44" fill="#ffe082" stroke="#f57c00" stroke-width="2" rx="5"/>
+        <text x="120" y="40" text-anchor="middle" fill="#bf360c" font-weight="bold" font-size="13">V4 (yellow) — loaded ONCE per iter</text>
+        <text x="120" y="58" text-anchor="middle" fill="#5d4037" font-size="11">brc_b32: <tspan font-weight="bold">V4 = [1, 1]</tspan> ← q_attn[0]=1 broadcast</text>
+
+        <!-- arrow from V4 down to both passes -->
+        <line x1="120" y1="64" x2="120" y2="155" stroke="#bf360c" stroke-width="2" stroke-dasharray="2,2"/>
+        <line x1="120" y1="155" x2="80" y2="195" stroke="#bf360c" stroke-width="2" marker-end="url(#arr3)"/>
+        <line x1="120" y1="155" x2="380" y2="195" stroke="#bf360c" stroke-width="2" marker-end="url(#arr3)"/>
+        <text x="130" y="120" font-size="10" fill="#bf360c">same value</text>
+        <text x="130" y="135" font-size="10" fill="#bf360c">used by both passes →</text>
+
+        <!-- PASS A box -->
+        <rect x="10" y="200" width="260" height="80" fill="#e3f2fd" stroke="#1565c0" stroke-width="1.5" rx="5"/>
+        <text x="140" y="220" text-anchor="middle" fill="#0d47a1" font-weight="bold" font-size="13">PASS A — block 0, k_attn=[0,1]</text>
+        <text x="140" y="238" text-anchor="middle" fill="#1565c0" font-size="11">
+          <tspan font-weight="bold">V5 (blue) = [0, 1]</tspan> ← loaded from [S10]
+        </text>
+        <text x="140" y="256" text-anchor="middle" fill="#333" font-size="11">VCMP.EQ V4,V5 →
+          [1==0, 1==1]</text>
+        <text x="140" y="272" text-anchor="middle" fill="#1b5e20" font-weight="bold" font-size="11">
+          P4 = [F, T] → fills M[0, j=0..1]
+        </text>
+
+        <!-- PASS B box -->
+        <rect x="310" y="200" width="260" height="80" fill="#e8f5e9" stroke="#2e7d32" stroke-width="1.5" rx="5"/>
+        <text x="440" y="220" text-anchor="middle" fill="#1b5e20" font-weight="bold" font-size="13">PASS B — block 1, k_attn=[1,2]</text>
+        <text x="440" y="238" text-anchor="middle" fill="#2e7d32" font-size="11">
+          <tspan font-weight="bold">V5 (green) = [1, 2]</tspan> ← V5 RELOADED from [S16]
+        </text>
+        <text x="440" y="256" text-anchor="middle" fill="#333" font-size="11">VCMP.EQ V4,V5 →
+          [1==1, 1==2]</text>
+        <text x="440" y="272" text-anchor="middle" fill="#bf360c" font-weight="bold" font-size="11">
+          P4 = [T, F] → fills M[0, j=2..3]
+        </text>
+
+        <!-- arrow showing V5 is the same register, reloaded -->
+        <line x1="270" y1="240" x2="310" y2="240" stroke="#666" stroke-width="1.5" marker-end="url(#arr3)" stroke-dasharray="3,2"/>
+        <text x="290" y="232" text-anchor="middle" font-size="10" fill="#666" font-style="italic">V5 reloaded</text>
+        <text x="290" y="252" text-anchor="middle" font-size="10" fill="#666" font-style="italic">(same reg!)</text>
+
+        <!-- result row -->
+        <text x="290" y="310" text-anchor="middle" font-size="13" font-weight="bold" fill="#0d47a1">Row 0 of B-predicate matrix:</text>
+        <rect x="220" y="320" width="40" height="32" fill="#ffcdd2" stroke="#c62828"/><text x="240" y="340" text-anchor="middle" font-weight="bold" fill="#c62828">F</text>
+        <rect x="260" y="320" width="40" height="32" fill="#c8e6c9" stroke="#2e7d32"/><text x="280" y="340" text-anchor="middle" font-weight="bold" fill="#2e7d32">T</text>
+        <rect x="300" y="320" width="40" height="32" fill="#c8e6c9" stroke="#2e7d32"/><text x="320" y="340" text-anchor="middle" font-weight="bold" fill="#2e7d32">T</text>
+        <rect x="340" y="320" width="40" height="32" fill="#ffcdd2" stroke="#c62828"/><text x="360" y="340" text-anchor="middle" font-weight="bold" fill="#c62828">F</text>
+        <text x="240" y="370" text-anchor="middle" font-size="10" fill="#555">j=0</text>
+        <text x="280" y="370" text-anchor="middle" font-size="10" fill="#555">j=1</text>
+        <text x="320" y="370" text-anchor="middle" font-size="10" fill="#555">j=2</text>
+        <text x="360" y="370" text-anchor="middle" font-size="10" fill="#555">j=3</text>
+
+        <text x="190" y="340" text-anchor="end" font-size="11" fill="#0d47a1">from pass A →</text>
+        <text x="430" y="340" font-size="11" fill="#1b5e20">← from pass B</text>
       </svg>
     </div>
 
     <div>
-      <h3>Iter 0 walked through, instruction-by-instruction</h3>
+      <h3>Iter 0 — instructions with explicit data</h3>
 
-      <pre class="code code-small"><span class="com">; Once per iter: advance q-pointer, load q[i]</span>
-<span class="lnum">6</span>  <span class="fn">VLDI</span> <span class="reg">V4</span>,[<span class="reg">S68</span>],#<span class="num">1</span>,#<span class="num">3</span>,#<span class="num">1</span>     <span class="com">; brc_b32: load q_attn[0], all 4 lanes</span>
-                                <span class="com">; V4 = [q[0], q[0], q[0], q[0]]</span>
-                                <span class="com">; S68 += 4 B (post-incr)</span>
-<span class="com">;</span>
-<span class="com">; ───── PASS A: block 0 (j=0..3) ─────</span>
-<span class="lnum">7</span>  <span class="fn">VLDI</span> <span class="reg">V5</span>,[<span class="reg">S10</span>],#<span class="num">0</span>,#<span class="num">0</span>,#<span class="num">0</span>     <span class="com">; load block-0's k_attn</span>
-                                <span class="com">; V5 = [k[0], k[1], k[2], k[3]]</span>
-<span class="lnum">12</span> <span class="fn">VCMP</span>.EQ.s32 <span class="reg">P4</span>,<span class="reg">V4</span>,<span class="reg">V5</span>     <span class="com">; B for block 0</span>
-                                <span class="com">; lane 0: q[0]==k[0]</span>
-                                <span class="com">; lane 1: q[0]==k[1]</span>
-                                <span class="com">; lane 2: q[0]==k[2]</span>
-                                <span class="com">; lane 3: q[0]==k[3]</span>
-<span class="com">; ... predicate algebra + VSEL + VSTI fills M[0, 0..3] ...</span>
-<span class="com">;</span>
-<span class="com">; ───── PASS B: block 1 (j=4..7) ─────</span>
-<span class="com">; ★ NOTE: NO "VLDI V4,[S68],…" here.</span>
-<span class="com">;   S68 was already advanced; V4 still holds q[0].</span>
-<span class="com">;   Same query row → same scalar.</span>
-<span class="lnum">25</span> <span class="fn">VLDI</span> <span class="reg">V5</span>,[<span class="reg">S16</span>],#<span class="num">0</span>,#<span class="num">0</span>,#<span class="num">0</span>     <span class="com">; load block-1's k_attn</span>
-                                <span class="com">; V5 = [k[4], k[5], k[6], k[7]]</span>
-<span class="lnum">29</span> <span class="fn">VCMP</span>.EQ.s32 <span class="reg">P4</span>,<span class="reg">V4</span>,<span class="reg">V5</span>     <span class="com">; B for block 1</span>
-                                <span class="com">; lane 0: q[0]==k[4]   ← same q[0]!</span>
-                                <span class="com">; lane 1: q[0]==k[5]</span>
-                                <span class="com">; lane 2: q[0]==k[6]</span>
-                                <span class="com">; lane 3: q[0]==k[7]</span>
-<span class="com">; ... fills M[0, 4..7] ...</span></pre>
+      <pre class="code code-small"><span class="com">; ── once per VLOOP iter: load q[i] into V4 ──</span>
+<span class="lnum">6</span>  <span class="fn">VLDI</span> <span class="reg">V4</span>,[<span class="reg">S68</span>],#<span class="num">1</span>,#<span class="num">3</span>,#<span class="num">1</span>
+   <span class="com">; brc_b32: read 1 i32 (=4 B) at S68, broadcast to all lanes</span>
+   <span class="com">; ⇒ V4 = [1, 1]      (q_attn[0] = 1)</span>
+   <span class="com">; ⇒ S68 += 4 B       (post-incr to row i+1)</span>
+
+<span class="com">; ── PASS A: block 0 (j=0..1) ──</span>
+<span class="lnum">7</span>  <span class="fn">VLDI</span> <span class="reg">V5</span>,[<span class="reg">S10</span>],#<span class="num">0</span>,#<span class="num">0</span>,#<span class="num">0</span>
+   <span class="com">; full-VL load from S10, no advance</span>
+   <span class="com">; ⇒ V5 = [0, 1]      (k_attn block-0)</span>
+
+<span class="lnum">12</span> <span class="fn">VCMP</span>.EQ.s32 <span class="reg">P4</span>,<span class="reg">V4</span>,<span class="reg">V5</span>,<span class="reg">P1</span>
+   <span class="com">; lane 0: V4[0]==V5[0] → 1==0 → F</span>
+   <span class="com">; lane 1: V4[1]==V5[1] → 1==1 → T</span>
+   <span class="com">; ⇒ P4_block_A = [F, T]   → M[0, j=0..1]</span>
+
+<span class="com">; ── PASS B: block 1 (j=2..3) ──</span>
+<span class="com">; ★ no "VLDI V4,…" here — V4 still holds [1,1]</span>
+<span class="lnum">25</span> <span class="fn">VLDI</span> <span class="reg">V5</span>,[<span class="reg">S16</span>],#<span class="num">0</span>,#<span class="num">0</span>,#<span class="num">0</span>
+   <span class="com">; SAME REGISTER V5 — different base [S16]</span>
+   <span class="com">; ⇒ V5 = [1, 2]      (k_attn block-1)</span>
+
+<span class="lnum">29</span> <span class="fn">VCMP</span>.EQ.s32 <span class="reg">P4</span>,<span class="reg">V4</span>,<span class="reg">V5</span>,<span class="reg">P1</span>
+   <span class="com">; lane 0: V4[0]==V5[0] → 1==1 → T</span>
+   <span class="com">; lane 1: V4[1]==V5[1] → 1==2 → F</span>
+   <span class="com">; ⇒ P4_block_B = [T, F]   → M[0, j=2..3]</span>
+
+<span class="com">; Combining: row 0 of the (q_attn==k_attn) matrix</span>
+<span class="com">;          = [F, T, T, F]</span>
+<span class="com">; Matches bool walkthrough PPT slide 7, row 0. ✓</span></pre>
 
       <div class="callout">
-        <b>Why q stays the same for pass A and pass B.</b> Both passes
-        compute mask cells in <b>the same query row</b> (i=0). Block 0
-        and block 1 differ only in <i>which keys</i> they compare
-        against — the query scalar <code>q_attn[0]</code> is unchanged.
-        Reloading V4 between passes would advance <code>S68</code>
-        again (post-incr +4 B) and the value would be wrong: V4 would
-        become <code>q_attn[1]</code>, but pass B is still on row 0,
-        not row 1.
+        <b>The yellow / blue / green colors map to register state in
+        time, not separate registers.</b> Yellow V4 is one register
+        loaded once per iter (held across both passes). Blue and
+        green are both <code>V5</code> — the <i>same</i> register at
+        two different points in the iter's timeline, with different
+        UB data loaded into it (block 0's <code>[0,1]</code> for pass
+        A, then reloaded with block 1's <code>[1,2]</code> for pass B).
       </div>
     </div>
   </div>
 
-  <h3>What happens after iter 0 — and where blocks 2, 3 go</h3>
+  <h3>Building up all 4 rows — V4 advances per iter</h3>
 
   <div class="col2">
     <div>
-      <h3>Next iter advances q for the next row</h3>
-      <pre class="code code-small"><span class="com">; ITER 1 (i=1):</span>
-<span class="fn">VLDI</span> <span class="reg">V4</span>,[<span class="reg">S68</span>],#<span class="num">1</span>,#<span class="num">3</span>,#<span class="num">1</span>     <span class="com">; advance, V4 ← q_attn[1]</span>
-                                <span class="com">; S68 += 4 B again</span>
-<span class="com">; pass A: M[1, 0..3] using V4 = q[1]</span>
-<span class="com">; pass B: M[1, 4..7] using same V4 = q[1]</span></pre>
-
-      <p>So V4 advances <b>once per VLOOP iter</b> (i → i+1), shared
-      across both passes within an iter. The post-increment cadence
-      of <code>S68</code> is exactly tuned to this: one +4 B step per
-      iter, not per pass.</p>
+      <p>The VLOOP advances by post-incrementing <code>S68</code>
+      every iter, so V4's broadcast value tracks the row index
+      <code>i</code>:</p>
+      <table>
+        <tr><th>Iter</th><th>V4 = q_attn[i]</th><th>Pass A (block 0) VCMP</th><th>Pass B (block 1) VCMP</th><th>Row of B-matrix</th></tr>
+        <tr><td>i=0</td><td>[1, 1]</td><td>1==0, 1==1 → [F, T]</td><td>1==1, 1==2 → [T, F]</td><td><code>[F, T, T, F]</code></td></tr>
+        <tr><td>i=1</td><td>[1, 1]</td><td>1==0, 1==1 → [F, T]</td><td>1==1, 1==2 → [T, F]</td><td><code>[F, T, T, F]</code></td></tr>
+        <tr><td>i=2</td><td>[2, 2]</td><td>2==0, 2==1 → [F, F]</td><td>2==1, 2==2 → [F, T]</td><td><code>[F, F, F, T]</code></td></tr>
+        <tr><td>i=3</td><td>[2, 2]</td><td>2==0, 2==1 → [F, F]</td><td>2==1, 2==2 → [F, T]</td><td><code>[F, F, F, T]</code></td></tr>
+      </table>
     </div>
     <div>
-      <h3>Blocks 2 and 3 — separate launch</h3>
-      <p>The 2-pass body covers 2 K-blocks per query row. To cover
-      blocks 2 and 3, the launcher invokes the kernel a second time
-      with different base addresses ([S10]'s analog points at block
-      2's k_attn, [S16]'s analog points at block 3's). Inside that
-      second launch the same logic repeats: V4 broadcasts the same
-      row's q_attn[i] for both pass A (block 2) and pass B (block 3).</p>
-
-      <p>This is the kernel-level parallelism granularity (multi-AIV
-      / multi-launch). It's separate from the iter-level structure
-      shown here.</p>
+      <p>That gives the same 4×4 B-predicate matrix as
+      <code>mask_kernel_bool_walkthrough_ppt.html</code> slide 7:</p>
+      <pre class="code code-small" style="font-size:13px">  q_attn[i] == k_attn[j] matrix:
+  ┌───────────────────────────┐
+  │  F   T   T   F            │  i=0
+  │  F   T   T   F            │  i=1
+  │  F   F   F   T            │  i=2
+  │  F   F   F   T            │  i=3
+  └───────────────────────────┘
+     j=0 j=1 j=2 j=3
+     └──┬──┘ └──┬──┘
+       pass A  pass B
+       block 0 block 1</pre>
+      <p>Same data, same answer — just decomposed into the asm's
+      two passes per iter and four VLOOP iters per row of the
+      output tile.</p>
     </div>
   </div>
 
