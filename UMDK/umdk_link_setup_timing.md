@@ -3526,6 +3526,151 @@ The "needs imported jetty/JFR" column is universally yes because all
 verbs ride on a TP between the two endpoints, and the TP only exists
 once `urma_import_jetty` (or `_jfr`) has run.
 
+### 10.24 URMA vs RDMA verb mapping
+
+URMA borrows heavily from IB Verbs / RDMA but renames everything and
+adds/removes a few primitives. For anyone coming from RDMA, this is
+the side-by-side. Source-of-truth for URMA: `kernel/include/ub/urma/`.
+
+#### A. Object model
+
+| RDMA (IB Verbs) | URMA | Notes |
+|---|---|---|
+| QP (Queue Pair) | Jetty (DUPLEX) or JFS+JFR pair (SIMPLEX) | URMA can split a QP into separate SQ/RQ as first-class objects (JFS = Job Function Send, JFR = Job Function Receive) — IB can't |
+| SQ (Send Queue) | JFS or jetty's send half | |
+| RQ (Receive Queue) | JFR or jetty's recv half | |
+| CQ (Completion Queue) | JFC (Job Function Completion) | |
+| Completion event channel | JFCE | |
+| MR (Memory Region) | Seg (Segment) | Identical semantics: registered, pinned, token-protected, used as one-sided target |
+| MW (Memory Window) | **none** | URMA has no Memory Window primitive. Dynamic access control is via seg tokens alone. |
+| PD (Protection Domain) | **implicit in context** | URMA folds PD into the context object; no separate handle to allocate |
+| AH (Address Handle) | **implicit in imported jetty** | URMA bundles destination addressing into the import_jetty result |
+| GID (128-bit Global ID) | EID (Endpoint ID, 16 bytes) | Same width (`UBCORE_EID_SIZE = 16` per `ubcore_types.h:49`) |
+| SRQ (Shared Receive Queue) | JFR (when shared across jettys) | JFR is more first-class than SRQ — usable standalone, not always attached to a QP |
+| QP1 (SMI/GMI for MADs) | the "MAD jetty" inside ubcm | Both put CM traffic on a privileged QP-like object; URMA's MAD path is implemented over the same data-path verbs (see `ubmad_post_send` → `ubcore_post_jetty_send_wr` in §10.22.A) |
+| RDMA-CM | ub_cm + ubmad | Same role: REQ/REP/RTU exchange to establish a TP. URMA's version is `send_jetty_info_req` / `ubcore_exchange_tp_info` (see §10.16) |
+| Subnet Manager (SM) | UVS (UB Virtual Switch) | URMA's fabric admin daemon; rough analog |
+
+#### B. Transport modes
+
+`kernel/include/ub/urma/ubcore_types.h:380–382`:
+
+```c
+UBCORE_TP_RM = 0x1,        /* Reliable message */
+UBCORE_TP_RC = 0x1 << 1,   /* Reliable connection */
+UBCORE_TP_UM = 0x1 << 2,   /* Unreliable message */
+```
+
+Plus `ubcore_tp_type` (`:1495`): `UBCORE_RTP` (regular data TP),
+`UBCORE_CTP` (control TP — what `ubmgr_ping` creates), `UBCORE_UTP`
+(unreliable TP).
+
+| RDMA | URMA | Notes |
+|---|---|---|
+| RC (Reliable Connection) | RC | One-to-one, ordered, ack'd. Both maintain per-pair state. |
+| UC (Unreliable Connection) | **none** | URMA dropped UC; rarely used in practice anyway |
+| UD (Unreliable Datagram) | UM (Unreliable Message) | One-to-many, no ack, message-oriented |
+| RD (Reliable Datagram) | **RM (Reliable Message)** | RD never worked in production IB. URMA's RM is the same concept — reliable but connectionless, one-to-many — and is the **default/headline mode** for URMA. This is one of the bigger architectural wins URMA claims over IB. |
+| XRC (eXtended RC) | **none** | URMA covers the XRC use case (many clients → one server-side resource) via the JFR-as-shared-receive model |
+
+The fact that **RM is URMA's default** is a meaningful semantic
+divergence. RC requires a per-pair QP and per-pair state; RM does
+not. For server farms with N clients and M servers, RC needs N×M QPs;
+RM needs N×1 (or M×1) jettys. This is why JinDou's perftest runs
+default to `URMA_TM_RM`.
+
+#### C. Verb opcode mapping
+
+URMA opcodes from `kernel/include/ub/urma/ubcore_opcode.h:58–77`,
+RDMA WRs from `linux/include/uapi/rdma/ib_user_verbs.h`:
+
+| RDMA WR | URMA opcode | Notes |
+|---|---|---|
+| `IBV_WR_RDMA_WRITE` | `WRITE` (0x00) | identical |
+| `IBV_WR_RDMA_WRITE_WITH_IMM` | `WRITE_IMM` (0x01) | identical — 32-bit immediate piggybacked into receiver's CQE |
+| — | **`WRITE_NOTIFY` (0x02)** | URMA-only. Write + event signal **without** immediate data payload. IB makes you carry 32 bits of imm; URMA doesn't. |
+| `IBV_WR_RDMA_READ` | `READ` (0x10) | identical |
+| `IBV_WR_ATOMIC_CMP_AND_SWP` | `CAS` (0x20) | identical |
+| — | **`SWAP` (0x21)** | URMA-only. Atomic swap **without compare**. IB only has CAS. URMA gives you unconditional atomic exchange. |
+| `IBV_WR_ATOMIC_FETCH_AND_ADD` | `FADD` (0x22) | identical |
+| — | **`FSUB` (0x23)** | URMA-only (achievable via FADD + negative operand on IB; URMA gives the explicit opcode) |
+| — | **`FAND` (0x24), `FOR` (0x25), `FXOR` (0x26)** | URMA-only. Full bitwise atomic family — clear/set/toggle individual bits remotely. IB doesn't have these. |
+| `IBV_WR_SEND` | `SEND` (0x40) | identical |
+| `IBV_WR_SEND_WITH_IMM` | `SEND_IMM` (0x41) | identical |
+| `IBV_WR_SEND_WITH_INV` | `SEND_INVALIDATE` (0x42) | identical — SEND + revoke a remote token id |
+| `IBV_WR_LOCAL_INV` | (admin path, no direct WR) | URMA handles seg invalidation via destroy/unimport rather than a WR |
+| `IBV_WR_BIND_MW` | **none** | URMA has no Memory Window |
+| `IBV_WR_TSO` | **none** | URMA isn't Ethernet-based |
+| — | **`NOP` (0x51)** | URMA-only as an opcode |
+| — | **`WRITE_ATOMIC` (0x60)** | URMA-only. WRITE whose payload **arrives atomically** at the receiver (no torn buffers). IB doesn't guarantee atomicity for normal WRITE. |
+
+#### D. Where URMA diverges semantically (what URMA adds vs IB)
+
+1. **Extra atomics — full bitwise family.** `FAND/FOR/FXOR/SWAP/FSUB`
+   beyond IB's CAS+FADD. Useful for distributed bitmap operations,
+   lock-free reference counting, lock-free set/queue ops, etc.,
+   without the read-modify-write round-trip CAS would need.
+
+2. **`WRITE_NOTIFY` vs `WRITE_WITH_IMM`.** In IB you must carry 32
+   bits of immediate to trigger a receiver CQE on WRITE; URMA lets
+   you signal without data. Lighter for pure "I wrote, please react"
+   semantics.
+
+3. **`WRITE_ATOMIC` — atomic arrival.** URMA exposes atomic-arrival
+   WRITE as a distinct opcode. In IB, a multi-byte WRITE may be
+   observed as torn data by a concurrent reader on the receiver;
+   with `WRITE_ATOMIC` URMA guarantees the receiver sees the full
+   payload or none of it. Distinct from CAS-family atomics, which
+   operate on a single value.
+
+4. **RM (Reliable Message) as default.** IB never made RD work in
+   production; URMA did. Architecturally this is a big simplification
+   for N×M endpoint scenarios — no per-pair connection state, just
+   per-EID delivery.
+
+5. **JFS / JFR as first-class objects.** URMA can decouple Send and
+   Receive queues. IB only does this via SRQ which is always attached
+   to QPs. URMA's JFR is usable standalone as the receiver in a
+   many-senders-one-receiver pattern, without needing QPs around it.
+
+6. **Jetty (DUPLEX) vs JFS+JFR (SIMPLEX) per-test choice.** URMA's
+   combined SQ+RQ object (jetty) is basically a QP. The fact that you
+   can choose between DUPLEX (jetty) and SIMPLEX (JFS+JFR) per-test in
+   `urma_perftest` is a usability feature — IB makes you build a QP
+   either way.
+
+#### E. Where IB has things URMA doesn't (what URMA drops vs IB)
+
+- **UC (Unreliable Connection)** — almost no one uses it; URMA dropped it.
+- **XRC (eXtended Reliable Connection)** — URMA covers the use case via JFR-sharing.
+- **Memory Windows (MW)** — no URMA equivalent; access control is segment-token-only.
+- **TSO and other Ethernet/IP-offload opcodes** — not relevant for URMA (UB fabric, not Ethernet).
+- **`IBV_WR_LOCAL_INV` as an explicit WR** — URMA does invalidation through admin paths.
+
+#### F. TL;DR for RDMA programmers reading URMA code
+
+If you can read RDMA verb code, URMA verb code reads naturally; the
+unfamiliar parts are mostly naming. Quick mental substitution table:
+
+```
+QP    →   Jetty                 (or JFS+JFR if SIMPLEX)
+CQ    →   JFC
+MR    →   Seg
+GID   →   EID
+QP1   →   the MAD jetty
+CM    →   ubcm + ubmad
+SM    →   UVS
+RD    →   RM  (and it actually works this time)
+```
+
+The model is the same: registered memory regions accessed by remote
+handles, queue pairs with completion queues, separate CM exchange for
+connection bringup. The wins URMA claims over IB are (1) RM as a
+working production transport, (2) richer atomic ops, (3)
+atomic-arrival WRITE, and (4) optional split SQ/RQ as separate
+objects. The losses are MW, XRC, UC, and most of the IB ecosystem of
+Ethernet-bridging features.
+
 ## 11. TRACE_EVENT internals — how the macro actually works
 
 ### 11.1 Where `TRACE_EVENT` is defined
