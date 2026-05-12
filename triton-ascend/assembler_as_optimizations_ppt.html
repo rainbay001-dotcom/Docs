@@ -346,12 +346,12 @@
     <tr>
       <td class="num-right">5</td>
       <td><code>VLDI V3,[S69],#16,#0,#1</code></td>
-      <td><code>q_offset[i]</code> — per-iter advance via <code>#p=1</code> + 16-byte offset, broadcast across all lanes.</td>
+      <td><code>q_offset[:, None]</code> tile-row — <b>full-VL load</b> (<code>#dist=0</code>, 256 B), per-iter post-increment of <b>16 × 32 B = +512 B</b> on <code>S69</code> (<code>#p=1</code>). The source buffer pre-replicates each row's <code>q_offset[i]</code> scalar across the vreg lanes — V3 is <i>not</i> a broadcast load (that's V4 below).</td>
     </tr>
     <tr>
       <td class="num-right">6</td>
       <td><code>VLDI V4,[S68],#1,#3,#1</code></td>
-      <td><code>q_attn[i]</code> — same per-iter advance, brc_b32 mode (#dist=3).</td>
+      <td><code>q_attn[i]</code> — <b>brc_b32 broadcast</b> (<code>#dist=3</code>): read 1 i32 (4 B) and replicate to all 64 lanes. Per-iter post-increment of <b>1 × 4 B = +4 B</b> on <code>S68</code>.</td>
     </tr>
     <tr>
       <td class="num-right">7</td>
