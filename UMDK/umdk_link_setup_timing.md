@@ -3052,6 +3052,223 @@ non-ioctl.
 | `src/urma/tools/urma_perftest/perftest_communication.c` | TCP OOB channel — `establish_connection`, `check_remote_cfg`, `sync_time` |
 | `src/urma/tools/urma_perftest/perftest_run_test.c` | Per-API benchmark loops (`run_send_lat_*`, `run_send_bw_*`, etc.) |
 
+#### G. Stage 5 — full nested call graph of `create_duplex_ctx()`
+
+§10.21.B gave each sub-stage 5a–5i as a one-liner. This sub-section expands
+the full nested call graph so a reader can see exactly which userland
+helper calls which URMA verb, which ioctl that verb fires, and which
+kernel function the ioctl dispatches into. Source: `perftest_resources.c`
+in `/Volumes/KernelDev/umdk/src/urma/tools/urma_perftest/` as of
+2026-05-12.
+
+Legend:
+- **★** = crosses the userspace→kernel boundary (ioctl or syscall)
+- `[opt FLAG]` = conditional branch on CLI flag
+- `:NNN` = file:line of the function definition in `perftest_resources.c`
+  unless otherwise noted
+
+```
+create_duplex_ctx (:2198)
+│
+├── 5a  init_device (:150)                                  [≈ 1-2 ms]
+│   ├── urma_init()                                          (libc-style URMA init, no ioctl)
+│   ├── urma_register_log_func()                             [opt --enable_stdout]
+│   ├── urma_get_device_by_name(cfg->dev_name)               (parses /sys/class/ub/)
+│   ├── urma_query_device(urma_dev, &ctx->dev_attr)          (no kernel transition; uses cached attrs)
+│   ├── urma_create_context(urma_dev, eid_idx)            ★  → UBURMA_CMD_CREATE_CTX
+│   │   └── kernel: uburma allocates context, maps doorbell/CQ pages
+│   ├── [if dev->name starts "bonding"]
+│   │   └── urma_user_ctl(BONDP_USER_CTL_SET_BONDING_MODE) ★  → UBURMA_CMD_USER_CTL
+│   └── check_dev_cap(ctx, cfg)                              (validates against ctx->dev_attr.dev_cap)
+│
+├── 5b  create_duplex_jettys (:658)                          [≈ < 1 ms total]
+│   ├── create_jfc (:338)
+│   │   ├── alloc_jfc()                                       (calloc ctx->jfc_s, jfc_r, jfce_s, jfce_r arrays)
+│   │   └── for i in 0..cfg->jettys:
+│   │       ├── [if --use_jfce]
+│   │       │   ├── ctx->jfce_s[i] = urma_create_jfce()    ★  → UBURMA_CMD_CREATE_JFCE
+│   │       │   └── ctx->jfce_r[i] = urma_create_jfce()    ★  → UBURMA_CMD_CREATE_JFCE
+│   │       ├── ctx->jfc_s[i] = urma_create_jfc(jfc_cfg)   ★  → UBURMA_CMD_CREATE_JFC   (tx CQ)
+│   │       └── ctx->jfc_r[i] = urma_create_jfc(jfc_cfg)   ★  → UBURMA_CMD_CREATE_JFC   (rx CQ)
+│   │
+│   └── create_jetty (:564)
+│       ├── fill_jfs_cfg(...)                                 (pure userland — depth, max_sge, inline_size)
+│       ├── fill_jfr_cfg(...)                                 (pure userland)
+│       ├── [if cfg->share_jfr]
+│       │   └── for j in 0..jfr_num:
+│       │       └── ctx->jfr[j] = urma_create_jfr(jfr_cfg) ★  → UBURMA_CMD_CREATE_JFR
+│       └── for i in 0..cfg->jettys:
+│           └── ctx->jetty[i] = urma_create_jetty(jetty_cfg) ★ → UBURMA_CMD_CREATE_JETTY
+│
+├── 5c  register_mem (:743)                                  [≈ < 1 ms]
+│   ├── for i in 0..cfg->jettys:
+│   │   └── ctx->local_buf[i] = [huge] ub_hugemalloc() OR memalign()
+│   │                                                          (libc/kernel mmap, no URMA ioctl yet)
+│   ├── [if urma_ctx->dev->type == URMA_TRANSPORT_UB]
+│   │   └── for k in 0..cfg->jettys:
+│   │       └── ctx->token_id[k] = urma_alloc_token_id()    ★  → UBURMA_CMD_ALLOC_TOKEN_ID
+│   └── for j in 0..cfg->jettys:
+│       └── ctx->local_tseg[j] = urma_register_seg(seg_cfg) ★  → UBURMA_CMD_REGISTER_SEG
+│           └── kernel: pins pages, builds IOMMU mapping, returns token+ukey
+│
+├── 5d  create_credit_ctx (opt --enable_credit)              [≈ < 1 ms]
+│   ├── alloc credit-seg buffers + token_id (same shape as 5c)
+│   └── urma_register_seg × cfg->jettys                    ★  → REGISTER_SEG
+│
+├── 5e  exchange_connection_info (:1177)                     [≈ few ms — pure TCP]
+│   │       NO URMA ioctls in this entire sub-tree.
+│   │       All boundary crossings are TCP socket I/O.
+│   │
+│   ├── exchange_seg_info (:882)
+│   │   ├── alloc local_seg_buf + remote_seg_buf
+│   │   ├── pack each ctx->local_tseg[i]->seg into local_seg_buf[i]
+│   │   └── [if pair_flag] for i in 0..pair_num: sock_sync_data(per-pair)
+│   │       else            sock_sync_data(batch all)
+│   │
+│   ├── exchange_jetty_id (:926)
+│   │   ├── pack each ctx->jetty[i]->jetty_id into local_jetty_id_buf[i]
+│   │   └── sock_sync_data(urma_jetty_id_t buf) — TCP exchange
+│   │
+│   ├── exchange_credit_info (:976)  [opt --enable_credit]
+│   │   └── sock_sync_data of credit-seg metadata
+│   │
+│   ├── create_tp_info (:1027)         [opt --tp_aware]
+│   │   └── pre-allocates TP handles + PSN for tp-aware path
+│   │
+│   └── exchange_tp_info (:1134)       [opt --tp_aware]
+│       └── sock_sync_data of TP handles between peers
+│
+├── 5f  import_seg_for_duplex (:1304)                        [≈ 5-6 ms — first CM exchange]
+│   ├── [opt --enable_credit]
+│   │   └── for i in 0..ctx->jetty_num:
+│   │       └── urma_import_seg(remote_credit_seg[i])    ★  → UBURMA_CMD_IMPORT_SEG
+│   └── for i in 0..ctx->jetty_num:
+│       └── ctx->import_tseg[i] = urma_import_seg(remote_seg[i])   ★ → UBURMA_CMD_IMPORT_SEG
+│           └── kernel: ubcore_import_seg →
+│               ├── CM-MAD exchange to peer (one RPC)
+│               ├── may fire ubcore_get_main_primary_eid topo scan once
+│               └── installs the remote_seg's ukey+token in local UB tables
+│
+├── 5g  connect_jetty (:1773)  ★★★ THE LINK SETUP STAGE ★★★  [≈ 11 ms warm / 130 ms cold]
+│   │
+│   ├── ctx->import_tjetty = calloc(jetty_num, sizeof(...))
+│   │
+│   ├── BRANCH by config:
+│   │   │
+│   │   ├── [opt --enable_async_import]
+│   │   │   └── connect_jetty_async (around :1700)
+│   │   │       └── batched urma_import_jetty_async + wait notifier
+│   │   │
+│   │   ├── [opt --tp_aware] connect_jetty_tp_aware (:1574)
+│   │   │   └── for i in 0..jetty_num:
+│   │   │       ├── pack urma_import_jfr_ex_cfg_t with TP handle + PSN
+│   │   │       ├── urma_import_jetty_ex(rjetty, ex_cfg)  ★  → IMPORT_JETTY (ex variant)
+│   │   │       └── [if RC] urma_bind_jetty_ex          ★  → BIND_JETTY (ex variant)
+│   │   │
+│   │   └── default: connect_jetty_default (:1510)
+│   │       └── for i in 0..ctx->jetty_num:
+│   │           │
+│   │           ├── build rjetty struct (jetty_id, trans_mode, tp_type=CTP/RTP/UTP)
+│   │           ├── [if RC && OT] rjetty.flag.bs.share_tp = 1
+│   │           ├── [if dev->name starts "bonding" && RM]
+│   │           │       wrap rjetty in bondp_rjetty_t (bondp extension)
+│   │           │
+│   │           ├── ctx->import_tjetty[i] = urma_import_jetty(rjetty, token) ★ → UBURMA_CMD_IMPORT_JETTY
+│   │           │   └── kernel: ubcore_import_jetty — the 5-phase compat path
+│   │           │       (§10.16 / §10.18 / §10.19 / §10.22)
+│   │           │       │
+│   │           │       ├── ubcore_get_main_primary_eid (topo_info.c:452)
+│   │           │       │   └── linear is_eid_match × ~117k per invocation
+│   │           │       │       (no hash, no cache; 5605 = node_num(22) × DEV_NUM(256))
+│   │           │       │   ★ Called ~8× per setup, ~4.9 ms each
+│   │           │       │   ★ DOMINANT COST: ~39 ms CPU budget total (§10.19)
+│   │           │       │
+│   │           │       ├── ubmad_post_send (ubmad_datapath.c:817)
+│   │           │       │   └── CM-MAD send to peer
+│   │           │       │       (topo scan fires INSIDE this function before
+│   │           │       │       the packet leaves the wire — that's why what
+│   │           │       │       looks like CM-RTT is mostly CPU)
+│   │           │       │
+│   │           │       ├── ubcore_get_tp_list
+│   │           │       │   ├── synchronous urma_pe-* context (stage 5g sub-phase 1)
+│   │           │       │   └── concurrent kworker-* context (off critical path)
+│   │           │       │
+│   │           │       ├── ubcore_session_wait
+│   │           │       │   └── the REAL CM reply wait, 0.45-6 ms variable
+│   │           │       │
+│   │           │       ├── udma_ctrlq_{create,destroy,modify,...} family
+│   │           │       │   └── fast firmware cmds in kworker, off critical path
+│   │           │       │
+│   │           │       └── ubcore_active_tp (sub-phase 5, ~200 µs)
+│   │           │
+│   │           ├── [if cfg->trans_mode == URMA_TM_RC]
+│   │           │   └── urma_bind_jetty(local_jetty, import_tjetty)  ★ → UBURMA_CMD_BIND_JETTY
+│   │           │       └── installs RC pairing; idempotent (returns URMA_EEXIST on re-bind)
+│   │           │
+│   │           ├── [if RM mode && dev->type != UB]
+│   │           │   └── urma_advise_jetty(local, import_tjetty)      ★ → UBURMA_CMD_ADVISE_JETTY
+│   │           │
+│   │           └── [if --pair_flag] sleep(1)
+│   │
+│   └── [error path] disconnect_jetty_default() — unimports any that succeeded
+│
+├── 5h  modify_user_tp (opt --enable_user_tp)
+│   └── urma_modify_tp                                        ★ → UBURMA_CMD_MODIFY_TP
+│       (UB device does NOT support user_tp — init_device errors out if both set)
+│
+└── 5i  create_run_ctx (:1799)                              [≈ µs, pure userland]
+    ├── calloc ctx->run_ctx.tposted[]                         (cycles_num * uint64_t)
+    ├── calloc ctx->run_ctx.tcompleted[]                      (cycles_num * uint64_t)
+    ├── calloc ctx->run_ctx.scnt[]                            (cfg->jettys * uint64_t)
+    └── calloc ctx->run_ctx.ccnt[]                            (cfg->jettys * uint64_t)
+```
+
+##### G.1 Per-stage ioctl tally (one `urma_perftest send_lat -n 5 -s 2`)
+
+For `cfg->jettys = 1` (default) and `--enable_credit / --enable_user_tp / --tp_aware / --enable_async_import` all OFF, the steady-state warm-state call counts are:
+
+| Sub-stage | ioctls fired | Wall-clock (warm) |
+|---|---|---|
+| 5a `init_device` | 1× CREATE_CTX | ~1-2 ms |
+| 5b `create_duplex_jettys` | 2× CREATE_JFC + 1× CREATE_JETTY = **3** | < 1 ms |
+| 5c `register_mem` | 1× ALLOC_TOKEN_ID + 1× REGISTER_SEG = **2** | < 1 ms |
+| 5d `create_credit_ctx` | 0 (disabled) | — |
+| 5e `exchange_connection_info` | 0 (TCP only) | ~few ms (network) |
+| 5f `import_seg_for_duplex` | **1× IMPORT_SEG** (one CM exchange + topo scan) | ~5-6 ms |
+| **5g `connect_jetty_default`** | **1× IMPORT_JETTY** (the 39 ms CPU + CM exchange + bind) | **~11 ms warm** |
+| 5h `modify_user_tp` | 0 (disabled) | — |
+| 5i `create_run_ctx` | 0 | µs |
+| **Total** | **~7 ioctls** | **~17-20 ms** (dominated by 5g) |
+
+The link-setup investigation has been focused almost entirely on the
+single `IMPORT_JETTY` ioctl fired by 5g's `urma_import_jetty()` call,
+and specifically on the `ubcore_get_main_primary_eid` topo scan that
+fires ~8× inside the kernel-side `ubcore_import_jetty` 5-phase compat
+path.
+
+##### G.2 Where each function-pointer dispatch is wired
+
+`urma_import_jetty()` (userspace) doesn't directly call `ubcore_import_jetty()` (kernel).
+The dispatch path is:
+
+```
+urma_import_jetty (libuburma.so)
+  └── ioctl(fd, UBURMA_CMD_IMPORT_JETTY, &urma_cmd_import_jetty)
+      └── kernel: uburma_cmd_import_jetty (uburma/uburma_cmd.c)
+          └── ubcore_import_jetty (drivers/ub/urma/ubcore/ubcore_jetty.c)
+              ├── 5-phase compat path (§10.16)
+              ├── for each phase:
+              │   └── ubmad_post_send → ubcore_get_main_primary_eid ★
+              ├── ubcore_session_wait for CM reply
+              └── ubcore_active_tp
+```
+
+The 5g call graph above shows the userspace side; §10.16 / §10.18 /
+§10.19 / §10.22 cover the kernel side once `UBURMA_CMD_IMPORT_JETTY` is
+inside ubcore. Together they give end-to-end visibility from
+`create_duplex_ctx()` line 2226 (`connect_jetty()` call) down to the
+117k-element scalar compare loop that produces the 39 ms cost.
+
 ### 10.22 Trace-leaf to stage mapping — where each commonly-seen kernel function fits in `urma_perftest`
 
 §10.21 mapped userland stages to kernel ioctls. This section does the

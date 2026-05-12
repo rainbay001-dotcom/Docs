@@ -178,7 +178,7 @@
     <code>a5_aiv_vector_parallelism.html</code>.<br>
     Source: <code>helloworld.py</code> from Triton-Ascend examples.
   </div>
-  <div class="slide-number">1 / 14</div>
+  <div class="slide-number">1 / 15</div>
 </div>
 
 <!-- =================================================================== -->
@@ -210,7 +210,7 @@
     (boolean) until the very end of the surrounding kernel.
   </div>
 
-  <div class="slide-number">2 / 14</div>
+  <div class="slide-number">2 / 15</div>
 </div>
 
 <!-- =================================================================== -->
@@ -248,7 +248,7 @@
         before storing back to GM.</li>
   </ul>
 
-  <div class="slide-number">3 / 14</div>
+  <div class="slide-number">3 / 15</div>
 </div>
 
 <!-- =================================================================== -->
@@ -327,7 +327,7 @@
     </div>
   </div>
 
-  <div class="slide-number">4 / 14</div>
+  <div class="slide-number">4 / 15</div>
 </div>
 
 <!-- =================================================================== -->
@@ -366,14 +366,97 @@
     e.g. <code>≤</code> or <code>==</code>).
   </div>
 
-  <div class="slide-number">5 / 14</div>
+  <div class="slide-number">5 / 15</div>
 </div>
 
 <!-- =================================================================== -->
-<!-- SLIDE 6 — STEP 1: triu_causal                                        -->
+<!-- SLIDE 6 — BROADCASTING EXPANSION (NEW) -->
 <!-- =================================================================== -->
 <div class="slide">
-  <div class="slide-title-bar"><h2>5. Step 1 — <code>triu_causal = (q_off[:, None] &lt;= k_off[None, :])</code></h2></div>
+  <div class="slide-title-bar"><h2>5. Broadcasting expansion — how <code>[:, None]</code> and <code>[None, :]</code> become 4×4 tiles</h2></div>
+
+  <p>Every Step in the Boolean expression (next 4 slides) follows the same pattern:
+  a 1D query-side array meets a 1D key-side array via <code>[:, None]</code> /
+  <code>[None, :]</code>, and broadcast rules expand them to a full 4×4 tile.
+  Walk through the expansion once here, in detail, so the per-Step slides
+  can focus on the comparison logic.</p>
+
+  <p><b>Step 0 — what <code>None</code> actually does.</b>
+  <code>None</code> in a Triton/NumPy index slot inserts a length-1 axis at
+  that position. <code>q[:, None]</code> turns shape <code>(4,)</code> into
+  <code>(4, 1)</code> — a column. <code>k[None, :]</code> turns
+  <code>(4,)</code> into <code>(1, 4)</code> — a row.</p>
+
+  <div class="col2">
+    <div>
+      <p class="label"><b>q_offset[:, None]</b> · <code>(4,)</code> → <code>(4, 1)</code> → <code>(4, 4)</code></p>
+      <pre class="code" style="background:#fff8e1; color:#5d4037; border-left:3px solid #c9a227; font-size:12.5px; padding:10px"><span class="com">q_offset = [0, 1, 2, 3]                # 1D, shape (4,)</span>
+
+<span class="com"># [:, None] inserts length-1 axis at position 1:</span>
+q_offset[:, None] = [                  <span class="com"># column, shape (4, 1)</span>
+  [0],
+  [1],
+  [2],
+  [3],
+]
+
+<span class="com"># broadcast (4, 1) → (4, 4)</span>
+<span class="com"># — replicate each column 4× across:</span>
+q_expanded = [
+  [0, 0, 0, 0],   <span class="com"># i=0: all q_off[0]=0</span>
+  [1, 1, 1, 1],   <span class="com"># i=1: all q_off[1]=1</span>
+  [2, 2, 2, 2],   <span class="com"># i=2: all q_off[2]=2</span>
+  [3, 3, 3, 3],   <span class="com"># i=3: all q_off[3]=3</span>
+]</pre>
+      <p style="font-size:13px; color:#bf360c; margin-top:4px"><b>Row-direction varies, column-direction is constant within each row.</b></p>
+    </div>
+
+    <div>
+      <p class="label"><b>k_offset[None, :]</b> · <code>(4,)</code> → <code>(1, 4)</code> → <code>(4, 4)</code></p>
+      <pre class="code" style="background:#e3f2fd; color:#0d47a1; border-left:3px solid #1976d2; font-size:12.5px; padding:10px"><span class="com">k_offset = [0, 1, 2, 3]                # 1D, shape (4,)</span>
+
+<span class="com"># [None, :] inserts length-1 axis at position 0:</span>
+k_offset[None, :] = [                  <span class="com"># row, shape (1, 4)</span>
+  [0, 1, 2, 3],
+]
+
+<span class="com"># broadcast (1, 4) → (4, 4)</span>
+<span class="com"># — replicate the single row 4× down:</span>
+k_expanded = [
+  [0, 1, 2, 3],   <span class="com"># i=0: full k_off[0..3]</span>
+  [0, 1, 2, 3],   <span class="com"># i=1: same k_off[0..3]</span>
+  [0, 1, 2, 3],   <span class="com"># i=2: same k_off[0..3]</span>
+  [0, 1, 2, 3],   <span class="com"># i=3: same k_off[0..3]</span>
+]</pre>
+      <p style="font-size:13px; color:#0d47a1; margin-top:4px"><b>Each row is identical; row index does NOT change the values.</b></p>
+    </div>
+  </div>
+
+  <div class="callout" style="margin-top:14px">
+    <b>The broadcast rule.</b> When two arrays meet in an elementwise op,
+    sizes are aligned from the right. Length-1 dimensions are <i>stretched</i>
+    by replication to match the other operand. Here <code>(4, 1)</code> meets
+    <code>(1, 4)</code> → both become <code>(4, 4)</code>. <i>No data is
+    actually duplicated in memory — broadcasting is purely a shape contract.</i>
+  </div>
+
+  <p style="margin-top:14px"><b>What this means for the Steps coming up.</b>
+  Steps 1–4 each compute an elementwise <code>op</code> between
+  <code>q_expanded</code> and <code>k_expanded</code> (with one operator
+  per step). Cell <code>(i, j)</code> of the result is just
+  <code>q_expanded[i, j]  op  k_expanded[i, j]</code>, which reduces to
+  <code>q_X[i]  op  k_X[j]</code> because of how the broadcast filled the
+  tiles. The next slide walks Step 1: <code>q_off[i] ≤ k_off[j]</code>
+  (the <i>triu_causal</i> mask).</p>
+
+  <div class="slide-number">6 / 15</div>
+</div>
+
+<!-- =================================================================== -->
+<!-- SLIDE 7 — STEP 1: triu_causal                                        -->
+<!-- =================================================================== -->
+<div class="slide">
+  <div class="slide-title-bar"><h2>6. Step 1 — <code>triu_causal = (q_off[:, None] &lt;= k_off[None, :])</code></h2></div>
 
   <div class="col2">
     <div>
@@ -414,14 +497,14 @@
     </div>
   </div>
 
-  <div class="slide-number">6 / 14</div>
+  <div class="slide-number">7 / 15</div>
 </div>
 
 <!-- =================================================================== -->
 <!-- SLIDE 7 — STEP 2: q_attn == k_attn                                   -->
 <!-- =================================================================== -->
 <div class="slide">
-  <div class="slide-title-bar"><h2>6. Step 2 — <code>q_attn[:, None] == k_attn[None, :]</code></h2></div>
+  <div class="slide-title-bar"><h2>7. Step 2 — <code>q_attn[:, None] == k_attn[None, :]</code></h2></div>
 
   <div class="col2">
     <div>
@@ -459,14 +542,14 @@
     </div>
   </div>
 
-  <div class="slide-number">7 / 14</div>
+  <div class="slide-number">8 / 15</div>
 </div>
 
 <!-- =================================================================== -->
 <!-- SLIDE 8 — STEP 3: k_attn == 0                                        -->
 <!-- =================================================================== -->
 <div class="slide">
-  <div class="slide-title-bar"><h2>7. Step 3 — <code>k_attn[None, :] == 0</code> (wildcard keys)</h2></div>
+  <div class="slide-title-bar"><h2>8. Step 3 — <code>k_attn[None, :] == 0</code> (wildcard keys)</h2></div>
 
   <div class="col2">
     <div>
@@ -503,14 +586,14 @@
     </div>
   </div>
 
-  <div class="slide-number">8 / 14</div>
+  <div class="slide-number">9 / 15</div>
 </div>
 
 <!-- =================================================================== -->
 <!-- SLIDE 9 — STEP 4: q_off == k_off                                     -->
 <!-- =================================================================== -->
 <div class="slide">
-  <div class="slide-title-bar"><h2>8. Step 4 — <code>q_off[:, None] == k_off[None, :]</code> (diagonal backstop)</h2></div>
+  <div class="slide-title-bar"><h2>9. Step 4 — <code>q_off[:, None] == k_off[None, :]</code> (diagonal backstop)</h2></div>
 
   <div class="col2">
     <div>
@@ -554,14 +637,14 @@
     </div>
   </div>
 
-  <div class="slide-number">9 / 14</div>
+  <div class="slide-number">10 / 15</div>
 </div>
 
 <!-- =================================================================== -->
 <!-- SLIDE 10 — STEP 5: COMBINE                                           -->
 <!-- =================================================================== -->
 <div class="slide">
-  <div class="slide-title-bar"><h2>9. Step 5 — Combine via the Boolean expression</h2></div>
+  <div class="slide-title-bar"><h2>10. Step 5 — Combine via the Boolean expression</h2></div>
 
   <p>The four intermediate matrices from slides 6–9 feed the
   <code>OR / AND / OR</code> tree.</p>
@@ -613,14 +696,14 @@
     row 2 is <code>F F T T</code>.
   </div>
 
-  <div class="slide-number">10 / 14</div>
+  <div class="slide-number">11 / 15</div>
 </div>
 
 <!-- =================================================================== -->
 <!-- SLIDE 11 — FINAL MASK + tl.where                                     -->
 <!-- =================================================================== -->
 <div class="slide">
-  <div class="slide-title-bar"><h2>10. The final <code>mask</code> matrix (i1) and the i8 output</h2></div>
+  <div class="slide-title-bar"><h2>11. The final <code>mask</code> matrix (i1) and the i8 output</h2></div>
 
   <div class="col2">
     <div>
@@ -662,14 +745,14 @@
     arithmetic, producing far more vector ops.
   </div>
 
-  <div class="slide-number">11 / 14</div>
+  <div class="slide-number">12 / 15</div>
 </div>
 
 <!-- =================================================================== -->
 <!-- SLIDE 12 — VISUAL FINAL MASK INTUITION                               -->
 <!-- =================================================================== -->
 <div class="slide">
-  <div class="slide-title-bar"><h2>11. Reading the final mask — what got selected?</h2></div>
+  <div class="slide-title-bar"><h2>12. Reading the final mask — what got selected?</h2></div>
 
   <div class="col2">
     <div>
@@ -736,14 +819,14 @@
     </div>
   </div>
 
-  <div class="slide-number">12 / 14</div>
+  <div class="slide-number">13 / 15</div>
 </div>
 
 <!-- =================================================================== -->
 <!-- SLIDE 13 — HOW IT MAPS TO HARDWARE                                   -->
 <!-- =================================================================== -->
 <div class="slide">
-  <div class="slide-title-bar"><h2>12. How it maps to A5 (351x) hardware — one VLOOP iter</h2></div>
+  <div class="slide-title-bar"><h2>13. How it maps to A5 (351x) hardware — one VLOOP iter</h2></div>
 
   <p>Each row of the M×N mask becomes one iteration of a 35-instruction
   hardware loop body. The 5 Triton-level comparisons collapse into
@@ -777,14 +860,14 @@ VSTI V2,[S67],#16,#2,P1,#1     <span class="com">; store row back to UB (later M
     §5 for the dual-issue back-end details.
   </div>
 
-  <div class="slide-number">13 / 14</div>
+  <div class="slide-number">14 / 15</div>
 </div>
 
 <!-- =================================================================== -->
 <!-- SLIDE 14 — SUMMARY                                                   -->
 <!-- =================================================================== -->
 <div class="slide">
-  <div class="slide-title-bar"><h2>13. Summary</h2></div>
+  <div class="slide-title-bar"><h2>14. Summary</h2></div>
 
   <div class="col2">
     <div>
@@ -834,7 +917,7 @@ VSTI V2,[S67],#16,#2,P1,#1     <span class="com">; store row back to UB (later M
     </div>
   </div>
 
-  <div class="slide-number">14 / 14</div>
+  <div class="slide-number">15 / 15</div>
 </div>
 
 </body>
