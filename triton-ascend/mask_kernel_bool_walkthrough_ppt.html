@@ -1,0 +1,841 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Bool mask_fn — Triton code walkthrough</title>
+<style>
+  :root {
+    --bg: #f8fafd;
+    --slide-bg: #ffffff;
+    --primary: #0d47a1;
+    --primary-light: #1565c0;
+    --accent: #e65100;
+    --true: #c8e6c9;
+    --true-border: #2e7d32;
+    --false: #ffcdd2;
+    --false-border: #c62828;
+    --highlight: #fff9c4;
+  }
+  * { box-sizing: border-box; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    margin: 0;
+    background: var(--bg);
+    color: #222;
+    line-height: 1.5;
+  }
+  .slide {
+    width: 1280px;
+    min-height: 720px;
+    margin: 30px auto;
+    padding: 60px 80px;
+    background: var(--slide-bg);
+    box-shadow: 0 4px 20px rgba(0,0,0,0.08);
+    border-radius: 8px;
+    position: relative;
+  }
+  .slide-number {
+    position: absolute;
+    bottom: 18px;
+    right: 28px;
+    font-size: 14px;
+    color: #888;
+  }
+  .slide-title-bar {
+    border-bottom: 3px solid var(--primary);
+    padding-bottom: 6px;
+    margin-bottom: 24px;
+  }
+  h1 { color: var(--primary); margin: 0; font-size: 36px; }
+  h2 { color: var(--primary); margin: 0; font-size: 28px; }
+  h3 { color: var(--primary-light); margin-top: 0; font-size: 20px; }
+  .subtitle { color: #555; font-size: 18px; margin-top: 6px; }
+  .cover {
+    text-align: center;
+    padding-top: 200px;
+  }
+  .cover h1 { font-size: 52px; border: none; }
+  .cover .subtitle { font-size: 22px; margin-top: 12px; }
+  .cover .meta { margin-top: 80px; color: #777; font-size: 14px; }
+  pre.code {
+    background: #1e293b;
+    color: #e2e8f0;
+    padding: 18px 22px;
+    border-radius: 6px;
+    font-family: "SF Mono", Menlo, Consolas, monospace;
+    font-size: 15px;
+    line-height: 1.45;
+    overflow-x: auto;
+  }
+  .kw { color: #c084fc; }
+  .fn { color: #60a5fa; }
+  .str { color: #facc15; }
+  .num { color: #34d399; }
+  .com { color: #94a3b8; font-style: italic; }
+  .anno { color: #f87171; font-weight: 600; }
+  .col2 {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 30px;
+    align-items: start;
+  }
+  .col3 {
+    display: grid;
+    grid-template-columns: 1fr 1fr 1fr;
+    gap: 20px;
+    align-items: start;
+  }
+  table.matrix {
+    border-collapse: collapse;
+    margin: 8px 0;
+    font-family: "SF Mono", Menlo, Consolas, monospace;
+    font-size: 14px;
+  }
+  table.matrix td {
+    width: 36px;
+    height: 36px;
+    text-align: center;
+    border: 1px solid #ccc;
+    background: #fafafa;
+  }
+  table.matrix td.t {
+    background: var(--true);
+    border-color: var(--true-border);
+    color: var(--true-border);
+    font-weight: 600;
+  }
+  table.matrix td.f {
+    background: var(--false);
+    border-color: var(--false-border);
+    color: var(--false-border);
+  }
+  table.matrix td.hdr {
+    background: #e3f2fd;
+    color: var(--primary);
+    font-weight: 600;
+    border-color: #90caf9;
+  }
+  table.vec {
+    border-collapse: collapse;
+    margin: 8px 0;
+    font-family: "SF Mono", Menlo, Consolas, monospace;
+    font-size: 14px;
+  }
+  table.vec td {
+    width: 36px;
+    height: 36px;
+    text-align: center;
+    border: 1px solid #ccc;
+    background: #f0f4f8;
+    color: var(--primary);
+    font-weight: 600;
+  }
+  .label {
+    font-family: "SF Mono", Menlo, Consolas, monospace;
+    font-size: 13px;
+    color: #555;
+    margin-top: 4px;
+  }
+  .expr {
+    font-family: "SF Mono", Menlo, Consolas, monospace;
+    font-size: 16px;
+    background: var(--highlight);
+    padding: 8px 14px;
+    border-radius: 5px;
+    border-left: 4px solid #fbc02d;
+    display: inline-block;
+    margin: 10px 0;
+  }
+  .arrow { font-size: 24px; color: var(--accent); padding: 0 8px; }
+  .callout {
+    background: #e3f2fd;
+    border-left: 4px solid var(--primary);
+    padding: 10px 16px;
+    border-radius: 4px;
+    margin: 16px 0;
+    font-size: 15px;
+  }
+  ul.tight { margin: 8px 0; padding-left: 24px; }
+  ul.tight li { margin: 4px 0; }
+  .legend { font-size: 13px; color: #555; margin-top: 6px; }
+  .legend .box { display: inline-block; width: 14px; height: 14px; border-radius: 2px; margin: 0 4px -2px 12px; }
+  @media print {
+    body { background: white; }
+    .slide { page-break-after: always; margin: 0; box-shadow: none; }
+  }
+</style>
+</head>
+<body>
+
+<!-- =================================================================== -->
+<!-- SLIDE 1 — COVER                                                     -->
+<!-- =================================================================== -->
+<div class="slide cover">
+  <h1>Bool <code>mask_fn</code></h1>
+  <div class="subtitle">Triton-Ascend causal-attention mask kernel — code logic with a 4×4 worked example</div>
+  <div class="meta">
+    Companion to <code>a5_pto_bool_vloop_walkthrough.md</code> §3 and
+    <code>a5_aiv_vector_parallelism.html</code>.<br>
+    Source: <code>helloworld.py</code> from Triton-Ascend examples.
+  </div>
+  <div class="slide-number">1 / 14</div>
+</div>
+
+<!-- =================================================================== -->
+<!-- SLIDE 2 — ORIGINAL mask_fn SOURCE                                   -->
+<!-- =================================================================== -->
+<div class="slide">
+  <div class="slide-title-bar"><h2>1. The original code — <code>mask_fn</code> helper</h2></div>
+
+  <p>This is the pure function under analysis. It takes four input arrays
+  (already-computed) and one compile-time constant, and returns a
+  Boolean mask. No I/O, no <code>tl.load</code> / <code>tl.store</code>,
+  no <code>tl.program_id</code> — just elementwise arithmetic.</p>
+
+  <pre class="code"><span class="kw">@triton.jit</span>
+<span class="kw">def</span> <span class="fn">mask_fn</span>(q_attn_arg, k_attn_arg, q_offset, k_offset, TYPE: tl.constexpr):
+    <span class="kw">if</span> TYPE == <span class="num">1</span>:
+        triu_causal = (q_offset[:, <span class="kw">None</span>] &lt;= k_offset[<span class="kw">None</span>, :])
+        <span class="kw">return</span> ((triu_causal &amp; ((q_attn_arg[:, <span class="kw">None</span>] == k_attn_arg[<span class="kw">None</span>, :]) |
+                                (k_attn_arg[<span class="kw">None</span>, :] == <span class="num">0</span>))) |
+                (q_offset[:, <span class="kw">None</span>] == k_offset[<span class="kw">None</span>, :]))
+    <span class="kw">if</span> TYPE == <span class="num">2</span>:
+        <span class="com"># ... different mask shape, not covered here ...</span>
+        <span class="kw">pass</span></pre>
+
+  <div class="callout">
+    <b>Bool variant</b> = <code>TYPE == 1</code>: produces an upper-triangular
+    causal mask with two side-channel exceptions (matching <i>attention groups</i>
+    and a "zero-group" wildcard). All operations stay in <code>i1</code>
+    (boolean) until the very end of the surrounding kernel.
+  </div>
+
+  <div class="slide-number">2 / 14</div>
+</div>
+
+<!-- =================================================================== -->
+<!-- SLIDE 3 — THE LAUNCHER WRAPPER                                       -->
+<!-- =================================================================== -->
+<div class="slide">
+  <div class="slide-title-bar"><h2>2. The kernel that calls <code>mask_fn</code></h2></div>
+
+  <p>Camodel needs a runnable kernel surface (loads + stores). The
+  launcher wraps <code>mask_fn</code> and supplies real GM pointers:</p>
+
+  <pre class="code"><span class="kw">@triton.jit</span>
+<span class="kw">def</span> <span class="fn">mask_kernel</span>(
+    q_attn_ptr, k_attn_ptr, q_off_ptr, k_off_ptr, out_ptr,
+    M: tl.constexpr, N: tl.constexpr, TYPE: tl.constexpr,
+):
+    q_off  = tl.<span class="fn">load</span>(q_off_ptr  + tl.<span class="fn">arange</span>(<span class="num">0</span>, M))         <span class="com"># shape: (M,)</span>
+    k_off  = tl.<span class="fn">load</span>(k_off_ptr  + tl.<span class="fn">arange</span>(<span class="num">0</span>, N))         <span class="com"># shape: (N,)</span>
+    q_attn = tl.<span class="fn">load</span>(q_attn_ptr + tl.<span class="fn">arange</span>(<span class="num">0</span>, M))         <span class="com"># shape: (M,)</span>
+    k_attn = tl.<span class="fn">load</span>(k_attn_ptr + tl.<span class="fn">arange</span>(<span class="num">0</span>, N))         <span class="com"># shape: (N,)</span>
+
+    mask   = <span class="fn">mask_fn</span>(q_attn, k_attn, q_off, k_off, TYPE=TYPE)  <span class="com"># shape: (M, N), i1</span>
+    out    = tl.<span class="fn">where</span>(mask, <span class="num">1</span>, <span class="num">0</span>).<span class="fn">to</span>(tl.int8)              <span class="com"># shape: (M, N), i8</span>
+
+    tl.<span class="fn">store</span>(out_ptr + tl.<span class="fn">arange</span>(<span class="num">0</span>, M)[:, <span class="kw">None</span>] * N
+                  + tl.<span class="fn">arange</span>(<span class="num">0</span>, N)[<span class="kw">None</span>, :],
+             out)</pre>
+
+  <ul class="tight">
+    <li>Four input <strong>vectors</strong> get loaded (each of length M or N).</li>
+    <li><code>mask_fn</code> is inlined; it broadcasts the four vectors
+        against each other to produce an M×N mask.</li>
+    <li><code>tl.where(mask, 1, 0)</code> converts <code>i1</code> →
+        <code>i32</code>; <code>.to(tl.int8)</code> narrows to 8-bit
+        before storing back to GM.</li>
+  </ul>
+
+  <div class="slide-number">3 / 14</div>
+</div>
+
+<!-- =================================================================== -->
+<!-- SLIDE 4 — WHAT DOES IT COMPUTE                                       -->
+<!-- =================================================================== -->
+<div class="slide">
+  <div class="slide-title-bar"><h2>3. What is <code>mask_fn</code> actually computing?</h2></div>
+
+  <p>An <strong>attention mask matrix</strong> answering, for each pair
+  <code>(query i, key j)</code>: <i>"can query i attend to key j ?"</i></p>
+
+  <div class="col2">
+    <div>
+      <h3>The full Boolean expression (TYPE == 1)</h3>
+      <div class="expr">
+        mask[i,j] =<br>
+        &nbsp;&nbsp;&nbsp;(triu_causal[i,j]<br>
+        &nbsp;&nbsp; AND ( q_attn==k_attn[i,j] OR k_attn==0[j] ))<br>
+        &nbsp;OR  q_off==k_off[i,j]
+      </div>
+      <h3>Three rules a position must satisfy</h3>
+      <ul class="tight">
+        <li><b>Rule A (causal)</b>: <code>q_off[i] ≤ k_off[j]</code> —
+            queries can only see keys at-or-after themselves.</li>
+        <li><b>Rule B (group match)</b>: <code>q_attn[i] == k_attn[j]</code> —
+            same "attention group" — OR <code>k_attn[j] == 0</code>,
+            the key is in the wildcard group "0".</li>
+        <li><b>Rule C (diagonal backstop)</b>: <code>q_off[i] == k_off[j]</code> —
+            a query can <i>always</i> attend to its own position, regardless
+            of A and B.</li>
+      </ul>
+    </div>
+
+    <div>
+      <h3>Logical structure</h3>
+      <svg viewBox="0 0 540 360" width="100%">
+        <!-- predicates at top -->
+        <rect x="20"  y="20" width="120" height="40" rx="6" fill="#bbdefb" stroke="#1565c0"/>
+        <text x="80" y="38" text-anchor="middle" font-size="12" font-family="SF Mono">triu_causal</text>
+        <text x="80" y="54" text-anchor="middle" font-size="10" fill="#555">q_off≤k_off</text>
+
+        <rect x="160" y="20" width="120" height="40" rx="6" fill="#bbdefb" stroke="#1565c0"/>
+        <text x="220" y="38" text-anchor="middle" font-size="12" font-family="SF Mono">q_attn==k_attn</text>
+        <text x="220" y="54" text-anchor="middle" font-size="10" fill="#555">group match</text>
+
+        <rect x="300" y="20" width="120" height="40" rx="6" fill="#bbdefb" stroke="#1565c0"/>
+        <text x="360" y="38" text-anchor="middle" font-size="12" font-family="SF Mono">k_attn==0</text>
+        <text x="360" y="54" text-anchor="middle" font-size="10" fill="#555">wildcard key</text>
+
+        <rect x="440" y="20" width="100" height="40" rx="6" fill="#ffe0b2" stroke="#ef6c00"/>
+        <text x="490" y="38" text-anchor="middle" font-size="12" font-family="SF Mono">q_off==k_off</text>
+        <text x="490" y="54" text-anchor="middle" font-size="10" fill="#bf360c">diagonal</text>
+
+        <!-- OR node for (q_attn==k_attn) | (k_attn==0) -->
+        <line x1="220" y1="60" x2="280" y2="120" stroke="#666" stroke-width="1.5"/>
+        <line x1="360" y1="60" x2="280" y2="120" stroke="#666" stroke-width="1.5"/>
+        <circle cx="280" cy="135" r="22" fill="#fff9c4" stroke="#827717" stroke-width="2"/>
+        <text x="280" y="140" text-anchor="middle" font-size="14" font-weight="bold" fill="#827717">OR</text>
+
+        <!-- AND node for triu_causal AND (above) -->
+        <line x1="80" y1="60" x2="180" y2="200" stroke="#666" stroke-width="1.5"/>
+        <line x1="280" y1="157" x2="180" y2="200" stroke="#666" stroke-width="1.5"/>
+        <circle cx="180" cy="215" r="22" fill="#c8e6c9" stroke="#2e7d32" stroke-width="2"/>
+        <text x="180" y="220" text-anchor="middle" font-size="14" font-weight="bold" fill="#2e7d32">AND</text>
+
+        <!-- top-level OR -->
+        <line x1="180" y1="237" x2="280" y2="295" stroke="#666" stroke-width="1.5"/>
+        <line x1="490" y1="60" x2="280" y2="295" stroke="#666" stroke-width="1.5"/>
+        <circle cx="280" cy="310" r="26" fill="#fff9c4" stroke="#827717" stroke-width="3"/>
+        <text x="280" y="316" text-anchor="middle" font-size="16" font-weight="bold" fill="#827717">OR</text>
+
+        <text x="280" y="350" text-anchor="middle" font-size="12" font-family="SF Mono" fill="#0d47a1">
+          → final mask[i,j]
+        </text>
+      </svg>
+    </div>
+  </div>
+
+  <div class="slide-number">4 / 14</div>
+</div>
+
+<!-- =================================================================== -->
+<!-- SLIDE 5 — TINY EXAMPLE INPUTS                                        -->
+<!-- =================================================================== -->
+<div class="slide">
+  <div class="slide-title-bar"><h2>4. A tiny example — M = N = 4</h2></div>
+
+  <p>Concrete inputs we'll walk through across the next 7 slides:</p>
+
+  <div class="col2">
+    <div>
+      <h3>Query side (length M = 4)</h3>
+      <p class="label">q_offset — query token positions</p>
+      <table class="vec"><tr><td>0</td><td>1</td><td>2</td><td>3</td></tr></table>
+
+      <p class="label">q_attn — query attention-group ids</p>
+      <table class="vec"><tr><td>1</td><td>1</td><td>2</td><td>2</td></tr></table>
+    </div>
+    <div>
+      <h3>Key side (length N = 4)</h3>
+      <p class="label">k_offset — key token positions</p>
+      <table class="vec"><tr><td>0</td><td>1</td><td>2</td><td>3</td></tr></table>
+
+      <p class="label">k_attn — key attention-group ids (note the <span class="anno">0</span> wildcard!)</p>
+      <table class="vec"><tr><td style="background:#ffe0b2">0</td><td>1</td><td>1</td><td>2</td></tr></table>
+    </div>
+  </div>
+
+  <div class="callout">
+    <b>Broadcasting recipe (NumPy / Triton convention).</b>
+    <code>q[:, None]</code> reshapes a length-M vector into a column <i>M×1</i>.
+    <code>k[None, :]</code> reshapes a length-N vector into a row <i>1×N</i>.
+    Comparing them gives an <i>M×N</i> matrix where entry
+    <code>(i, j)</code> = <code>q[i] ⊙ k[j]</code> (⊙ = the operator,
+    e.g. <code>≤</code> or <code>==</code>).
+  </div>
+
+  <div class="slide-number">5 / 14</div>
+</div>
+
+<!-- =================================================================== -->
+<!-- SLIDE 6 — STEP 1: triu_causal                                        -->
+<!-- =================================================================== -->
+<div class="slide">
+  <div class="slide-title-bar"><h2>5. Step 1 — <code>triu_causal = (q_off[:, None] &lt;= k_off[None, :])</code></h2></div>
+
+  <div class="col2">
+    <div>
+      <h3>Broadcast pattern</h3>
+      <p>Column-vector <i>4×1</i> compared against row-vector <i>1×4</i>
+      → output <i>4×4</i> matrix.</p>
+
+      <p class="label">q_off as a column</p>
+      <table class="matrix">
+        <tr><td>0</td></tr><tr><td>1</td></tr><tr><td>2</td></tr><tr><td>3</td></tr>
+      </table>
+
+      <span class="arrow">⊕</span>
+
+      <p class="label">k_off as a row</p>
+      <table class="matrix"><tr><td>0</td><td>1</td><td>2</td><td>3</td></tr></table>
+
+      <p class="label">Each cell (i, j) computes q_off[i] ≤ k_off[j]</p>
+      <p class="expr">[i, j] = (i ≤ j)</p>
+    </div>
+
+    <div>
+      <h3>Resulting matrix</h3>
+      <p class="label">triu_causal[i, j] (T = pass, F = fail)</p>
+      <table class="matrix">
+        <tr><td class="hdr"></td><td class="hdr">j=0</td><td class="hdr">j=1</td><td class="hdr">j=2</td><td class="hdr">j=3</td></tr>
+        <tr><td class="hdr">i=0</td><td class="t">T</td><td class="t">T</td><td class="t">T</td><td class="t">T</td></tr>
+        <tr><td class="hdr">i=1</td><td class="f">F</td><td class="t">T</td><td class="t">T</td><td class="t">T</td></tr>
+        <tr><td class="hdr">i=2</td><td class="f">F</td><td class="f">F</td><td class="t">T</td><td class="t">T</td></tr>
+        <tr><td class="hdr">i=3</td><td class="f">F</td><td class="f">F</td><td class="f">F</td><td class="t">T</td></tr>
+      </table>
+
+      <div class="callout">
+        Classic upper-triangular ("upper-tri" = <i>triu</i>) shape.
+        Query i can see all keys at positions ≥ i, but never earlier ones.
+        On the diagonal i == j → the comparison is <code>i ≤ i</code> → <b>T</b>.
+      </div>
+    </div>
+  </div>
+
+  <div class="slide-number">6 / 14</div>
+</div>
+
+<!-- =================================================================== -->
+<!-- SLIDE 7 — STEP 2: q_attn == k_attn                                   -->
+<!-- =================================================================== -->
+<div class="slide">
+  <div class="slide-title-bar"><h2>6. Step 2 — <code>q_attn[:, None] == k_attn[None, :]</code></h2></div>
+
+  <div class="col2">
+    <div>
+      <h3>Inputs</h3>
+      <p class="label">q_attn as a column</p>
+      <table class="matrix">
+        <tr><td>1</td></tr><tr><td>1</td></tr><tr><td>2</td></tr><tr><td>2</td></tr>
+      </table>
+
+      <span class="arrow">⊕</span>
+
+      <p class="label">k_attn as a row</p>
+      <table class="matrix"><tr><td>0</td><td>1</td><td>1</td><td>2</td></tr></table>
+
+      <p class="label">Each cell: q_attn[i] == k_attn[j]</p>
+      <p class="expr">[i, j] = (q_attn[i] == k_attn[j])</p>
+    </div>
+
+    <div>
+      <h3>Resulting matrix</h3>
+      <p class="label">"same attention group?"</p>
+      <table class="matrix">
+        <tr><td class="hdr"></td><td class="hdr">j=0<br><small>k=0</small></td><td class="hdr">j=1<br><small>k=1</small></td><td class="hdr">j=2<br><small>k=1</small></td><td class="hdr">j=3<br><small>k=2</small></td></tr>
+        <tr><td class="hdr">i=0<br><small>q=1</small></td><td class="f">F</td><td class="t">T</td><td class="t">T</td><td class="f">F</td></tr>
+        <tr><td class="hdr">i=1<br><small>q=1</small></td><td class="f">F</td><td class="t">T</td><td class="t">T</td><td class="f">F</td></tr>
+        <tr><td class="hdr">i=2<br><small>q=2</small></td><td class="f">F</td><td class="f">F</td><td class="f">F</td><td class="t">T</td></tr>
+        <tr><td class="hdr">i=3<br><small>q=2</small></td><td class="f">F</td><td class="f">F</td><td class="f">F</td><td class="t">T</td></tr>
+      </table>
+
+      <div class="callout">
+        Two horizontal bands: rows 0–1 have group <code>1</code>, so they
+        match keys at j=1, 2 (also group 1). Rows 2–3 have group
+        <code>2</code>, matching only j=3.
+      </div>
+    </div>
+  </div>
+
+  <div class="slide-number">7 / 14</div>
+</div>
+
+<!-- =================================================================== -->
+<!-- SLIDE 8 — STEP 3: k_attn == 0                                        -->
+<!-- =================================================================== -->
+<div class="slide">
+  <div class="slide-title-bar"><h2>7. Step 3 — <code>k_attn[None, :] == 0</code> (wildcard keys)</h2></div>
+
+  <div class="col2">
+    <div>
+      <h3>Single-row comparison</h3>
+      <p>This time only the row-vector matters; q_attn is not used. The
+      result is a length-N row that gets broadcast vertically across
+      all M rows.</p>
+
+      <p class="label">k_attn</p>
+      <table class="matrix"><tr><td>0</td><td>1</td><td>1</td><td>2</td></tr></table>
+
+      <p class="label">k_attn == 0 (length-N boolean row)</p>
+      <table class="matrix"><tr><td class="t">T</td><td class="f">F</td><td class="f">F</td><td class="f">F</td></tr></table>
+
+      <p>Then broadcast to all M rows:</p>
+      <p class="expr">[i, j] = (k_attn[j] == 0)</p>
+    </div>
+
+    <div>
+      <h3>Resulting matrix</h3>
+      <p class="label">"is this key a wildcard?"</p>
+      <table class="matrix">
+        <tr><td class="hdr"></td><td class="hdr">j=0</td><td class="hdr">j=1</td><td class="hdr">j=2</td><td class="hdr">j=3</td></tr>
+        <tr><td class="hdr">i=0</td><td class="t">T</td><td class="f">F</td><td class="f">F</td><td class="f">F</td></tr>
+        <tr><td class="hdr">i=1</td><td class="t">T</td><td class="f">F</td><td class="f">F</td><td class="f">F</td></tr>
+        <tr><td class="hdr">i=2</td><td class="t">T</td><td class="f">F</td><td class="f">F</td><td class="f">F</td></tr>
+        <tr><td class="hdr">i=3</td><td class="t">T</td><td class="f">F</td><td class="f">F</td><td class="f">F</td></tr>
+      </table>
+
+      <div class="callout">
+        Single vertical "stripe": column 0 (k_attn[0] = 0) is true for
+        every row. The wildcard key 0 can be attended to from any query.
+      </div>
+    </div>
+  </div>
+
+  <div class="slide-number">8 / 14</div>
+</div>
+
+<!-- =================================================================== -->
+<!-- SLIDE 9 — STEP 4: q_off == k_off                                     -->
+<!-- =================================================================== -->
+<div class="slide">
+  <div class="slide-title-bar"><h2>8. Step 4 — <code>q_off[:, None] == k_off[None, :]</code> (diagonal backstop)</h2></div>
+
+  <div class="col2">
+    <div>
+      <h3>Inputs</h3>
+      <p class="label">q_off as a column</p>
+      <table class="matrix">
+        <tr><td>0</td></tr><tr><td>1</td></tr><tr><td>2</td></tr><tr><td>3</td></tr>
+      </table>
+
+      <span class="arrow">⊕</span>
+
+      <p class="label">k_off as a row</p>
+      <table class="matrix"><tr><td>0</td><td>1</td><td>2</td><td>3</td></tr></table>
+
+      <p class="label">Equal-positions test</p>
+      <p class="expr">[i, j] = (q_off[i] == k_off[j])</p>
+
+      <div class="callout">
+        Since q_off and k_off both happen to be <code>arange(0, 4)</code>
+        in this example, equal-positions is exactly the identity matrix.
+        In general (different offsets) it would be a sparser pattern.
+      </div>
+    </div>
+
+    <div>
+      <h3>Resulting matrix</h3>
+      <p class="label">"on the q==k diagonal?"</p>
+      <table class="matrix">
+        <tr><td class="hdr"></td><td class="hdr">j=0</td><td class="hdr">j=1</td><td class="hdr">j=2</td><td class="hdr">j=3</td></tr>
+        <tr><td class="hdr">i=0</td><td class="t">T</td><td class="f">F</td><td class="f">F</td><td class="f">F</td></tr>
+        <tr><td class="hdr">i=1</td><td class="f">F</td><td class="t">T</td><td class="f">F</td><td class="f">F</td></tr>
+        <tr><td class="hdr">i=2</td><td class="f">F</td><td class="f">F</td><td class="t">T</td><td class="f">F</td></tr>
+        <tr><td class="hdr">i=3</td><td class="f">F</td><td class="f">F</td><td class="f">F</td><td class="t">T</td></tr>
+      </table>
+
+      <p class="label" style="margin-top:14px">Its job in the formula:
+      <strong>top-level OR</strong> with the triu·(...) tree below.
+      Whenever a query is at exactly the same position as a key, the mask
+      is true regardless of attention-group rules — a permanent
+      "see yourself" guarantee.</p>
+    </div>
+  </div>
+
+  <div class="slide-number">9 / 14</div>
+</div>
+
+<!-- =================================================================== -->
+<!-- SLIDE 10 — STEP 5: COMBINE                                           -->
+<!-- =================================================================== -->
+<div class="slide">
+  <div class="slide-title-bar"><h2>9. Step 5 — Combine via the Boolean expression</h2></div>
+
+  <p>The four intermediate matrices from slides 6–9 feed the
+  <code>OR / AND / OR</code> tree.</p>
+
+  <div class="col3">
+    <div>
+      <h3>Inner OR<br><small>(group match) | (wildcard key)</small></h3>
+      <p class="expr">(q_attn==k_attn) | (k_attn==0)</p>
+      <table class="matrix">
+        <tr><td class="hdr"></td><td class="hdr">0</td><td class="hdr">1</td><td class="hdr">2</td><td class="hdr">3</td></tr>
+        <tr><td class="hdr">0</td><td class="t">T</td><td class="t">T</td><td class="t">T</td><td class="f">F</td></tr>
+        <tr><td class="hdr">1</td><td class="t">T</td><td class="t">T</td><td class="t">T</td><td class="f">F</td></tr>
+        <tr><td class="hdr">2</td><td class="t">T</td><td class="f">F</td><td class="f">F</td><td class="t">T</td></tr>
+        <tr><td class="hdr">3</td><td class="t">T</td><td class="f">F</td><td class="f">F</td><td class="t">T</td></tr>
+      </table>
+    </div>
+
+    <div>
+      <h3>AND with triu_causal<br><small>causal-gated attention rule</small></h3>
+      <p class="expr">triu &amp; (above)</p>
+      <table class="matrix">
+        <tr><td class="hdr"></td><td class="hdr">0</td><td class="hdr">1</td><td class="hdr">2</td><td class="hdr">3</td></tr>
+        <tr><td class="hdr">0</td><td class="t">T</td><td class="t">T</td><td class="t">T</td><td class="f">F</td></tr>
+        <tr><td class="hdr">1</td><td class="f">F</td><td class="t">T</td><td class="t">T</td><td class="f">F</td></tr>
+        <tr><td class="hdr">2</td><td class="f">F</td><td class="f">F</td><td class="f">F</td><td class="t">T</td></tr>
+        <tr><td class="hdr">3</td><td class="f">F</td><td class="f">F</td><td class="f">F</td><td class="t">T</td></tr>
+      </table>
+    </div>
+
+    <div>
+      <h3>Top-level OR with diagonal<br><small>self-attention guarantee</small></h3>
+      <p class="expr">(above) | (q_off==k_off)</p>
+      <table class="matrix">
+        <tr><td class="hdr"></td><td class="hdr">0</td><td class="hdr">1</td><td class="hdr">2</td><td class="hdr">3</td></tr>
+        <tr><td class="hdr">0</td><td class="t">T</td><td class="t">T</td><td class="t">T</td><td class="f">F</td></tr>
+        <tr><td class="hdr">1</td><td class="f">F</td><td class="t">T</td><td class="t">T</td><td class="f">F</td></tr>
+        <tr><td class="hdr">2</td><td class="f">F</td><td class="f">F</td><td class="t">T</td><td class="t">T</td></tr>
+        <tr><td class="hdr">3</td><td class="f">F</td><td class="f">F</td><td class="f">F</td><td class="t">T</td></tr>
+      </table>
+    </div>
+  </div>
+
+  <div class="callout">
+    <b>Row 2 is the interesting case.</b> Without the top-level diagonal
+    OR, row 2 would be <code>F F F T</code> (group-2 query only
+    matches key at j=3, since triu blocks earlier positions and the
+    wildcard column is masked away by triu's <code>F</code>). The
+    diagonal OR re-enables <code>j=2</code> for self-attention — final
+    row 2 is <code>F F T T</code>.
+  </div>
+
+  <div class="slide-number">10 / 14</div>
+</div>
+
+<!-- =================================================================== -->
+<!-- SLIDE 11 — FINAL MASK + tl.where                                     -->
+<!-- =================================================================== -->
+<div class="slide">
+  <div class="slide-title-bar"><h2>10. The final <code>mask</code> matrix (i1) and the i8 output</h2></div>
+
+  <div class="col2">
+    <div>
+      <h3>mask (i1 boolean, returned by <code>mask_fn</code>)</h3>
+      <table class="matrix">
+        <tr><td class="hdr"></td><td class="hdr">j=0</td><td class="hdr">j=1</td><td class="hdr">j=2</td><td class="hdr">j=3</td></tr>
+        <tr><td class="hdr">i=0</td><td class="t">T</td><td class="t">T</td><td class="t">T</td><td class="f">F</td></tr>
+        <tr><td class="hdr">i=1</td><td class="f">F</td><td class="t">T</td><td class="t">T</td><td class="f">F</td></tr>
+        <tr><td class="hdr">i=2</td><td class="f">F</td><td class="f">F</td><td class="t">T</td><td class="t">T</td></tr>
+        <tr><td class="hdr">i=3</td><td class="f">F</td><td class="f">F</td><td class="f">F</td><td class="t">T</td></tr>
+      </table>
+
+      <p class="label">In PTO ISA: held in a <strong>MaskReg / P-reg</strong>
+      (predicate register, VL/8 = 32 B wide). One bit per output lane.</p>
+    </div>
+
+    <div>
+      <h3>out (after <code>tl.where(mask, 1, 0).to(tl.int8)</code>)</h3>
+      <table class="matrix">
+        <tr><td class="hdr"></td><td class="hdr">j=0</td><td class="hdr">j=1</td><td class="hdr">j=2</td><td class="hdr">j=3</td></tr>
+        <tr><td class="hdr">i=0</td><td class="t">1</td><td class="t">1</td><td class="t">1</td><td>0</td></tr>
+        <tr><td class="hdr">i=1</td><td>0</td><td class="t">1</td><td class="t">1</td><td>0</td></tr>
+        <tr><td class="hdr">i=2</td><td>0</td><td>0</td><td class="t">1</td><td class="t">1</td></tr>
+        <tr><td class="hdr">i=3</td><td>0</td><td>0</td><td>0</td><td class="t">1</td></tr>
+      </table>
+
+      <p class="label">In PTO ISA: <strong>vreg V (i32)</strong> after
+      <code>VSEL.b32 V, V1, V0, P3</code> (select V1=1 or V0=0 per lane
+      using mask P3), then narrowed to i8 by the store.</p>
+    </div>
+  </div>
+
+  <div class="callout">
+    The bool-variant <i>name</i> comes from the fact that all comparisons
+    and combinations stay in the <code>i1</code> predicate domain until
+    the very last <code>tl.where</code> — no intermediate
+    <code>i32 ↔ f16 ↔ i1</code> round-trips. The <i>cast</i> variant
+    (TYPE-dependent path, not shown) does the same logic but in <code>i32</code>
+    arithmetic, producing far more vector ops.
+  </div>
+
+  <div class="slide-number">11 / 14</div>
+</div>
+
+<!-- =================================================================== -->
+<!-- SLIDE 12 — VISUAL FINAL MASK INTUITION                               -->
+<!-- =================================================================== -->
+<div class="slide">
+  <div class="slide-title-bar"><h2>11. Reading the final mask — what got selected?</h2></div>
+
+  <div class="col2">
+    <div>
+      <h3>Color-coded "why is this 1?"</h3>
+      <p>Each filled cell labelled with which rules switched it on.
+      Multiple labels = multiple paths to <code>True</code>.</p>
+
+      <table class="matrix" style="font-size:11px">
+        <tr><td class="hdr"></td><td class="hdr">j=0</td><td class="hdr">j=1</td><td class="hdr">j=2</td><td class="hdr">j=3</td></tr>
+        <tr>
+          <td class="hdr">i=0</td>
+          <td class="t">A·B+C<br>wild+self</td>
+          <td class="t">A·B<br>causal+grp</td>
+          <td class="t">A·B<br>causal+grp</td>
+          <td>—</td>
+        </tr>
+        <tr>
+          <td class="hdr">i=1</td>
+          <td>—</td>
+          <td class="t">A·B+C<br>self</td>
+          <td class="t">A·B<br>causal+grp</td>
+          <td>—</td>
+        </tr>
+        <tr>
+          <td class="hdr">i=2</td>
+          <td>—</td>
+          <td>—</td>
+          <td class="t">C<br>diag only!</td>
+          <td class="t">A·B<br>causal+grp</td>
+        </tr>
+        <tr>
+          <td class="hdr">i=3</td>
+          <td>—</td>
+          <td>—</td>
+          <td>—</td>
+          <td class="t">A·B+C<br>causal+grp+self</td>
+        </tr>
+      </table>
+    </div>
+
+    <div>
+      <h3>Observations</h3>
+      <ul class="tight">
+        <li><b>Top row (i=0)</b>: query "sees" 3 of 4 keys. j=3 is
+            blocked because q_attn[0]=1 ≠ k_attn[3]=2 <i>and</i> j=3
+            isn't a wildcard <i>and</i> 0≠3.</li>
+        <li><b>Diagonal stays on</b> regardless: position (2,2) gets a
+            <code>T</code> only from the diagonal backstop — neither
+            triu·group nor wildcard would fire (group 2 wants to match
+            key with attn=2, but column 2 has k_attn=1).</li>
+        <li><b>The wildcard column j=0</b> would be lit for every row in
+            isolation, but the AND with triu_causal kills it for rows
+            i ≥ 1 (since i ≤ j fails when j=0).
+            Only the diagonal OR can rescue (i=0, j=0).</li>
+      </ul>
+
+      <div class="callout">
+        <b>Why this mask in practice?</b> Block-sparse attention with
+        per-token "groups" and a global wildcard key — common in
+        retrieval-augmented and sliding-window attention. Bool variant
+        is the fast path because the entire compute stays in
+        predicate-register arithmetic on the AIV.
+      </div>
+    </div>
+  </div>
+
+  <div class="slide-number">12 / 14</div>
+</div>
+
+<!-- =================================================================== -->
+<!-- SLIDE 13 — HOW IT MAPS TO HARDWARE                                   -->
+<!-- =================================================================== -->
+<div class="slide">
+  <div class="slide-title-bar"><h2>12. How it maps to A5 (351x) hardware — one VLOOP iter</h2></div>
+
+  <p>Each row of the M×N mask becomes one iteration of a 35-instruction
+  hardware loop body. The 5 Triton-level comparisons collapse into
+  4 <code>VCMP</code>s + 3 predicate combiners + 1 select:</p>
+
+  <pre class="code"><span class="com">; Pass A: compute one row of the bool-mask matrix (32 i32 lanes per VL)</span>
+VLDI V2,[S6],#0,#0,#0          <span class="com">; load k_offset pattern</span>
+VLDI V3,[S69],#16,#0,#1        <span class="com">; load q_offset[i] (broadcast)</span>
+VLDI V4,[S68],#1,#3,#1         <span class="com">; load q_attn[i] (broadcast)</span>
+VLDI V5,[S10],#0,#0,#0         <span class="com">; load k_attn vector</span>
+VLDAS ULD0,[S12]               <span class="com">; load q==k positional info</span>
+VADDS.s32 V2,V2,S8,P1          <span class="com">; k_offset += pid*BLOCK   (launcher's arange+stride)</span>
+VCMP.LE.s32 P5,V3,V2,P1        <span class="com">; P5 = (q_off[:,None] <= k_off[None,:])   ← triu_causal</span>
+VCMP.EQ.s32 P4,V4,V5,P1        <span class="com">; P4 = (q_attn[:,None] == k_attn[None,:]) ← group match</span>
+VLDUI V6,ULD0,[S70],#0
+MOVVP.b32 P3,V6,#0             <span class="com">; P3 = (k_attn == 0)                       ← wildcard</span>
+PXOR P3,P3,P2,P1               <span class="com">; (no-op for bool; sign-flip helper)</span>
+POR P3,P4,P3,P1                <span class="com">; P3 = (group match) | (wildcard)         ← inner OR</span>
+PAND P3,P5,P3,P1               <span class="com">; P3 = triu &amp; (above)                     ← AND</span>
+VCMP.EQ.s32 P4,V3,V2,P1        <span class="com">; P4 = (q_off == k_off)                    ← diagonal</span>
+POR P3,P3,P4,P1                <span class="com">; P3 = (...) | diag                        ← top-level OR</span>
+VSEL.b32 V2,V1,V0,P3           <span class="com">; V2 = where(P3, 1, 0)                     ← tl.where</span>
+VSTI V2,[S67],#16,#2,P1,#1     <span class="com">; store row back to UB (later MTE3 → GM)</span></pre>
+
+  <div class="callout">
+    <b>One row = one VL.</b> With VL = 32 i32 lanes per RegTensor, an
+    N=32 mask row fits exactly. M iterations of this loop produce the
+    full M×N output. Predicate registers P3/P4/P5 carry the boolean
+    intermediates — they never touch a vreg until the final
+    <code>VSEL</code>. See <code>a5_aiv_vector_parallelism.html</code>
+    §5 for the dual-issue back-end details.
+  </div>
+
+  <div class="slide-number">13 / 14</div>
+</div>
+
+<!-- =================================================================== -->
+<!-- SLIDE 14 — SUMMARY                                                   -->
+<!-- =================================================================== -->
+<div class="slide">
+  <div class="slide-title-bar"><h2>13. Summary</h2></div>
+
+  <div class="col2">
+    <div>
+      <h3>What we walked through</h3>
+      <ol style="font-size:15px; line-height:1.7">
+        <li>The <code>mask_fn</code> source — a 5-line Boolean expression
+            over four input vectors.</li>
+        <li>The <code>mask_kernel</code> wrapper that supplies GM pointers
+            and converts <code>i1</code> → <code>i8</code> on store.</li>
+        <li>The three semantic rules: causal (triu), group match +
+            wildcard, diagonal backstop.</li>
+        <li>A 4×4 example walked through the four elementwise
+            comparison matrices.</li>
+        <li>How they combine via the <code>OR / AND / OR</code> tree
+            into the final mask.</li>
+        <li>How the bool path stays in P-regs all the way to
+            <code>VSEL</code>, mapping cleanly to ~15 PTO ISA
+            instructions per row.</li>
+      </ol>
+    </div>
+
+    <div>
+      <h3>Key insights</h3>
+      <ul class="tight" style="font-size:15px; line-height:1.7">
+        <li><b>Predicate-register friendly</b>: every intermediate is a
+            boolean. No <code>i1 → i32 → fp16</code> round-trips like
+            the cast variant.</li>
+        <li><b>Single VL per row</b>: at M = N = 32, the entire row is
+            one VLDI/VCMP issue, not a long sub-VL loop.</li>
+        <li><b>Diagonal OR is load-bearing</b>: without it, queries
+            whose group doesn't match any visible key would never
+            self-attend. Row 2 in our example shows this.</li>
+        <li><b>Hardware mapping is 1-to-1</b>: each Triton op becomes
+            one or two PTO instructions; the compiler's job is
+            mostly scheduling, not lowering.</li>
+      </ul>
+
+      <h3>See also</h3>
+      <ul class="tight" style="font-size:14px">
+        <li><code>a5_pto_bool_vloop_walkthrough.md</code> — full
+            22-instruction body walkthrough + 23 optimizations</li>
+        <li><code>a5_aiv_vector_parallelism.html</code> — the AIV
+            microarchitecture this kernel runs on</li>
+        <li><code>helloworld_mask_camodel_walkthrough.md</code> —
+            the end-to-end camodel run</li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="slide-number">14 / 14</div>
+</div>
+
+</body>
+</html>
