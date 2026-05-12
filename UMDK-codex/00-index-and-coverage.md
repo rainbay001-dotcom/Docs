@@ -1,6 +1,6 @@
 # UMDK Documentation Index and Coverage Matrix
 
-Last updated: 2026-04-25
+Last updated: 2026-05-12
 
 This file is the reading order and coverage map for the UMDK/URMA/UDMA
 research notes in this directory. It is meant to answer two questions quickly:
@@ -56,18 +56,22 @@ research notes in this directory. It is meant to answer two questions quickly:
    - Clarifies that `ubase_ctrlq_send_msg()` talks to the local UB
      entity/management side through local CSQ/CRQ rings, not directly to the
      peer host.
-17. `urma-udma-working-flows.md`
+17. `urma-perftest-send-lat-breakdown.md`
+   - Summarizes issue #2's `urma_perftest send_lat` ftrace experiments,
+     including setup-stage breakdown, `ubcore_get_main_primary_eid()` topology
+     scan cost, serial/concurrent test purpose, and the 100-process result.
+18. `urma-udma-working-flows.md`
    - Detailed URMA/UDMA API and operation-level flows.
-18. `runtime-validation-guide.md`
+19. `runtime-validation-guide.md`
    - Commands and expected observations for hardware/runtime validation.
-19. `source-map.md`
+20. `source-map.md`
    - Source anchors by component and operation.
-20. `08-source-evidence-map.md`
+21. `08-source-evidence-map.md`
    - Claim-to-source evidence table with concrete paths and line numbers.
-21. `refinement-todo.md`
+22. `refinement-todo.md`
    - Next refinement tasks for diagrams, evidence tables, workflow chapters,
      comparisons, terminology, runtime validation, and doc restructuring.
-22. `working-log.md`
+23. `working-log.md`
    - Chronological notes and unresolved follow-ups.
 
 `urma-udma-architecture.md` is an older architecture snapshot kept for
@@ -97,6 +101,7 @@ continuity. Prefer `umdk-component-architecture.md` and
 | Socket API over UB/URMA transport | Newly covered | `socket-api-over-ub-urma-transport.md` | Separates UMS/USOCK, IPoURMA, native URMA/UDMA, and the absence of a socket-backed `liburma` provider; includes source anchors and validation checklist. |
 | Tooling and `ubtool` status | Newly covered | `unic-cdma-urpc-ums-tools-coverage.md` | Records discovered tools and that no local `ubtool` source was found by that name. |
 | UBASE local hardware and ctrlq | Newly covered | `ubase-local-hardware-and-ctrlq.md` | Explains that UBASE ctrlq requests target the local UB entity/management side through local CSQ/CRQ rings, and separates that from UB MAD peer-control traffic. |
+| `urma_perftest send_lat` setup timing | Newly covered | `urma-perftest-send-lat-breakdown.md` | Breaks down issue #2 ftrace results, `create_duplex_ctx()`, `import_seg`, two `import_jetty` paths, `ubcore_get_main_primary_eid()` scan cost, resource exhaustion from `send_bw -J 100`, and the 100-process concurrent run. |
 | UB-Mesh paper context | Newly covered | `ub-mesh-context-and-umdk-mapping.md` | Maps the UB-Mesh paper to UVS, ubcore topology, ubagg, bond provider, CAM fullmesh hints, and UMMU. |
 | Source evidence map | Newly covered | `08-source-evidence-map.md` | Claim-to-source table with file and line anchors. |
 | Diagrams and workflow chapters | Newly covered | `architecture-diagrams-and-workflows.md` | Adds Mermaid diagrams for boot, udev, UMMU, topology, CAM, data path, and teardown. |

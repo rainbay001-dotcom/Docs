@@ -2,7 +2,7 @@
 
 This directory tracks Codex findings about openEuler UMDK, with the current focus on the URMA and UDMA stack.
 
-Last updated: 2026-05-11
+Last updated: 2026-05-12
 
 ## Local Repositories
 
@@ -39,6 +39,7 @@ Two local document directories were found:
 - [UB MAD VTP link setup flow](./ub-mad-vtp-link-setup-flow.md)
 - [UBASE local hardware and control queue](./ubase-local-hardware-and-ctrlq.md)
 - [URMA TP type comparison and call chains](./urma-tp-type-comparison-call-chains.md)
+- [`urma_perftest send_lat` breakdown and test findings](./urma-perftest-send-lat-breakdown.md)
 - [HiSilicon IMP interface](./hisilicon-imp-interface.md)
 - [UB root bus, udev, and device enumeration](./ub-root-bus-udev-device-enumeration.md)
 - [UB and PCIe probe process comparison](./ub-vs-pcie-probe-process-comparison.md)
