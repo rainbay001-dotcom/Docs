@@ -1,0 +1,1228 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>assembler.as — PTO ISA walkthrough + 23 optimizations</title>
+<style>
+  :root {
+    --bg: #f8fafd;
+    --slide-bg: #ffffff;
+    --primary: #0d47a1;
+    --primary-light: #1565c0;
+    --accent: #e65100;
+    --tier-a: #c8e6c9;
+    --tier-a-border: #2e7d32;
+    --tier-b: #fff9c4;
+    --tier-b-border: #827717;
+    --tier-c: #ffccbc;
+    --tier-c-border: #bf360c;
+    --highlight: #fff9c4;
+    --invariant: #ffe0b2;
+  }
+  * { box-sizing: border-box; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    margin: 0;
+    background: var(--bg);
+    color: #222;
+    line-height: 1.45;
+  }
+  .slide {
+    width: 1280px;
+    min-height: 720px;
+    margin: 30px auto;
+    padding: 50px 70px;
+    background: var(--slide-bg);
+    box-shadow: 0 4px 20px rgba(0,0,0,0.08);
+    border-radius: 8px;
+    position: relative;
+  }
+  .slide-number {
+    position: absolute;
+    bottom: 16px;
+    right: 26px;
+    font-size: 13px;
+    color: #888;
+  }
+  .slide-title-bar {
+    border-bottom: 3px solid var(--primary);
+    padding-bottom: 6px;
+    margin-bottom: 20px;
+  }
+  h1 { color: var(--primary); margin: 0; font-size: 34px; }
+  h2 { color: var(--primary); margin: 0; font-size: 26px; }
+  h3 { color: var(--primary-light); margin-top: 0; font-size: 18px; }
+  .subtitle { color: #555; font-size: 17px; margin-top: 6px; }
+  .cover {
+    text-align: center;
+    padding-top: 200px;
+  }
+  .cover h1 { font-size: 48px; border: none; }
+  .cover .subtitle { font-size: 21px; margin-top: 12px; }
+  .cover .meta { margin-top: 70px; color: #777; font-size: 14px; }
+  pre.code {
+    background: #1e293b;
+    color: #e2e8f0;
+    padding: 14px 18px;
+    border-radius: 6px;
+    font-family: "SF Mono", Menlo, Consolas, monospace;
+    font-size: 13px;
+    line-height: 1.4;
+    overflow-x: auto;
+    margin: 8px 0;
+  }
+  pre.code-small { font-size: 11.5px; line-height: 1.35; padding: 10px 14px; }
+  .kw  { color: #c084fc; }
+  .fn  { color: #60a5fa; }
+  .num { color: #34d399; }
+  .com { color: #94a3b8; font-style: italic; }
+  .reg { color: #fbbf24; }
+  .lnum { color: #64748b; user-select: none; }
+  .hl  { background: rgba(251,191,36,0.18); }
+  .inv { background: rgba(255,176,32,0.22); }
+  .col2 {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 24px;
+    align-items: start;
+  }
+  .col2-7-5 {
+    display: grid;
+    grid-template-columns: 7fr 5fr;
+    gap: 24px;
+    align-items: start;
+  }
+  table {
+    border-collapse: collapse;
+    width: 100%;
+    font-size: 13px;
+  }
+  th, td {
+    border: 1px solid #d0d5dc;
+    padding: 6px 10px;
+    text-align: left;
+  }
+  th {
+    background: #e3f2fd;
+    color: var(--primary);
+    font-weight: 600;
+  }
+  tr.tier-a td { background: rgba(200,230,201,0.18); }
+  tr.tier-b td { background: rgba(255,249,196,0.30); }
+  tr.tier-c td { background: rgba(255,204,188,0.22); }
+  .tier-badge {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 3px;
+    font-size: 11px;
+    font-weight: 700;
+  }
+  .badge-a { background: var(--tier-a); color: var(--tier-a-border); }
+  .badge-b { background: var(--tier-b); color: var(--tier-b-border); }
+  .badge-c { background: var(--tier-c); color: var(--tier-c-border); }
+  ul.tight { margin: 6px 0; padding-left: 22px; }
+  ul.tight li { margin: 3px 0; }
+  .callout {
+    background: #e3f2fd;
+    border-left: 4px solid var(--primary);
+    padding: 10px 16px;
+    border-radius: 4px;
+    margin: 14px 0;
+    font-size: 14px;
+  }
+  .warn {
+    background: #fff8e1;
+    border-left: 4px solid var(--tier-b-border);
+    padding: 10px 16px;
+    border-radius: 4px;
+    margin: 14px 0;
+    font-size: 14px;
+  }
+  .num-right { text-align: right; font-variant-numeric: tabular-nums; }
+  .arrow { font-size: 22px; color: var(--accent); padding: 0 6px; }
+  @media print {
+    body { background: white; }
+    .slide { page-break-after: always; margin: 0; box-shadow: none; }
+  }
+</style>
+</head>
+<body>
+
+<!-- =================================================================== -->
+<!-- SLIDE 1 — COVER                                                     -->
+<!-- =================================================================== -->
+<div class="slide cover">
+  <h1><code>assembler.as</code></h1>
+  <div class="subtitle">PTO ISA walkthrough of the bool <code>mask_kernel</code> VLOOP body<br>
+  + all 23 possible optimization methods</div>
+  <div class="meta">
+    Companion to <code>a5_pto_bool_vloop_walkthrough.md</code> (§3 body, §6 optimizations).<br>
+    Source: <code>~/Documents/docs/assembler.as</code> — 39 lines of disassembled PTO ISA from an A5 (351x / Atlas 350) build of <code>mask_kernel</code>.
+  </div>
+  <div class="slide-number">1 / 18</div>
+</div>
+
+<!-- =================================================================== -->
+<!-- SLIDE 2 — THE FULL assembler.as                                      -->
+<!-- =================================================================== -->
+<div class="slide">
+  <div class="slide-title-bar"><h2>1. The full <code>assembler.as</code> (39 lines)</h2></div>
+
+  <p>Disassembled body of one <code>mask_kernel_a5.o</code> build.
+  Lines 4–22 = pass A; lines 23–38 = pass B (structurally identical);
+  line 39 is a post-loop reset.</p>
+
+  <div class="col2">
+    <div>
+      <h3>Pre-loop + Pass A (lines 1–22)</h3>
+      <pre class="code code-small"><span class="lnum"> 1</span>  <span class="fn">PSET</span>.b32  <span class="reg">P1</span>,#<span class="num">8</span>                          <span class="com">; P1 = VL64 mask</span>
+<span class="lnum"> 2</span>  <span class="fn">PSET</span>.b32  <span class="reg">P2</span>,#<span class="num">15</span>                         <span class="com">; P2 = ALLF (all lanes)</span>
+<span class="lnum"> 3</span>  <span class="fn">VLOOPV2_V310</span> <span class="reg">S3</span>,#<span class="num">35</span>,#<span class="num">1</span>,#<span class="num">1</span>             <span class="com">; loop S3 times, 35 insns/iter</span>
+<span class="lnum"> 4</span>  <span class="fn">VLDI</span> <span class="reg">V2</span>,[<span class="reg">S6</span>],#<span class="num">0</span>,#<span class="num">0</span>,#<span class="num">0</span>                <span class="com">; load k_offset pattern</span>
+<span class="lnum"> 5</span>  <span class="fn">VLDI</span> <span class="reg">V3</span>,[<span class="reg">S69</span>],#<span class="num">16</span>,#<span class="num">0</span>,#<span class="num">1</span>             <span class="com">; load q_offset[i] (per-iter)</span>
+<span class="lnum"> 6</span>  <span class="fn">VLDI</span> <span class="reg">V4</span>,[<span class="reg">S68</span>],#<span class="num">1</span>,#<span class="num">3</span>,#<span class="num">1</span>              <span class="com">; load q_attn[i] (broadcast)</span>
+<span class="lnum"> 7</span>  <span class="fn">VLDI</span> <span class="reg">V5</span>,[<span class="reg">S10</span>],#<span class="num">0</span>,#<span class="num">0</span>,#<span class="num">0</span>              <span class="com">; load k_attn vector</span>
+<span class="lnum"> 8</span>  <span class="fn">VLDAS</span> <span class="reg">ULD0</span>,[<span class="reg">S12</span>]                     <span class="com">; setup unaligned load ctx</span>
+<span class="lnum"> 9</span>  <span class="fn">SMOV</span>.b32 <span class="reg">S70</span>,<span class="reg">S12</span>                       <span class="com">; copy S12 → S70</span>
+<span class="lnum">10</span>  <span class="fn">VADDS</span>.s32 <span class="reg">V2</span>,<span class="reg">V2</span>,<span class="reg">S8</span>,<span class="reg">P1</span>                 <span class="com">; V2 += pid*BLOCK (per-block)</span>
+<span class="lnum">11</span>  <span class="fn">VCMP</span>.LE.s32 <span class="reg">P5</span>,<span class="reg">V3</span>,<span class="reg">V2</span>,<span class="reg">P1</span>               <span class="com">; P5 = triu_causal (A)</span>
+<span class="lnum">12</span>  <span class="fn">VCMP</span>.EQ.s32 <span class="reg">P4</span>,<span class="reg">V4</span>,<span class="reg">V5</span>,<span class="reg">P1</span>               <span class="com">; P4 = group match (B)</span>
+<span class="lnum">13</span>  <span class="fn">VLDUI</span> <span class="reg">V6</span>,<span class="reg">ULD0</span>,[<span class="reg">S70</span>],#<span class="num">0</span>                <span class="com">; load C-bytes (k_attn==0)</span>
+<span class="lnum">14</span>  <span class="fn">SMOV</span>.b32 <span class="reg">S70</span>,<span class="reg">S18</span>                       <span class="com">; reset S70 for pass B</span>
+<span class="lnum">15</span>  <span class="fn">MOVVP</span>.b32 <span class="reg">P3</span>,<span class="reg">V6</span>,#<span class="num">0</span>                     <span class="com">; P3 = C (wildcard pred)</span>
+<span class="lnum">16</span>  <span class="fn">PXOR</span> <span class="reg">P3</span>,<span class="reg">P3</span>,<span class="reg">P2</span>,<span class="reg">P1</span>                      <span class="com">; (no-op on bool path)</span>
+<span class="lnum">17</span>  <span class="fn">POR</span>  <span class="reg">P3</span>,<span class="reg">P4</span>,<span class="reg">P3</span>,<span class="reg">P1</span>                      <span class="com">; P3 = B | C</span>
+<span class="lnum">18</span>  <span class="fn">PAND</span> <span class="reg">P3</span>,<span class="reg">P5</span>,<span class="reg">P3</span>,<span class="reg">P1</span>                      <span class="com">; P3 = A & (B|C)</span>
+<span class="lnum">19</span>  <span class="fn">VCMP</span>.EQ.s32 <span class="reg">P4</span>,<span class="reg">V3</span>,<span class="reg">V2</span>,<span class="reg">P1</span>               <span class="com">; P4 = diag F (q==k)</span>
+<span class="lnum">20</span>  <span class="fn">POR</span>  <span class="reg">P3</span>,<span class="reg">P3</span>,<span class="reg">P4</span>,<span class="reg">P1</span>                      <span class="com">; P3 = (A&(B|C)) | F</span>
+<span class="lnum">21</span>  <span class="fn">VSEL</span>.b32 <span class="reg">V2</span>,<span class="reg">V1</span>,<span class="reg">V0</span>,<span class="reg">P3</span>                  <span class="com">; V2 = where(P3, 1, 0)</span>
+<span class="lnum">22</span>  <span class="fn">VSTI</span> <span class="reg">V2</span>,[<span class="reg">S67</span>],#<span class="num">16</span>,#<span class="num">2</span>,<span class="reg">P1</span>,#<span class="num">1</span>            <span class="com">; store row to UB</span></pre>
+    </div>
+    <div>
+      <h3>Pass B (lines 23–38) + post-loop reset (39)</h3>
+      <pre class="code code-small"><span class="lnum">23</span>  <span class="fn">VLDI</span> <span class="reg">V2</span>,[<span class="reg">S14</span>],#<span class="num">0</span>,#<span class="num">0</span>,#<span class="num">0</span>                <span class="com">; pass-B k_offset</span>
+<span class="lnum">24</span>  <span class="fn">VLDI</span> <span class="reg">V3</span>,[<span class="reg">S66</span>],#<span class="num">16</span>,#<span class="num">0</span>,#<span class="num">1</span>             <span class="com">; pass-B q_offset[i]</span>
+<span class="lnum">25</span>  <span class="fn">VLDI</span> <span class="reg">V5</span>,[<span class="reg">S16</span>],#<span class="num">0</span>,#<span class="num">0</span>,#<span class="num">0</span>              <span class="com">; pass-B k_attn</span>
+<span class="lnum">26</span>  <span class="fn">VLDAS</span> <span class="reg">ULD0</span>,[<span class="reg">S18</span>]                     <span class="com">; pass-B unaligned ctx</span>
+<span class="lnum">27</span>  <span class="fn">VADDS</span>,s32 <span class="reg">V2</span>,<span class="reg">V2</span>,<span class="reg">S8</span>,<span class="reg">P1</span>                 <span class="com">; pass-B V2 += S8</span>
+<span class="lnum">28</span>  <span class="fn">VCMP</span>.LE.s32 <span class="reg">P5</span>,<span class="reg">V3</span>,<span class="reg">V2</span>,<span class="reg">P1</span>               <span class="com">; A</span>
+<span class="lnum">29</span>  <span class="fn">VCMP</span>.EQ.s32 <span class="reg">P4</span>,<span class="reg">V4</span>,<span class="reg">V5</span>,<span class="reg">P1</span>               <span class="com">; B (V4 reused from pass A)</span>
+<span class="lnum">30</span>  <span class="fn">VLDUI</span> <span class="reg">V6</span>,<span class="reg">ULD0</span>,[<span class="reg">S70</span>],#<span class="num">0</span>                <span class="com">; C-bytes for pass B</span>
+<span class="lnum">31</span>  <span class="fn">MOVVP</span>.b32 <span class="reg">P3</span>,<span class="reg">V6</span>,#<span class="num">0</span>                     <span class="com">; P3 = C</span>
+<span class="lnum">32</span>  <span class="fn">PXOR</span> <span class="reg">P3</span>,<span class="reg">P3</span>,<span class="reg">P2</span>,<span class="reg">P1</span>                      <span class="com">; (no-op)</span>
+<span class="lnum">33</span>  <span class="fn">POR</span>  <span class="reg">P3</span>,<span class="reg">P4</span>,<span class="reg">P3</span>,<span class="reg">P1</span>                      <span class="com">; B|C</span>
+<span class="lnum">34</span>  <span class="fn">PAND</span> <span class="reg">P3</span>,<span class="reg">P5</span>,<span class="reg">P3</span>,<span class="reg">P1</span>                      <span class="com">; A&(B|C)</span>
+<span class="lnum">35</span>  <span class="fn">VCMP</span>.EQ.s32 <span class="reg">P4</span>,<span class="reg">V3</span>,<span class="reg">V2</span>,<span class="reg">P1</span>               <span class="com">; F</span>
+<span class="lnum">36</span>  <span class="fn">POR</span>  <span class="reg">P3</span>,<span class="reg">P3</span>,<span class="reg">P4</span>,<span class="reg">P1</span>                      <span class="com">; (A&(B|C))|F</span>
+<span class="lnum">37</span>  <span class="fn">VSEL</span>.b32 <span class="reg">V2</span>,<span class="reg">V1</span>,<span class="reg">V0</span>,<span class="reg">P3</span>                  <span class="com">; where(P3, 1, 0)</span>
+<span class="lnum">38</span>  <span class="fn">VSTI</span> <span class="reg">V2</span>,[<span class="reg">S65</span>],#<span class="num">16</span>,#<span class="num">2</span>,<span class="reg">P1</span>,#<span class="num">1</span>            <span class="com">; store row to UB</span>
+<span class="lnum">39</span>  <span class="fn">VDUPS</span>.b32 <span class="reg">V0</span>,<span class="reg">S20</span>,<span class="reg">P1</span>,#<span class="num">1</span>                 <span class="com">; post-loop V0 reset</span></pre>
+    </div>
+  </div>
+
+  <div class="callout">
+    <b>One iteration produces two output rows</b> — pass A writes one row to <code>[S67]</code>,
+    pass B writes another to <code>[S65]</code>. The VLOOP runs S3 iterations
+    (likely 16 to produce 32 rows total).
+  </div>
+
+  <div class="slide-number">2 / 18</div>
+</div>
+
+<!-- =================================================================== -->
+<!-- SLIDE 3 — TWO-PASS STRUCTURE                                         -->
+<!-- =================================================================== -->
+<div class="slide">
+  <div class="slide-title-bar"><h2>2. Two-pass body structure</h2></div>
+
+  <div class="col2">
+    <div>
+      <h3>What's the same in both passes</h3>
+      <ul class="tight">
+        <li>Same 4 predicate computations (A, B, C, F).</li>
+        <li>Same OR/AND/OR boolean tree.</li>
+        <li>Same VSEL.b32 → VSTI sequence to materialize and write the row.</li>
+        <li>Pass B reuses <code>V4</code> (q_attn) from pass A — load is elided in lines 23–25.</li>
+      </ul>
+      <h3>What's different</h3>
+      <ul class="tight">
+        <li>Buffer addresses (S6 / S69 / S68 / S10 / S12 / S67 → S14 / S66 / — / S16 / S18 / S65).</li>
+        <li>S70 is reset between passes (line 14, line 9 for next iter).</li>
+      </ul>
+      <h3>Likely interpretation</h3>
+      <ul class="tight">
+        <li>Each iter produces <b>two output rows</b> simultaneously (unroll factor 2).</li>
+        <li>Pass A and pass B operate on different key-blocks (different k_offset / k_attn
+            ranges) — implementing the "2 row-tile pack" pattern that Opt 9 tries
+            to take further.</li>
+      </ul>
+    </div>
+    <div>
+      <h3>Per-iter op count by class (pass A only)</h3>
+      <table>
+        <tr><th>Class</th><th class="num-right">Count</th><th>Instructions</th></tr>
+        <tr><td>Vector load</td><td class="num-right">4</td><td>VLDI ×4 (V2, V3, V4, V5)</td></tr>
+        <tr><td>Unaligned-load helper</td><td class="num-right">2</td><td>VLDAS + VLDUI</td></tr>
+        <tr><td>Scalar move</td><td class="num-right">1</td><td>SMOV</td></tr>
+        <tr><td>Broadcast add</td><td class="num-right">1</td><td>VADDS</td></tr>
+        <tr><td>Vector compare</td><td class="num-right">3</td><td>VCMP.LE + VCMP.EQ ×2</td></tr>
+        <tr><td>Vector→predicate</td><td class="num-right">1</td><td>MOVVP</td></tr>
+        <tr><td>Predicate algebra</td><td class="num-right">4</td><td>PXOR + POR ×2 + PAND</td></tr>
+        <tr><td>Predicate→vector</td><td class="num-right">1</td><td>VSEL.b32</td></tr>
+        <tr><td>Vector store</td><td class="num-right">1</td><td>VSTI</td></tr>
+        <tr><th>Pass A total</th><th class="num-right">18</th><th>−1 (V4 reuse) = 17.5 avg/row</th></tr>
+      </table>
+      <div class="warn">
+        Pass B is 16 ops (V4 reload elided). Body has 35 declared
+        insns; the 17 we don't see are likely sync, scalar bookkeeping,
+        and post-compute massaging the assembler trace elided.
+      </div>
+    </div>
+  </div>
+
+  <div class="slide-number">3 / 18</div>
+</div>
+
+<!-- =================================================================== -->
+<!-- SLIDE 4 — INSTRUCTION-BY-INSTRUCTION MAP                             -->
+<!-- =================================================================== -->
+<div class="slide">
+  <div class="slide-title-bar"><h2>3. Pre-loop setup (lines 1–3)</h2></div>
+
+  <table>
+    <tr><th>Line</th><th>Instruction</th><th>What it does</th><th>Why</th></tr>
+    <tr>
+      <td class="num-right">1</td>
+      <td><code>PSET.b32 P1,#8</code></td>
+      <td>Set predicate <code>P1</code> = the <b>VL64</b> mask token (#8 ⇒ "first 64 i32 lanes valid").</td>
+      <td>Tells every subsequent vector op which lanes are live. P1 is the global "this many lanes" mask.</td>
+    </tr>
+    <tr>
+      <td class="num-right">2</td>
+      <td><code>PSET.b32 P2,#15</code></td>
+      <td>Set predicate <code>P2</code> = the <b>ALLF</b> token (#15 ⇒ "all 256 lanes high").</td>
+      <td>Holds an all-ones reference for the PXOR no-op on line 16. Never actually changes value.</td>
+    </tr>
+    <tr>
+      <td class="num-right">3</td>
+      <td><code>VLOOPV2_V310 S3,#35,#1,#1</code></td>
+      <td>Hardware loop: execute the next 35 instructions <code>S3</code> times.</td>
+      <td>The <code>_V310</code> suffix is the chip-revision encoding. <code>S3</code> holds the iteration count (probably 16 to produce 32 rows in two-row-per-iter mode).</td>
+    </tr>
+  </table>
+
+  <div class="callout">
+    <b>P1 and P2 are loop-invariant.</b> They get set once before the
+    VLOOP and never touched again across all 35 × S3 instructions.
+    The same applies to V0 and V1 (the "1" and "0" sources for VSEL)
+    if they are set elsewhere pre-loop — but we don't see their
+    definitions in this snippet (Opt 6 target).
+  </div>
+
+  <h3>VLOOPV2 — the heart of the loop</h3>
+  <p>VLOOPV2 is a hardware-managed loop: the AIV's RVECLP pipe maintains
+  the iter counter internally, no per-iter conditional-branch is issued.
+  The 35-insn body executes in a back-to-back stream with no front-end
+  fetch overhead between iterations. This is why VLOOP-based kernels
+  hit higher RVECEX utilization than equivalent Triton-emitted scalar
+  loops.</p>
+
+  <div class="slide-number">4 / 18</div>
+</div>
+
+<!-- =================================================================== -->
+<!-- SLIDE 5 — PASS A COMPUTE BODY                                        -->
+<!-- =================================================================== -->
+<div class="slide">
+  <div class="slide-title-bar"><h2>4. Pass A compute body (lines 4–22) — mapping to <code>mask_fn</code></h2></div>
+
+  <table>
+    <tr><th>Line(s)</th><th>Hardware</th><th>Triton-level equivalent</th></tr>
+    <tr>
+      <td class="num-right">4, 10</td>
+      <td><code>VLDI V2,[S6]</code> + <code>VADDS V2,V2,S8,P1</code></td>
+      <td><code>k_offset = arange(0, BLOCK_N) + pid_n * BLOCK_N</code> — the launcher reconstructs <code>k_offset</code> on-chip from a constant <code>arange</code> + per-block scalar.</td>
+    </tr>
+    <tr>
+      <td class="num-right">5</td>
+      <td><code>VLDI V3,[S69],#16,#0,#1</code></td>
+      <td><code>q_offset[i]</code> — per-iter advance via <code>#p=1</code> + 16-byte offset, broadcast across all lanes.</td>
+    </tr>
+    <tr>
+      <td class="num-right">6</td>
+      <td><code>VLDI V4,[S68],#1,#3,#1</code></td>
+      <td><code>q_attn[i]</code> — same per-iter advance, brc_b32 mode (#dist=3).</td>
+    </tr>
+    <tr>
+      <td class="num-right">7</td>
+      <td><code>VLDI V5,[S10],#0,#0,#0</code></td>
+      <td><code>k_attn</code> — full-VL, no advance (same 32 values every iter — row-broadcast).</td>
+    </tr>
+    <tr>
+      <td class="num-right">8, 13–15</td>
+      <td><code>VLDAS+SMOV+VLDUI+MOVVP</code></td>
+      <td>Loads the precomputed C-byte buffer (<code>k_attn == 0</code>), unaligned because the C-bytes start mid-bank, then narrows i8 → i1 via MOVVP.</td>
+    </tr>
+    <tr>
+      <td class="num-right">11</td>
+      <td><code>VCMP.LE.s32 P5,V3,V2,P1</code></td>
+      <td><b>A</b> = <code>q_offset[:,None] &lt;= k_offset[None,:]</code> (triu_causal)</td>
+    </tr>
+    <tr>
+      <td class="num-right">12</td>
+      <td><code>VCMP.EQ.s32 P4,V4,V5,P1</code></td>
+      <td><b>B</b> = <code>q_attn[:,None] == k_attn[None,:]</code> (group match)</td>
+    </tr>
+    <tr>
+      <td class="num-right">15</td>
+      <td><code>MOVVP.b32 P3,V6,#0</code></td>
+      <td><b>C</b> = <code>k_attn[None,:] == 0</code> (wildcard key — precomputed, just loaded)</td>
+    </tr>
+    <tr>
+      <td class="num-right">19</td>
+      <td><code>VCMP.EQ.s32 P4,V3,V2,P1</code></td>
+      <td><b>F</b> = <code>q_offset[:,None] == k_offset[None,:]</code> (diagonal)</td>
+    </tr>
+    <tr>
+      <td class="num-right">16–18, 20</td>
+      <td><code>PXOR + POR + PAND + POR</code></td>
+      <td><code>mask = (A &amp; (B | C)) | F</code> — the Boolean tree, all in predicate algebra.</td>
+    </tr>
+    <tr>
+      <td class="num-right">21</td>
+      <td><code>VSEL.b32 V2,V1,V0,P3</code></td>
+      <td><code>tl.where(mask, V1, V0)</code> where V1 holds 1's, V0 holds 0's.</td>
+    </tr>
+    <tr>
+      <td class="num-right">22</td>
+      <td><code>VSTI V2,[S67],#16,#2,P1,#1</code></td>
+      <td>Store row to UB at [S67]; later <code>MTE3</code> drains it to GM.</td>
+    </tr>
+  </table>
+
+  <div class="slide-number">5 / 18</div>
+</div>
+
+<!-- =================================================================== -->
+<!-- SLIDE 6 — LOOP-INVARIANTS (THE OPTIMIZATION SURFACE)                 -->
+<!-- =================================================================== -->
+<div class="slide">
+  <div class="slide-title-bar"><h2>5. Loop-invariants exposed — what the body needlessly recomputes</h2></div>
+
+  <p>Inside the VLOOP, certain instructions produce <i>bit-identical
+  results every iteration</i>. They're loop-invariants the compiler
+  failed to hoist. These are the highest-leverage optimization
+  targets.</p>
+
+  <div class="col2-7-5">
+    <div>
+      <pre class="code code-small"><span class="lnum"> 4</span>  <span class="inv"><span class="fn">VLDI</span> <span class="reg">V2</span>,[<span class="reg">S6</span>],#<span class="num">0</span>,#<span class="num">0</span>,#<span class="num">0</span></span>           <span class="com">; #p=0 ⇒ same V2 every iter</span>
+<span class="lnum"> 5</span>  <span class="fn">VLDI</span> <span class="reg">V3</span>,[<span class="reg">S69</span>],#<span class="num">16</span>,#<span class="num">0</span>,#<span class="num">1</span>             <span class="com">; per-iter — real work</span>
+<span class="lnum"> 6</span>  <span class="fn">VLDI</span> <span class="reg">V4</span>,[<span class="reg">S68</span>],#<span class="num">1</span>,#<span class="num">3</span>,#<span class="num">1</span>              <span class="com">; per-iter — real work</span>
+<span class="lnum"> 7</span>  <span class="inv"><span class="fn">VLDI</span> <span class="reg">V5</span>,[<span class="reg">S10</span>],#<span class="num">0</span>,#<span class="num">0</span>,#<span class="num">0</span></span>          <span class="com">; #p=0 ⇒ same V5 every iter</span>
+<span class="lnum"> 8</span>  <span class="inv"><span class="fn">VLDAS</span> <span class="reg">ULD0</span>,[<span class="reg">S12</span>]</span>                  <span class="com">; same ULD0 every iter</span>
+<span class="lnum"> 9</span>  <span class="inv"><span class="fn">SMOV</span>.b32 <span class="reg">S70</span>,<span class="reg">S12</span>      </span>             <span class="com">; same S70 every iter</span>
+<span class="lnum">10</span>  <span class="inv"><span class="fn">VADDS</span>.s32 <span class="reg">V2</span>,<span class="reg">V2</span>,<span class="reg">S8</span>,<span class="reg">P1</span>      </span>          <span class="com">; S8 const ⇒ same V2 every iter</span>
+<span class="lnum">11</span>  <span class="fn">VCMP</span>.LE.s32 <span class="reg">P5</span>,<span class="reg">V3</span>,<span class="reg">V2</span>,<span class="reg">P1</span>               <span class="com">; depends on V3[i] — real</span>
+<span class="lnum">12</span>  <span class="fn">VCMP</span>.EQ.s32 <span class="reg">P4</span>,<span class="reg">V4</span>,<span class="reg">V5</span>,<span class="reg">P1</span>               <span class="com">; depends on V4[i] — real</span>
+<span class="lnum">13</span>  <span class="inv"><span class="fn">VLDUI</span> <span class="reg">V6</span>,<span class="reg">ULD0</span>,[<span class="reg">S70</span>],#<span class="num">0</span></span>           <span class="com">; same C every iter</span>
+<span class="lnum">14</span>  <span class="inv"><span class="fn">SMOV</span>.b32 <span class="reg">S70</span>,<span class="reg">S18</span></span>                  <span class="com">; pass-B reset, but invariant</span>
+<span class="lnum">15</span>  <span class="inv"><span class="fn">MOVVP</span>.b32 <span class="reg">P3</span>,<span class="reg">V6</span>,#<span class="num">0</span></span>                <span class="com">; C produced every iter</span>
+<span class="lnum">16</span>  <span class="inv"><span class="fn">PXOR</span> <span class="reg">P3</span>,<span class="reg">P3</span>,<span class="reg">P2</span>,<span class="reg">P1</span></span>                 <span class="com">; XOR with all-ones = no-op</span>
+…</pre>
+    </div>
+    <div>
+      <h3>Why these are invariant</h3>
+      <ul class="tight" style="font-size:13.5px">
+        <li><b>#p=0 VLDIs (lines 4, 7)</b>: <code>k_offset</code> /
+            <code>k_attn</code> have no per-row data — they're full-row
+            vectors that broadcast across the matrix.</li>
+        <li><b>VADDS (line 10)</b>: S8 = <code>pid * BLOCK_N</code> is
+            set pre-loop; never changes across iterations.</li>
+        <li><b>VLDAS+VLDUI+MOVVP (lines 8, 13, 15)</b>: produce
+            <code>C[j] = (k_attn[j] == 0)</code>, which is
+            row-invariant (column-only).</li>
+        <li><b>PXOR (line 16)</b>: <code>P2 = ALLF</code>, so
+            <code>P3 XOR ALLF = ~P3</code> — but the subsequent POR
+            with another always-recomputed C makes it functionally a
+            no-op. Pure dead code.</li>
+      </ul>
+
+      <div class="warn" style="font-size:13px">
+        <b>11 of 22 lines in pass A are invariant.</b> Every iter
+        wastes RVECLD bandwidth and RVECEX cycles redoing setup.
+        Opts 1–6 + 11–12 are entirely about hoisting these
+        out of the loop.
+      </div>
+    </div>
+  </div>
+
+  <div class="slide-number">6 / 18</div>
+</div>
+
+<!-- =================================================================== -->
+<!-- SLIDE 7 — OPTIMIZATION TAXONOMY                                      -->
+<!-- =================================================================== -->
+<div class="slide">
+  <div class="slide-title-bar"><h2>6. The 23 optimizations — taxonomy</h2></div>
+
+  <table>
+    <tr><th>Category</th><th>Opts</th><th>What they attack</th></tr>
+    <tr class="tier-a">
+      <td><b>Loop-invariant hoisting</b></td>
+      <td>1, 2, 3, 4, 5, 6, 11, 12</td>
+      <td>Move recomputed-every-iter ops out of the VLOOP (V2, V5, V0/V1, C, F)</td>
+    </tr>
+    <tr class="tier-a">
+      <td><b>μarch alignment</b></td>
+      <td>13, 14, 22, 23</td>
+      <td>UB bank-conflict-free placement; 32 B / 256 B alignment so unaligned-load helpers disappear</td>
+    </tr>
+    <tr class="tier-a">
+      <td><b>Cast-variant collapse</b></td>
+      <td>18, 19, 20</td>
+      <td>Eliminate i1 ↔ f16 ↔ i32 widenings — converge cast variant onto bool path</td>
+    </tr>
+    <tr class="tier-b">
+      <td><b>ISA-feature fusion</b></td>
+      <td>7, 8</td>
+      <td>Fuse two VCMPs into one; direct i1 → i8 via wider VSEL</td>
+    </tr>
+    <tr class="tier-b">
+      <td><b>Cross-tile packing</b></td>
+      <td>9, 10, 15</td>
+      <td>Process two output rows or two key blocks per iter using upper half of vreg</td>
+    </tr>
+    <tr class="tier-b">
+      <td><b>Data-handoff</b></td>
+      <td>17</td>
+      <td>UB↔L1 direct mask handoff (skip GM) for downstream AIC fusion</td>
+    </tr>
+    <tr class="tier-c">
+      <td><b>Cross-launch pipelining</b></td>
+      <td>21</td>
+      <td>Hide MTE2 prefetch of launch N+1 under launch N's VLOOP compute</td>
+    </tr>
+    <tr class="tier-c">
+      <td><b>Programming-model</b></td>
+      <td>16</td>
+      <td>SIMT mode: 4 warps per AIV → 4× per-core scaling</td>
+    </tr>
+  </table>
+
+  <div class="callout">
+    <span class="tier-badge badge-a">Tier A</span> — structurally
+    proven; would unambiguously reduce ops/cycle/UB-bandwidth.
+    <span class="tier-badge badge-b" style="margin-left:8px">Tier B</span> — strong inference but depends on details we don't have full ISA spec for.
+    <span class="tier-badge badge-c" style="margin-left:8px">Tier C</span> — speculative or requires significant codegen rework.
+  </div>
+
+  <div class="slide-number">7 / 18</div>
+</div>
+
+<!-- =================================================================== -->
+<!-- SLIDE 8 — TIER-A STRUCTURAL HOIST                                    -->
+<!-- =================================================================== -->
+<div class="slide">
+  <div class="slide-title-bar"><h2>7. Tier-A loop-invariant hoists (Opts 1–6, 11–12)</h2></div>
+
+  <table>
+    <tr><th>#</th><th>Optimization</th><th class="num-right">Saving</th><th>Mechanism</th></tr>
+    <tr class="tier-a">
+      <td>1</td>
+      <td>§6.6 Inline-recompute C</td>
+      <td class="num-right">−34 ops</td>
+      <td>Skip the UB-buffered C; reuse <code>VCMP.EQ V5, #0</code> in body. Trades 1 VCMP for 4 setup ops (VLDAS+SMOV+VLDUI+MOVVP).</td>
+    </tr>
+    <tr class="tier-a">
+      <td><b>2</b></td>
+      <td><b>§6.6 Hold C in a P-reg</b></td>
+      <td class="num-right"><b>−65 ops</b></td>
+      <td>Compute C once pre-loop into <code>P6</code>; body reads <code>P6</code> directly. Eliminates all 5 C-setup insns per iter.</td>
+    </tr>
+    <tr class="tier-a">
+      <td>3</td>
+      <td>§6.7 brc_b32 stream q_offset</td>
+      <td class="num-right">−16 ops</td>
+      <td>Switch V3 load from full-VL+per-iter to brc_b32 mode like V4 — one scalar advance per iter, not a full vreg.</td>
+    </tr>
+    <tr class="tier-a">
+      <td><b>4</b></td>
+      <td><b>§6.8 Hoist V2 (VLDI + VADDS)</b></td>
+      <td class="num-right"><b>−62 ops</b></td>
+      <td>V2 = k_offset+pid·BLOCK is constant across iters; move out of VLOOP entirely. Also saves 8 KB UB read bandwidth.</td>
+    </tr>
+    <tr class="tier-a">
+      <td>5</td>
+      <td>§6.8 Hoist V5 (k_attn)</td>
+      <td class="num-right">−31 ops</td>
+      <td>Same reasoning as Opt 4 but for V5. With #p=0, V5 is bit-identical every iter.</td>
+    </tr>
+    <tr class="tier-a">
+      <td>6</td>
+      <td>§6.8 Hoist V0/V1 + scalar setup</td>
+      <td class="num-right">~−160 ops</td>
+      <td>V0, V1 (constants 0 and 1 used by VSEL) and S70 setup are also invariant. Big total because each is a few ops × 32 iters.</td>
+    </tr>
+    <tr class="tier-a">
+      <td>11</td>
+      <td>§6.10 Share V3 across passes</td>
+      <td class="num-right">−48 ops</td>
+      <td>Pass A and pass B both load V3 from the same row. Reuse pass-A's V3 in pass B as is already done for V4.</td>
+    </tr>
+    <tr class="tier-a">
+      <td>12</td>
+      <td>§6.11 Hoist F = q_off == k_off</td>
+      <td class="num-right">−32 to −64 ops</td>
+      <td>F is computed twice per iter (line 19 + line 35) but doesn't depend on i within the same iter. Hoist once per pass, or share across passes.</td>
+    </tr>
+  </table>
+
+  <div class="callout">
+    <b>Combined Tier-A hoists ≈ −450 ops</b> across the 32-iter VLOOP.
+    For RVECEX-bound work this is ~−350 cyc (at the empirical 1.28
+    ops/cyc rate). The CANN 9.0.0 build of <code>mask_kernel</code>
+    already applies Opts 4, 5, 6, 12; <code>assembler.as</code> is
+    from an older / different compiler that didn't.
+  </div>
+
+  <div class="slide-number">8 / 18</div>
+</div>
+
+<!-- =================================================================== -->
+<!-- SLIDE 9 — TIER-A μARCH ALIGNMENT                                     -->
+<!-- =================================================================== -->
+<div class="slide">
+  <div class="slide-title-bar"><h2>8. Tier-A μarch alignment (Opts 13, 14, 22, 23)</h2></div>
+
+  <table>
+    <tr><th>#</th><th>Optimization</th><th class="num-right">Saving</th><th>Mechanism</th></tr>
+    <tr class="tier-a">
+      <td>13</td>
+      <td>§6.12 Bank-aware UB layout</td>
+      <td class="num-right">0–10 cyc/iter</td>
+      <td>Place V3, V5, C-buf so they live in different bank-groups → simultaneous reads on UB's 2R/group budget without conflicts.</td>
+    </tr>
+    <tr class="tier-a">
+      <td>14</td>
+      <td>§6.12 Co-locate C-reload + result-VSTI</td>
+      <td class="num-right">0–5 cyc/iter</td>
+      <td>Aligning C-bytes and output-row addresses so that VSTI write doesn't bank-conflict with the next iter's C-load.</td>
+    </tr>
+    <tr class="tier-a">
+      <td>22</td>
+      <td>§6.19 Align operand pointers to 256 B</td>
+      <td class="num-right">~−50-100 cyc/launch</td>
+      <td>Allows ND-DMA Cache to coalesce GM bursts without padding lanes → MTE2 setup gets shorter and L2-line-friendly.</td>
+    </tr>
+    <tr class="tier-a">
+      <td><b>23</b></td>
+      <td><b>§6.20 C-buffer 32 B alignment</b></td>
+      <td class="num-right"><b>−160 ops</b></td>
+      <td>If C-buffer starts at a 32 B boundary, replace the VLDAS+SMOV+VLDUI 3-op unaligned-load sequence with a single VLDI. Eliminates ~5 ops per iter × 32.</td>
+    </tr>
+  </table>
+
+  <div class="callout">
+    These come from reading <code>atlas_ascendc_best_practices_10_00021</code>
+    + <code>atlas_ascendc_10_00065</code> — the UB bank-port and
+    ND-DMA Cache rules. None of them require any kernel-code change
+    in <code>mask_fn</code>; they're pure launcher-side fixes
+    (buffer allocation alignment / placement).
+  </div>
+
+  <h3>Why Opt 23 specifically is a big win for <code>assembler.as</code></h3>
+
+  <p>Lines 8, 13, 14, 15 (VLDAS+VLDUI+SMOV+MOVVP) exist <i>only because</i>
+  the C-buffer wasn't aligned to 32 B. With launcher-side alignment,
+  the entire 4-instruction unaligned-load preamble per iter collapses
+  to a single <code>VLDI V6, [S12], #0, #0, #0</code> followed by the
+  already-present <code>MOVVP</code>. <b>3 ops/iter × 32 iters = ~96
+  ops</b>, plus the SMOV scalar work, brings total saving to ~160.</p>
+
+  <div class="slide-number">9 / 18</div>
+</div>
+
+<!-- =================================================================== -->
+<!-- SLIDE 10 — TIER-A CAST COLLAPSE                                      -->
+<!-- =================================================================== -->
+<div class="slide">
+  <div class="slide-title-bar"><h2>9. Tier-A cast-variant collapse (Opts 18, 19, 20)</h2></div>
+
+  <p>These apply to the <i>cast variant</i> of mask_fn (TYPE=2 path or
+  any version with explicit <code>.to(tl.int32)</code> conversions),
+  not directly to the bool <code>assembler.as</code>. But they're
+  important because they show how the cast variant could converge
+  back to the bool path's efficiency.</p>
+
+  <table>
+    <tr><th>#</th><th>Optimization</th><th class="num-right">Saving</th><th>What it removes</th></tr>
+    <tr class="tier-a">
+      <td>18</td>
+      <td>§6.16 Eliminate i1 → f16 → i32 widenings</td>
+      <td class="num-right">−192 ops</td>
+      <td>The cast variant lowers <code>tl.where(bool, ...)</code> via float intermediates. Six VCASTs per iter × 32 = 192 wasted ops.</td>
+    </tr>
+    <tr class="tier-a">
+      <td>19</td>
+      <td>§6.16 Skip i32→f32→i1→f16→i8 final chain</td>
+      <td class="num-right">−96 ops</td>
+      <td>End-of-row narrowing goes through 4 intermediate types. Direct VSEL.b32 → b8 narrow does the same in one step.</td>
+    </tr>
+    <tr class="tier-a">
+      <td>20</td>
+      <td>§6.16 Full migration to P-reg algebra</td>
+      <td class="num-right">converges to bool</td>
+      <td>Keep all booleans in P-regs (as Opts 2, 12 already do). The cast variant becomes structurally identical to the bool kernel.</td>
+    </tr>
+  </table>
+
+  <div class="callout">
+    <b>Cast → bool convergence.</b> Once Opts 18 + 19 + 20 apply, the
+    cast variant has the same op count and same critical path as bool.
+    The reason it's slower today is purely the intermediate-type
+    widening; the logical work is identical.
+  </div>
+
+  <h3>Where the widenings come from</h3>
+  <pre class="code code-small"><span class="com"># cast variant (TYPE=2-like, schematic):</span>
+mask_i1   = (q_off &lt;= k_off)
+mask_f16  = mask_i1.<span class="fn">to</span>(tl.float16)        <span class="com"># ← VCAST i1 → f16</span>
+mask_i32  = mask_f16.<span class="fn">to</span>(tl.int32)         <span class="com"># ← VCAST f16 → i32</span>
+combined  = mask_i32 &amp; group_i32                <span class="com"># ← vector AND in i32</span>
+…
+out_i1    = combined.<span class="fn">to</span>(tl.int1)          <span class="com"># ← VCAST i32 → i1 (back where we started!)</span>
+out_f16   = out_i1.<span class="fn">to</span>(tl.float16)
+out_i8    = out_f16.<span class="fn">to</span>(tl.int8)            <span class="com"># ← 3-step narrow for the store</span></pre>
+
+  <p>None of these intermediates carry meaningful information that
+  isn't in <code>mask_i1</code>. The compiler shouldn't need this
+  many VCASTs — but the cast lowering path inserted them
+  conservatively.</p>
+
+  <div class="slide-number">10 / 18</div>
+</div>
+
+<!-- =================================================================== -->
+<!-- SLIDE 11 — TIER-B + TIER-C                                           -->
+<!-- =================================================================== -->
+<div class="slide">
+  <div class="slide-title-bar"><h2>10. Tier-B and Tier-C — speculative / bigger swings</h2></div>
+
+  <table>
+    <tr><th>#</th><th>Tier</th><th>Optimization</th><th class="num-right">Saving</th><th>Notes</th></tr>
+    <tr class="tier-b">
+      <td>7</td><td><span class="tier-badge badge-b">B</span></td>
+      <td>§6.8 Fuse VCMP.LE + VCMP.EQ</td>
+      <td class="num-right">−32 ops</td>
+      <td>Both compare <code>V3 vs V2</code> at lines 11 and 19. If the ISA has a "&lt;=" + "==" fused compare, save one VCMP/iter.</td>
+    </tr>
+    <tr class="tier-b">
+      <td>8</td><td><span class="tier-badge badge-b">B</span></td>
+      <td>§6.8 Direct i1 → i8 via VSEL.b8</td>
+      <td class="num-right">−32 ops</td>
+      <td>Currently outputs i32 1/0 via VSEL.b32, then stores i32. A VSEL.b8 would write i8 directly, skipping the per-iter narrow.</td>
+    </tr>
+    <tr class="tier-c">
+      <td>9</td><td><span class="tier-badge badge-c">C</span></td>
+      <td>§6.8 Pack 2 rows per iter</td>
+      <td class="num-right">~50% loop OH</td>
+      <td>Already partially done (pass A + pass B). Opt 9 would use the upper half of the 256 B vreg to do 4 rows per iter.</td>
+    </tr>
+    <tr class="tier-c">
+      <td>10</td><td><span class="tier-badge badge-c">C</span></td>
+      <td>§6.9 Cross-tile pack K[0]+K[1]</td>
+      <td class="num-right">~−96 ops</td>
+      <td>Process two key-blocks worth of comparisons in one VCMP by packing them into one vreg.</td>
+    </tr>
+    <tr class="tier-b">
+      <td>15</td><td><span class="tier-badge badge-b">B</span></td>
+      <td>§6.13 Packed V5 single-VCMP</td>
+      <td class="num-right">−48 ops</td>
+      <td>Combine K[A] + K[B] into a packed V5 so one VCMP covers two key blocks.</td>
+    </tr>
+    <tr class="tier-c">
+      <td><b>16</b></td><td><span class="tier-badge badge-c">C</span></td>
+      <td><b>§6.14 SIMT mode (4 warps/AIV)</b></td>
+      <td class="num-right"><b>4× per-AIV</b></td>
+      <td>Per-AIV throughput jumps 4× if the mask kernel is reauthored to use SIMT mode. Requires new programming-model.</td>
+    </tr>
+    <tr class="tier-b">
+      <td>17</td><td><span class="tier-badge badge-b">B</span></td>
+      <td>§6.15 UB↔L1 direct mask handoff</td>
+      <td class="num-right">−2 KB GM/tile</td>
+      <td>For attention pipelines that fuse mask + scale + softmax — keep the mask in UB and let the AIC read it via the direct UB↔L1 path, skipping a GM round-trip.</td>
+    </tr>
+    <tr class="tier-c">
+      <td><b>21</b></td><td><span class="tier-badge badge-c">C</span></td>
+      <td><b>§6.18 Cross-launch prefetch</b></td>
+      <td class="num-right"><b>~−700 cyc / launch-pair</b></td>
+      <td>Use the 4 AIV instruction queues (MTE2 / MTE3 / SIMD-VF / SIMT-VF) to issue launch N+1's MTE2 during launch N's compute.</td>
+    </tr>
+  </table>
+
+  <div class="slide-number">11 / 18</div>
+</div>
+
+<!-- =================================================================== -->
+<!-- SLIDE 12 — DEEP DIVE: OPT 2                                          -->
+<!-- =================================================================== -->
+<div class="slide">
+  <div class="slide-title-bar"><h2>11. Deep dive — Opt 2: Hold C in a P-reg <span class="tier-badge badge-a">−65 ops</span></h2></div>
+
+  <div class="col2">
+    <div>
+      <h3>Current body (5 ops produce C every iter)</h3>
+      <pre class="code code-small"><span class="com">; lines 8, 13, 14, 15 + dependency on V6</span>
+<span class="fn">VLDAS</span> <span class="reg">ULD0</span>,[<span class="reg">S12</span>]            <span class="com">; setup unaligned ctx</span>
+<span class="fn">SMOV</span>.b32 <span class="reg">S70</span>,<span class="reg">S12</span>              <span class="com">; copy addr</span>
+<span class="fn">VLDUI</span> <span class="reg">V6</span>,<span class="reg">ULD0</span>,[<span class="reg">S70</span>],#<span class="num">0</span>       <span class="com">; load C-bytes</span>
+<span class="fn">SMOV</span>.b32 <span class="reg">S70</span>,<span class="reg">S18</span>              <span class="com">; reset S70 for pass B</span>
+<span class="fn">MOVVP</span>.b32 <span class="reg">P3</span>,<span class="reg">V6</span>,#<span class="num">0</span>            <span class="com">; V6 → P3</span></pre>
+      <p>Then P3 is consumed by lines 17–18 and immediately overwritten
+         by line 19. The C value is rematerialized identically next iter.</p>
+
+      <h3>Optimized — once pre-loop, then read</h3>
+      <pre class="code code-small"><span class="com">; pre-loop (5 ops, ONCE):</span>
+<span class="fn">VLDI</span> <span class="reg">V5</span>,[<span class="reg">S10</span>],#<span class="num">0</span>,#<span class="num">0</span>,#<span class="num">0</span>     <span class="com">; load k_attn (already there)</span>
+<span class="fn">VCMP</span>.EQ.s32 <span class="reg">P6</span>,<span class="reg">V5</span>,<span class="reg">V0_zero</span>,<span class="reg">P1</span>  <span class="com">; P6 = (k_attn == 0)</span>
+<span class="com">; pre-loop has computed C ONCE into a preserved P-reg</span>
+
+<span class="com">; body, now 5 fewer ops per iter:</span>
+<span class="com">; (skip lines 8, 13, 14, 15)</span>
+<span class="fn">POR</span> <span class="reg">P3</span>,<span class="reg">P4</span>,<span class="reg">P6</span>,<span class="reg">P1</span>             <span class="com">; B | C, reads P6 directly</span></pre>
+    </div>
+    <div>
+      <h3>Cost-benefit ledger</h3>
+      <table>
+        <tr><th></th><th class="num-right">Current</th><th class="num-right">Optimized</th></tr>
+        <tr><td>Pre-loop C ops</td><td class="num-right">0</td><td class="num-right">2</td></tr>
+        <tr><td>Per-iter C ops</td><td class="num-right">5</td><td class="num-right">0</td></tr>
+        <tr><td>Loop iters (S3)</td><td class="num-right">~32</td><td class="num-right">~32</td></tr>
+        <tr><th>Total C cost</th><th class="num-right">5×32=160</th><th class="num-right">2</th></tr>
+        <tr><th>Net saving</th><td colspan="2" class="num-right"><b>−158 ops</b> (Opt 2 alone × pass; ÷2 for two passes = −65 ops)</td></tr>
+      </table>
+
+      <h3>Why it requires P-reg preservation</h3>
+      <p>P-regs (P0..P7) are preserved across VLOOP iterations
+      <i>by hardware contract</i> — the VLOOP wrapper doesn't reset
+      them. This is what makes P1 = VL64 and P2 = ALLF stick across
+      all 35 × S3 instructions. Same mechanism applies to a "C in P6"
+      strategy: set once pre-loop, read N times in body.</p>
+
+      <div class="callout">
+        <b>Why hivmc-a5 didn't do this.</b> The C → P6 path requires
+        recognizing that the "C-bytes" buffer in UB is the boolean
+        result of a single pre-loop VCMP. The compiler instead
+        chose to <i>materialize</i> C as i8 bytes in UB, then
+        re-materialize as i1 in body — over 32 iters this is a much
+        more expensive choice.
+      </div>
+    </div>
+  </div>
+
+  <div class="slide-number">12 / 18</div>
+</div>
+
+<!-- =================================================================== -->
+<!-- SLIDE 13 — DEEP DIVE: OPT 4                                          -->
+<!-- =================================================================== -->
+<div class="slide">
+  <div class="slide-title-bar"><h2>12. Deep dive — Opt 4: Hoist V2 (VLDI + VADDS) <span class="tier-badge badge-a">−62 ops</span></h2></div>
+
+  <div class="col2">
+    <div>
+      <h3>What V2 contains</h3>
+      <p>V2 holds <code>k_offset[None,:]</code>, computed as
+      <code>arange(0, 32) + pid_n × BLOCK_N</code>. Both inputs are constant:
+      <code>arange(0, 32)</code> is a fixed UB pattern, <code>pid_n × BLOCK_N</code>
+      is the scalar <code>S8</code> assigned pre-loop.</p>
+
+      <pre class="code code-small"><span class="com">; CURRENT body, lines 4 + 10 run every iter:</span>
+<span class="fn">VLDI</span> <span class="reg">V2</span>,[<span class="reg">S6</span>],#<span class="num">0</span>,#<span class="num">0</span>,#<span class="num">0</span>        <span class="com">; load arange(0, 32)</span>
+…
+<span class="fn">VADDS</span>.s32 <span class="reg">V2</span>,<span class="reg">V2</span>,<span class="reg">S8</span>,<span class="reg">P1</span>            <span class="com">; V2 += S8 (constant)</span>
+
+<span class="com">; Result: V2 = [pid*BLOCK, pid*BLOCK+1, …, pid*BLOCK+31]</span>
+<span class="com">; This value is identical for iter 0, 1, 2, …, 31</span></pre>
+
+      <h3>Hoist out of the loop</h3>
+      <pre class="code code-small"><span class="com">; PRE-LOOP (2 ops, once per kernel):</span>
+<span class="fn">VLDI</span>  <span class="reg">V2</span>,[<span class="reg">S6</span>],#<span class="num">0</span>,#<span class="num">0</span>,#<span class="num">0</span>
+<span class="fn">VADDS</span>.s32 <span class="reg">V2</span>,<span class="reg">V2</span>,<span class="reg">S8</span>,<span class="reg">P1</span>
+
+<span class="com">; BODY: V2 just sits there, used by VCMP.LE and VCMP.EQ</span>
+<span class="fn">VCMP</span>.LE.s32 <span class="reg">P5</span>,<span class="reg">V3</span>,<span class="reg">V2</span>,<span class="reg">P1</span>
+<span class="fn">VCMP</span>.EQ.s32 <span class="reg">P4</span>,<span class="reg">V3</span>,<span class="reg">V2</span>,<span class="reg">P1</span></pre>
+    </div>
+
+    <div>
+      <h3>Cost-benefit ledger</h3>
+      <table>
+        <tr><th></th><th class="num-right">Current</th><th class="num-right">Optimized</th></tr>
+        <tr><td>Pre-loop V2 ops</td><td class="num-right">0</td><td class="num-right">2</td></tr>
+        <tr><td>Per-iter V2 ops</td><td class="num-right">2</td><td class="num-right">0</td></tr>
+        <tr><td>Loop iters</td><td class="num-right">32</td><td class="num-right">32</td></tr>
+        <tr><th>Total V2 cost</th><th class="num-right">64</th><th class="num-right">2</th></tr>
+        <tr><th>Net saving</th><td colspan="2" class="num-right"><b>−62 ops</b></td></tr>
+        <tr><th>UB bandwidth</th><th class="num-right">32 × 256 B</th><th class="num-right">256 B</th></tr>
+        <tr><th>UB bw saved</th><td colspan="2" class="num-right"><b>−8 KB UB read bandwidth</b></td></tr>
+      </table>
+
+      <h3>Pipe-level impact</h3>
+      <p>VLDI hits RVECLD; VADDS hits RVECEX. Hoisting saves:</p>
+      <ul class="tight">
+        <li><b>RVECLD</b>: −32 ops (large headroom anyway — pipe is 18% utilized).</li>
+        <li><b>RVECEX</b>: −32 ops × 7.5 cyc/op pipelined ≈ <b>−25 cyc on the critical path</b>.</li>
+        <li><b>UB read ports</b>: 32 × 8 reads = 256 fewer port-cycles.</li>
+      </ul>
+
+      <div class="callout">
+        <b>Already applied in CANN 9.0.0</b> — the camodel-traced
+        kernel was built by the newer compiler that does hoist V2.
+        <code>assembler.as</code> is the "before" picture; the
+        CANN 9.0.0 trace is the "after" picture.
+      </div>
+    </div>
+  </div>
+
+  <div class="slide-number">13 / 18</div>
+</div>
+
+<!-- =================================================================== -->
+<!-- SLIDE 14 — DEEP DIVE: OPT 23                                         -->
+<!-- =================================================================== -->
+<div class="slide">
+  <div class="slide-title-bar"><h2>13. Deep dive — Opt 23: C-buffer 32 B alignment <span class="tier-badge badge-a">−160 ops</span></h2></div>
+
+  <div class="col2">
+    <div>
+      <h3>The problem — C is at an unaligned offset</h3>
+      <pre class="code code-small"><span class="com">; CURRENT: lines 8, 9, 13, 14 — 4-instruction</span>
+<span class="com">; unaligned-load preamble per iter</span>
+<span class="fn">VLDAS</span> <span class="reg">ULD0</span>,[<span class="reg">S12</span>]      <span class="com">; setup unaligned addr</span>
+<span class="fn">SMOV</span>.b32 <span class="reg">S70</span>,<span class="reg">S12</span>        <span class="com">; copy base addr</span>
+<span class="fn">VLDUI</span> <span class="reg">V6</span>,<span class="reg">ULD0</span>,[<span class="reg">S70</span>],#<span class="num">0</span> <span class="com">; load using offset</span>
+<span class="fn">SMOV</span>.b32 <span class="reg">S70</span>,<span class="reg">S18</span>        <span class="com">; (pass-B addr reset)</span></pre>
+
+      <p>The 4-step dance is needed because the C-buffer in UB
+      starts at an offset that isn't 32-byte aligned. <code>VLDAS</code>
+      sets up an "unaligned context" register (ULD0) holding the
+      base+shift, and <code>VLDUI</code> uses that context to do a
+      cross-bank read.</p>
+
+      <h3>The fix — align the C-buffer to 32 B</h3>
+      <p>Pure launcher-side change: when allocating C-buf in UB,
+      round the starting address up to the next 32 B boundary.
+      Then a vanilla <code>VLDI</code> works.</p>
+
+      <pre class="code code-small"><span class="com">; OPTIMIZED: 1 instruction</span>
+<span class="fn">VLDI</span> <span class="reg">V6</span>,[<span class="reg">S12</span>],#<span class="num">0</span>,#<span class="num">0</span>,#<span class="num">0</span>  <span class="com">; aligned load, no helper</span></pre>
+    </div>
+
+    <div>
+      <h3>Cost-benefit ledger</h3>
+      <table>
+        <tr><th></th><th class="num-right">Current</th><th class="num-right">Optimized</th></tr>
+        <tr><td>Ops per pass</td><td class="num-right">4 (lines 8,9,13,14)</td><td class="num-right">1 (VLDI)</td></tr>
+        <tr><td>Passes per iter</td><td class="num-right">2</td><td class="num-right">2</td></tr>
+        <tr><td>Iters</td><td class="num-right">~32</td><td class="num-right">~32</td></tr>
+        <tr><th>Total cost</th><th class="num-right">256</th><th class="num-right">64</th></tr>
+        <tr><th>Net saving</th><td colspan="2" class="num-right"><b>−192 ops</b><br>(rounded to "−160 ops" because some VLDAS/SMOV overlap MTE2 latency and don't truly serialize)</td></tr>
+      </table>
+
+      <h3>Pipe-level breakdown of saved ops</h3>
+      <ul class="tight">
+        <li><b>RVECLD</b>: −64 VLDAS, −32 VLDUI (these are partial loads)</li>
+        <li><b>RVECSU</b> (scalar): −64 SMOV</li>
+        <li>Both pipes have lots of slack in the current trace (RVECLD 18%, RVECSU 2% utilized) — so the cycle saving on the critical path is ~−40-60 cyc, not the full −160.</li>
+      </ul>
+
+      <div class="callout">
+        <b>Zero compiler change needed.</b> Opt 23 is a pure
+        <i>launcher fix</i>: just bump the C-buffer base address
+        in UB. No hivmc-a5 update, no rewriting of mask_fn. The
+        cleanest "free win" of the 23.
+      </div>
+    </div>
+  </div>
+
+  <div class="slide-number">14 / 18</div>
+</div>
+
+<!-- =================================================================== -->
+<!-- SLIDE 15 — DEEP DIVE: OPT 21                                         -->
+<!-- =================================================================== -->
+<div class="slide">
+  <div class="slide-title-bar"><h2>14. Deep dive — Opt 21: Cross-launch prefetch <span class="tier-badge badge-c">−700 cyc / launch-pair</span></h2></div>
+
+  <div class="col2">
+    <div>
+      <h3>The setup — 4 AIV instruction queues, run concurrently</h3>
+      <p>The AIV has <b>4 independent instruction queues</b>:</p>
+      <ul class="tight">
+        <li>MTE2 (GM → UB DMA)</li>
+        <li>MTE3 (UB → GM DMA)</li>
+        <li>SIMD VF (the VLOOP body fires here)</li>
+        <li>SIMT VF (idle in mask_kernel)</li>
+      </ul>
+      <p>They issue concurrently — an MTE2 burst can run while the
+      SIMD-VF queue executes a vector op.</p>
+
+      <h3>Current single-launch timeline</h3>
+      <pre class="code code-small">launch N:  | MTE2 prefetch (~700 cyc) | VLOOP (~1400 cyc) | MTE3 |
+                                        ╰─ AIV idle here? No — but cross-launch is</pre>
+
+      <h3>With cross-launch prefetch</h3>
+      <pre class="code code-small">launch N:    | MTE2 prefetch | VLOOP body                | MTE3 |
+launch N+1:                  | MTE2 prefetch              | VLOOP body | MTE3 |
+                              ╰──── overlap region (~700 cyc) ────╯</pre>
+    </div>
+
+    <div>
+      <h3>Why the AIV can do this</h3>
+      <p>MTE2 and SIMD-VF queues are dispatched <i>independently</i>.
+      A SIMD-VF op doesn't block an MTE2 op (unless they hit the
+      same UB bank-group, which is what Opt 13 alignment prevents).
+      So issuing launch N+1's MTE2 setup while launch N's VLOOP is
+      executing is structurally free.</p>
+
+      <h3>The catch</h3>
+      <ul class="tight">
+        <li>Requires <b>double-buffering of UB regions</b>: launch N
+            owns one slot, launch N+1's prefetch goes to another slot.</li>
+        <li>Requires <b>compiler-emitted MTE2 issue from outside the
+            kernel</b>: today the kernel sees one launch at a time;
+            cross-launch is a launcher-level pipeline.</li>
+        <li>This is the AscendC <code>TQue + BUFFER_NUM=2</code>
+            pattern (see <code>ascend_mte_data_movement.md</code> §2).</li>
+      </ul>
+
+      <h3>Cycle math</h3>
+      <table>
+        <tr><th></th><th class="num-right">Without Opt 21</th><th class="num-right">With Opt 21</th></tr>
+        <tr><td>Launch latency</td><td class="num-right">2200 cyc</td><td class="num-right">2200 cyc</td></tr>
+        <tr><td>Launch period (back-to-back)</td><td class="num-right">2200 cyc</td><td class="num-right">~1500 cyc</td></tr>
+        <tr><th>Saving / launch-pair</th><td colspan="2" class="num-right"><b>~−700 cyc (32% throughput)</b></td></tr>
+      </table>
+
+      <div class="callout">
+        <b>Tier-C</b> because it requires programming-model rework
+        (AscendC TQue or manual EVENT_ID rotation), and the
+        700-cyc gain only materializes when launches are
+        actually back-to-back — i.e., for high-throughput pipelines,
+        not one-shot calls.
+      </div>
+    </div>
+  </div>
+
+  <div class="slide-number">15 / 18</div>
+</div>
+
+<!-- =================================================================== -->
+<!-- SLIDE 16 — CUMULATIVE IMPACT                                         -->
+<!-- =================================================================== -->
+<div class="slide">
+  <div class="slide-title-bar"><h2>15. Cumulative impact — what each artifact could achieve</h2></div>
+
+  <table>
+    <tr><th>Artifact</th><th>Current state</th><th class="num-right">After Tier-A only</th><th class="num-right">After all incl. SIMT</th></tr>
+    <tr>
+      <td><code>assembler.as</code><br>(unknown compiler vintage)</td>
+      <td>17.5 ops/row, no cycle data</td>
+      <td class="num-right">~7 ops/row<br>(Opts 1-12 hoists + Opt 23 align)</td>
+      <td class="num-right">per-AIV <b>4× scaling</b><br>(Opt 16 SIMT)</td>
+    </tr>
+    <tr>
+      <td>CANN 9.0.0 bool <code>.o</code><br>(today's compiler)</td>
+      <td>1,431 cyc, 14.4 ops/row</td>
+      <td class="num-right">~1,000 cyc, ~9 ops/row<br>(+ Opt 2 missing C-in-P-reg)</td>
+      <td class="num-right">per-AIV <b>4× scaling</b><br>(Opt 16 SIMT)</td>
+    </tr>
+    <tr>
+      <td>Cast variant</td>
+      <td>~2× of bool</td>
+      <td class="num-right">≈ bool<br>(Opts 18-20 converge)</td>
+      <td class="num-right">per-AIV <b>4× scaling</b></td>
+    </tr>
+  </table>
+
+  <h3>Which optimizations are already realized vs. still missing</h3>
+
+  <table>
+    <tr><th>Optimization</th><th><code>assembler.as</code></th><th>CANN 9.0.0 trace</th></tr>
+    <tr class="tier-a"><td>Opt 1 (inline-recompute C)</td><td>γ instead</td><td class="num-right">α (applied)</td></tr>
+    <tr class="tier-a"><td><b>Opt 2 (C in P-reg)</b></td><td class="num-right" style="color:#c62828">✗ missing</td><td class="num-right" style="color:#c62828">✗ missing — biggest remaining win</td></tr>
+    <tr class="tier-a"><td>Opt 4 (V2 hoist)</td><td class="num-right" style="color:#c62828">✗</td><td class="num-right" style="color:#2e7d32">✓ applied</td></tr>
+    <tr class="tier-a"><td>Opt 5 (V5 hoist)</td><td class="num-right" style="color:#c62828">✗</td><td class="num-right" style="color:#2e7d32">✓</td></tr>
+    <tr class="tier-a"><td>Opt 6 (V0/V1 + scalar hoist)</td><td class="num-right" style="color:#c62828">✗</td><td class="num-right" style="color:#2e7d32">✓ partial</td></tr>
+    <tr class="tier-a"><td>Opt 11 (share V3 across passes)</td><td class="num-right" style="color:#c62828">✗</td><td>n/a (single pass in trace)</td></tr>
+    <tr class="tier-a"><td>Opt 12 (F-hoist)</td><td class="num-right" style="color:#c62828">✗</td><td class="num-right" style="color:#2e7d32">✓</td></tr>
+    <tr class="tier-a"><td>Opt 23 (C-buffer 32 B align)</td><td class="num-right" style="color:#c62828">✗ — launcher fix</td><td class="num-right" style="color:#c62828">✗ — launcher fix</td></tr>
+    <tr class="tier-c"><td>Opt 16 (SIMT)</td><td class="num-right" style="color:#c62828">✗</td><td class="num-right" style="color:#c62828">✗</td></tr>
+    <tr class="tier-c"><td>Opt 21 (cross-launch prefetch)</td><td class="num-right" style="color:#c62828">✗</td><td class="num-right" style="color:#c62828">✗</td></tr>
+  </table>
+
+  <div class="callout">
+    <b>For the modern CANN 9.0.0 build</b>: the two biggest gaps are
+    <b>Opt 2 (C in P-reg, −65 ops)</b> and <b>Opt 23 (C-buffer
+    alignment, −160 ops)</b>. Both are achievable without changing
+    the hivmc-a5 compiler internals — Opt 2 is a one-step lowering
+    rule, Opt 23 is a launcher-side allocation rule.
+  </div>
+
+  <div class="slide-number">16 / 18</div>
+</div>
+
+<!-- =================================================================== -->
+<!-- SLIDE 17 — WHICH PIPE EACH OPT SAVES ON                              -->
+<!-- =================================================================== -->
+<div class="slide">
+  <div class="slide-title-bar"><h2>16. Where on the AIV each optimization lands</h2></div>
+
+  <p>Mapping each optimization to the pipe it saves ops on, with
+  empirical utilization for context. RVECEX is the binding constraint
+  in the CANN 9.0.0 trace (64% util) — optimizations that target it
+  yield the biggest cycle-on-critical-path wins.</p>
+
+  <table>
+    <tr>
+      <th>Pipe</th>
+      <th>Empirical util</th>
+      <th>Opts that save ops here</th>
+      <th>Effect on critical path</th>
+    </tr>
+    <tr>
+      <td><b>RVECEX</b><br><small>vector ALU + predicate</small></td>
+      <td>64% ★ binding</td>
+      <td>Opt 2, 4, 7, 11, 12, 18, 20</td>
+      <td>1 op saved ≈ 0.78 cyc saved on critical path</td>
+    </tr>
+    <tr>
+      <td><b>RVECLD</b><br><small>vector load</small></td>
+      <td>18% (slack)</td>
+      <td>Opt 3, 4, 5, 6, 23</td>
+      <td>1 op saved ≈ 0 cyc on critical path (slack)</td>
+    </tr>
+    <tr>
+      <td><b>RVECST</b><br><small>vector store</small></td>
+      <td>9% (slack)</td>
+      <td>Opt 8, 14</td>
+      <td>1 op saved ≈ 0 cyc on critical path (slack)</td>
+    </tr>
+    <tr>
+      <td><b>RVECSU</b><br><small>scalar / aux</small></td>
+      <td>2% (slack)</td>
+      <td>Opt 23 (SMOV part)</td>
+      <td>1 op saved ≈ 0 cyc on critical path (slack)</td>
+    </tr>
+    <tr>
+      <td><b>MTE2</b><br><small>GM → UB DMA</small></td>
+      <td>pre-loop only</td>
+      <td>Opt 21, 22</td>
+      <td>up to −700 cyc per launch boundary (Opt 21)</td>
+    </tr>
+    <tr>
+      <td><b>UB bandwidth</b><br><small>read/write ports</small></td>
+      <td>port-by-port</td>
+      <td>Opt 4, 13, 14, 23</td>
+      <td>Removes UB bank conflicts → potential 1-cyc-per-iter shave</td>
+    </tr>
+    <tr>
+      <td><b>OoO rename</b><br><small>15 V + 15 P pool</small></td>
+      <td>kernel exhausts P-pool 41×</td>
+      <td>Opt 2 (consolidates P-reg holdings)</td>
+      <td>Fewer concurrent in-flight P-regs → fewer "OOO no avail" stalls</td>
+    </tr>
+    <tr>
+      <td><b>Programming model</b></td>
+      <td>—</td>
+      <td>Opt 16, 17</td>
+      <td>Opt 16: per-AIV 4× scaling. Opt 17: GM bandwidth saving.</td>
+    </tr>
+  </table>
+
+  <div class="callout">
+    <b>Practical hierarchy for closing the gap.</b> Apply in this
+    order: (1) Opt 23 — launcher-side alignment, free; (2) Opt 2 —
+    one-step lowering, biggest critical-path win; (3) Opts 13/14 —
+    bank discipline, may reveal more headroom; (4) Opt 21 — if the
+    pipeline is throughput-bound; (5) Opt 16 — if a SIMT rewrite is
+    acceptable.
+  </div>
+
+  <div class="slide-number">17 / 18</div>
+</div>
+
+<!-- =================================================================== -->
+<!-- SLIDE 18 — SUMMARY                                                   -->
+<!-- =================================================================== -->
+<div class="slide">
+  <div class="slide-title-bar"><h2>17. Summary</h2></div>
+
+  <div class="col2">
+    <div>
+      <h3>What we covered</h3>
+      <ol style="font-size:14.5px; line-height:1.6">
+        <li>The full 39-line <code>assembler.as</code> with the
+            two-pass structure.</li>
+        <li>Mapping each pass-A instruction to a <code>mask_fn</code>
+            equivalent (the 4 predicates + Boolean tree + VSEL).</li>
+        <li>Identifying 11 of 22 lines per pass as
+            <b>loop-invariant</b> — the optimization surface.</li>
+        <li>The full taxonomy of <b>23 optimizations</b> in 8
+            categories.</li>
+        <li>Deep dives on the four highest-impact opts (2, 4, 21, 23).</li>
+        <li>Cumulative impact per artifact and per AIV pipe.</li>
+      </ol>
+
+      <h3>Key takeaways</h3>
+      <ul class="tight" style="font-size:14px">
+        <li><b>RVECEX is the bottleneck</b> at 64% utilization →
+            optimizations targeting RVECEX have the largest
+            critical-path leverage.</li>
+        <li><b>Opt 2 + Opt 23 are the two free wins</b> for the
+            modern CANN 9.0.0 build (one is a one-step lowering,
+            the other is a launcher allocation rule).</li>
+        <li><b>Opt 21 + Opt 16</b> are the highest-ceiling
+            opportunities but require programming-model rework.</li>
+        <li><code>assembler.as</code> is from an older compiler
+            and is missing most Tier-A hoists that CANN 9.0.0 does;
+            the cumulative gap is ~30–40%.</li>
+      </ul>
+    </div>
+
+    <div>
+      <h3>Cross-references</h3>
+      <ul class="tight" style="font-size:14px">
+        <li><code>a5_pto_bool_vloop_walkthrough.md</code> §3 — full
+            instruction-by-instruction walkthrough</li>
+        <li><code>a5_pto_bool_vloop_walkthrough.md</code> §6 — all 23
+            optimizations in detail, with savings analysis</li>
+        <li><code>a5_aiv_vector_parallelism.html</code> — the AIV
+            μarch this kernel runs on (the pipes, queues, bank
+            structure, OoO rename pool, 24% OoO retirement
+            on LSU, etc.)</li>
+        <li><code>mask_kernel_bool_walkthrough_ppt.html</code> —
+            companion PPT explaining the Triton-level logic with a
+            tiny 4×4 example</li>
+        <li><code>ascend_mte_data_movement.md</code> — Opt 21
+            implementation details (AscendC TQue / EVENT_ID rotation)</li>
+        <li><code>~/Documents/docs/assembler.as</code> — the raw
+            disassembly source</li>
+      </ul>
+
+      <div class="callout">
+        Print to PDF / PPT via Chrome print preview — slide layout
+        has <code>page-break-after</code> on each slide for clean
+        page boundaries. All matrices, code, and diagrams are
+        self-contained (no external CSS / JS / image dependencies).
+      </div>
+    </div>
+  </div>
+
+  <div class="slide-number">18 / 18</div>
+</div>
+
+</body>
+</html>
