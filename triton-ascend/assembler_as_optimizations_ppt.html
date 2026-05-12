@@ -159,7 +159,7 @@
     Companion to <code>a5_pto_bool_vloop_walkthrough.md</code> (§3 body, §6 optimizations).<br>
     Source: <code>~/Documents/docs/assembler.as</code> — 39 lines of disassembled PTO ISA from an A5 (351x / Atlas 350) build of <code>mask_kernel</code>.
   </div>
-  <div class="slide-number">1 / 19</div>
+  <div class="slide-number">1 / 20</div>
 </div>
 
 <!-- =================================================================== -->
@@ -227,7 +227,7 @@
     its exact value is not determinable from the disassembly alone.
   </div>
 
-  <div class="slide-number">2 / 19</div>
+  <div class="slide-number">2 / 20</div>
 </div>
 
 <!-- =================================================================== -->
@@ -281,7 +281,7 @@
     </div>
   </div>
 
-  <div class="slide-number">3 / 19</div>
+  <div class="slide-number">3 / 20</div>
 </div>
 
 <!-- =================================================================== -->
@@ -328,7 +328,7 @@
   hit higher RVECEX utilization than equivalent Triton-emitted scalar
   loops.</p>
 
-  <div class="slide-number">4 / 19</div>
+  <div class="slide-number">4 / 20</div>
 </div>
 
 <!-- =================================================================== -->
@@ -401,7 +401,7 @@
     </tr>
   </table>
 
-  <div class="slide-number">5 / 19</div>
+  <div class="slide-number">5 / 20</div>
 </div>
 
 <!-- =================================================================== -->
@@ -542,14 +542,202 @@ P4_A[<span class="num">31</span>]= (V4[<span class="num">31</span>] == V5[<span 
     </div>
   </div>
 
-  <div class="slide-number">6 / 19</div>
+  <div class="slide-number">6 / 20</div>
+</div>
+
+<!-- =================================================================== -->
+<!-- SLIDE 6.5 — TINY EXAMPLE: 4 blocks × 4 elements, iter 0 walked through -->
+<!-- =================================================================== -->
+<div class="slide">
+  <div class="slide-title-bar"><h2>6. Tiny example — 4 K-blocks × 4 elements, iter 0 step-by-step</h2></div>
+
+  <p>Setup: 1 query row (<code>i=0</code>), 4 key-blocks of 4 elements
+  each = 16 key positions. Imagined VL = 4 lanes per vreg for visual
+  clarity (real A5 has VL = 64 i32 lanes — same logic, larger numbers).
+  Each VLOOP iter's 2 passes cover 2 of the 4 K-blocks; the other 2
+  would be handled by a second launch (or by extending the body to 4
+  passes — same logical pattern).</p>
+
+  <div class="col2">
+    <div>
+      <h3>The output row M[0, 0..15] — 4 blocks of 4 lanes</h3>
+
+      <svg viewBox="0 0 600 280" width="100%" style="font-family:'SF Mono',Menlo,Consolas,monospace; font-size:11px;">
+        <!-- 4 blocks of 4 lanes each, side by side -->
+        <g>
+          <!-- block 0: pass A -->
+          <rect x="10" y="20" width="140" height="22" fill="#bbdefb" stroke="#1565c0"/>
+          <text x="80" y="36" text-anchor="middle" fill="#0d47a1" font-weight="bold">Block 0 — pass A</text>
+          <rect x="10" y="50" width="140" height="40" fill="#fff3e0" stroke="#e65100" stroke-width="2"/>
+          <line x1="45"  y1="50" x2="45"  y2="90" stroke="#e65100" stroke-width="0.5"/>
+          <line x1="80"  y1="50" x2="80"  y2="90" stroke="#e65100" stroke-width="0.5"/>
+          <line x1="115" y1="50" x2="115" y2="90" stroke="#e65100" stroke-width="0.5"/>
+          <g text-anchor="middle" fill="#bf360c" font-size="11">
+            <text x="27" y="68">j=0</text>
+            <text x="62" y="68">j=1</text>
+            <text x="97" y="68">j=2</text>
+            <text x="132" y="68">j=3</text>
+            <text x="27" y="82">★</text>
+            <text x="62" y="82">★</text>
+            <text x="97" y="82">★</text>
+            <text x="132" y="82">★</text>
+          </g>
+
+          <!-- block 1: pass B -->
+          <rect x="155" y="20" width="140" height="22" fill="#c8e6c9" stroke="#2e7d32"/>
+          <text x="225" y="36" text-anchor="middle" fill="#1b5e20" font-weight="bold">Block 1 — pass B</text>
+          <rect x="155" y="50" width="140" height="40" fill="#fff3e0" stroke="#e65100" stroke-width="2"/>
+          <line x1="190" y1="50" x2="190" y2="90" stroke="#e65100" stroke-width="0.5"/>
+          <line x1="225" y1="50" x2="225" y2="90" stroke="#e65100" stroke-width="0.5"/>
+          <line x1="260" y1="50" x2="260" y2="90" stroke="#e65100" stroke-width="0.5"/>
+          <g text-anchor="middle" fill="#bf360c" font-size="11">
+            <text x="172" y="68">j=4</text>
+            <text x="207" y="68">j=5</text>
+            <text x="242" y="68">j=6</text>
+            <text x="277" y="68">j=7</text>
+            <text x="172" y="82">★</text>
+            <text x="207" y="82">★</text>
+            <text x="242" y="82">★</text>
+            <text x="277" y="82">★</text>
+          </g>
+
+          <!-- block 2: another launch -->
+          <rect x="300" y="20" width="140" height="22" fill="#eeeeee" stroke="#9e9e9e"/>
+          <text x="370" y="36" text-anchor="middle" fill="#424242" font-weight="bold">Block 2 — (next launch)</text>
+          <rect x="300" y="50" width="140" height="40" fill="#f5f5f5" stroke="#bdbdbd" stroke-dasharray="3,2"/>
+          <g text-anchor="middle" fill="#9e9e9e" font-size="11">
+            <text x="317" y="68">j=8</text>
+            <text x="352" y="68">j=9</text>
+            <text x="387" y="68">j=10</text>
+            <text x="422" y="68">j=11</text>
+          </g>
+
+          <!-- block 3 -->
+          <rect x="445" y="20" width="140" height="22" fill="#eeeeee" stroke="#9e9e9e"/>
+          <text x="515" y="36" text-anchor="middle" fill="#424242" font-weight="bold">Block 3 — (next launch)</text>
+          <rect x="445" y="50" width="140" height="40" fill="#f5f5f5" stroke="#bdbdbd" stroke-dasharray="3,2"/>
+          <g text-anchor="middle" fill="#9e9e9e" font-size="11">
+            <text x="462" y="68">j=12</text>
+            <text x="497" y="68">j=13</text>
+            <text x="532" y="68">j=14</text>
+            <text x="567" y="68">j=15</text>
+          </g>
+        </g>
+
+        <!-- legend -->
+        <text x="10" y="115" font-size="11" fill="#555">★ = computed by THIS launch's iter 0 (i=0). Both blocks 0 and 1 need <tspan font-weight="bold" fill="#bf360c">q_attn[0]</tspan> — same row.</text>
+
+        <!-- q feeding both -->
+        <rect x="140" y="150" width="160" height="48" fill="#ffe082" stroke="#f57c00" stroke-width="2" rx="6"/>
+        <text x="220" y="170" text-anchor="middle" font-weight="bold" fill="#bf360c" font-size="13">V4 = q_attn[0]</text>
+        <text x="220" y="186" text-anchor="middle" fill="#5d4037" font-size="10">(broadcast to all 4 lanes via brc_b32)</text>
+
+        <!-- arrows from q to block 0 and block 1 -->
+        <line x1="180" y1="150" x2="80"  y2="92" stroke="#bf360c" stroke-width="2" marker-end="url(#arr2)"/>
+        <line x1="260" y1="150" x2="225" y2="92" stroke="#bf360c" stroke-width="2" marker-end="url(#arr2)"/>
+
+        <!-- k_attn_A and k_attn_B inputs -->
+        <rect x="10" y="220" width="140" height="40" fill="#bbdefb" stroke="#1565c0" rx="4"/>
+        <text x="80" y="240" text-anchor="middle" fill="#0d47a1" font-weight="bold" font-size="12">V5 = k_attn[0..3]</text>
+        <text x="80" y="254" text-anchor="middle" fill="#555" font-size="10">from [S10] — block 0</text>
+        <line x1="80" y1="220" x2="80" y2="92" stroke="#1565c0" stroke-width="1.5" marker-end="url(#arr2)"/>
+
+        <rect x="155" y="220" width="140" height="40" fill="#c8e6c9" stroke="#2e7d32" rx="4"/>
+        <text x="225" y="240" text-anchor="middle" fill="#1b5e20" font-weight="bold" font-size="12">V5 = k_attn[4..7]</text>
+        <text x="225" y="254" text-anchor="middle" fill="#555" font-size="10">from [S16] — block 1 (reloaded)</text>
+        <line x1="225" y1="220" x2="225" y2="92" stroke="#2e7d32" stroke-width="1.5" marker-end="url(#arr2)"/>
+
+        <defs>
+          <marker id="arr2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+            <path d="M 0 0 L 10 5 L 0 10 z" fill="#666"/>
+          </marker>
+        </defs>
+      </svg>
+    </div>
+
+    <div>
+      <h3>Iter 0 walked through, instruction-by-instruction</h3>
+
+      <pre class="code code-small"><span class="com">; Once per iter: advance q-pointer, load q[i]</span>
+<span class="lnum">6</span>  <span class="fn">VLDI</span> <span class="reg">V4</span>,[<span class="reg">S68</span>],#<span class="num">1</span>,#<span class="num">3</span>,#<span class="num">1</span>     <span class="com">; brc_b32: load q_attn[0], all 4 lanes</span>
+                                <span class="com">; V4 = [q[0], q[0], q[0], q[0]]</span>
+                                <span class="com">; S68 += 4 B (post-incr)</span>
+<span class="com">;</span>
+<span class="com">; ───── PASS A: block 0 (j=0..3) ─────</span>
+<span class="lnum">7</span>  <span class="fn">VLDI</span> <span class="reg">V5</span>,[<span class="reg">S10</span>],#<span class="num">0</span>,#<span class="num">0</span>,#<span class="num">0</span>     <span class="com">; load block-0's k_attn</span>
+                                <span class="com">; V5 = [k[0], k[1], k[2], k[3]]</span>
+<span class="lnum">12</span> <span class="fn">VCMP</span>.EQ.s32 <span class="reg">P4</span>,<span class="reg">V4</span>,<span class="reg">V5</span>     <span class="com">; B for block 0</span>
+                                <span class="com">; lane 0: q[0]==k[0]</span>
+                                <span class="com">; lane 1: q[0]==k[1]</span>
+                                <span class="com">; lane 2: q[0]==k[2]</span>
+                                <span class="com">; lane 3: q[0]==k[3]</span>
+<span class="com">; ... predicate algebra + VSEL + VSTI fills M[0, 0..3] ...</span>
+<span class="com">;</span>
+<span class="com">; ───── PASS B: block 1 (j=4..7) ─────</span>
+<span class="com">; ★ NOTE: NO "VLDI V4,[S68],…" here.</span>
+<span class="com">;   S68 was already advanced; V4 still holds q[0].</span>
+<span class="com">;   Same query row → same scalar.</span>
+<span class="lnum">25</span> <span class="fn">VLDI</span> <span class="reg">V5</span>,[<span class="reg">S16</span>],#<span class="num">0</span>,#<span class="num">0</span>,#<span class="num">0</span>     <span class="com">; load block-1's k_attn</span>
+                                <span class="com">; V5 = [k[4], k[5], k[6], k[7]]</span>
+<span class="lnum">29</span> <span class="fn">VCMP</span>.EQ.s32 <span class="reg">P4</span>,<span class="reg">V4</span>,<span class="reg">V5</span>     <span class="com">; B for block 1</span>
+                                <span class="com">; lane 0: q[0]==k[4]   ← same q[0]!</span>
+                                <span class="com">; lane 1: q[0]==k[5]</span>
+                                <span class="com">; lane 2: q[0]==k[6]</span>
+                                <span class="com">; lane 3: q[0]==k[7]</span>
+<span class="com">; ... fills M[0, 4..7] ...</span></pre>
+
+      <div class="callout">
+        <b>Why q stays the same for pass A and pass B.</b> Both passes
+        compute mask cells in <b>the same query row</b> (i=0). Block 0
+        and block 1 differ only in <i>which keys</i> they compare
+        against — the query scalar <code>q_attn[0]</code> is unchanged.
+        Reloading V4 between passes would advance <code>S68</code>
+        again (post-incr +4 B) and the value would be wrong: V4 would
+        become <code>q_attn[1]</code>, but pass B is still on row 0,
+        not row 1.
+      </div>
+    </div>
+  </div>
+
+  <h3>What happens after iter 0 — and where blocks 2, 3 go</h3>
+
+  <div class="col2">
+    <div>
+      <h3>Next iter advances q for the next row</h3>
+      <pre class="code code-small"><span class="com">; ITER 1 (i=1):</span>
+<span class="fn">VLDI</span> <span class="reg">V4</span>,[<span class="reg">S68</span>],#<span class="num">1</span>,#<span class="num">3</span>,#<span class="num">1</span>     <span class="com">; advance, V4 ← q_attn[1]</span>
+                                <span class="com">; S68 += 4 B again</span>
+<span class="com">; pass A: M[1, 0..3] using V4 = q[1]</span>
+<span class="com">; pass B: M[1, 4..7] using same V4 = q[1]</span></pre>
+
+      <p>So V4 advances <b>once per VLOOP iter</b> (i → i+1), shared
+      across both passes within an iter. The post-increment cadence
+      of <code>S68</code> is exactly tuned to this: one +4 B step per
+      iter, not per pass.</p>
+    </div>
+    <div>
+      <h3>Blocks 2 and 3 — separate launch</h3>
+      <p>The 2-pass body covers 2 K-blocks per query row. To cover
+      blocks 2 and 3, the launcher invokes the kernel a second time
+      with different base addresses ([S10]'s analog points at block
+      2's k_attn, [S16]'s analog points at block 3's). Inside that
+      second launch the same logic repeats: V4 broadcasts the same
+      row's q_attn[i] for both pass A (block 2) and pass B (block 3).</p>
+
+      <p>This is the kernel-level parallelism granularity (multi-AIV
+      / multi-launch). It's separate from the iter-level structure
+      shown here.</p>
+    </div>
+  </div>
+
+  <div class="slide-number">7 / 20</div>
 </div>
 
 <!-- =================================================================== -->
 <!-- SLIDE 6 — LOOP-INVARIANTS (THE OPTIMIZATION SURFACE)                 -->
 <!-- =================================================================== -->
 <div class="slide">
-  <div class="slide-title-bar"><h2>6. Loop-invariants exposed — what the body needlessly recomputes</h2></div>
+  <div class="slide-title-bar"><h2>7. Loop-invariants exposed — what the body needlessly recomputes</h2></div>
 
   <p>Inside the VLOOP, certain instructions produce <i>bit-identical
   results every iteration</i>. They're loop-invariants the compiler
@@ -599,14 +787,14 @@ P4_A[<span class="num">31</span>]= (V4[<span class="num">31</span>] == V5[<span 
     </div>
   </div>
 
-  <div class="slide-number">7 / 19</div>
+  <div class="slide-number">8 / 20</div>
 </div>
 
 <!-- =================================================================== -->
 <!-- SLIDE 7 — OPTIMIZATION TAXONOMY                                      -->
 <!-- =================================================================== -->
 <div class="slide">
-  <div class="slide-title-bar"><h2>7. The 23 optimizations — taxonomy</h2></div>
+  <div class="slide-title-bar"><h2>8. The 23 optimizations — taxonomy</h2></div>
 
   <table>
     <tr><th>Category</th><th>Opts</th><th>What they attack</th></tr>
@@ -659,14 +847,14 @@ P4_A[<span class="num">31</span>]= (V4[<span class="num">31</span>] == V5[<span 
     <span class="tier-badge badge-c" style="margin-left:8px">Tier C</span> — speculative or requires significant codegen rework.
   </div>
 
-  <div class="slide-number">8 / 19</div>
+  <div class="slide-number">9 / 20</div>
 </div>
 
 <!-- =================================================================== -->
 <!-- SLIDE 8 — TIER-A STRUCTURAL HOIST                                    -->
 <!-- =================================================================== -->
 <div class="slide">
-  <div class="slide-title-bar"><h2>8. Tier-A loop-invariant hoists (Opts 1–6, 11–12)</h2></div>
+  <div class="slide-title-bar"><h2>9. Tier-A loop-invariant hoists (Opts 1–6, 11–12)</h2></div>
 
   <table>
     <tr><th>#</th><th>Optimization</th><th class="num-right">Saving</th><th>Mechanism</th></tr>
@@ -728,14 +916,14 @@ P4_A[<span class="num">31</span>]= (V4[<span class="num">31</span>] == V5[<span 
     from an older / different compiler that didn't.
   </div>
 
-  <div class="slide-number">9 / 19</div>
+  <div class="slide-number">10 / 20</div>
 </div>
 
 <!-- =================================================================== -->
 <!-- SLIDE 9 — TIER-A μARCH ALIGNMENT                                     -->
 <!-- =================================================================== -->
 <div class="slide">
-  <div class="slide-title-bar"><h2>9. Tier-A μarch alignment (Opts 13, 14, 22, 23)</h2></div>
+  <div class="slide-title-bar"><h2>10. Tier-A μarch alignment (Opts 13, 14, 22, 23)</h2></div>
 
   <table>
     <tr><th>#</th><th>Optimization</th><th class="num-right">Saving</th><th>Mechanism</th></tr>
@@ -782,14 +970,14 @@ P4_A[<span class="num">31</span>]= (V4[<span class="num">31</span>] == V5[<span 
   already-present <code>MOVVP</code>. <b>3 ops/iter × 32 iters = ~96
   ops</b>, plus the SMOV scalar work, brings total saving to ~160.</p>
 
-  <div class="slide-number">10 / 19</div>
+  <div class="slide-number">11 / 20</div>
 </div>
 
 <!-- =================================================================== -->
 <!-- SLIDE 10 — TIER-A CAST COLLAPSE                                      -->
 <!-- =================================================================== -->
 <div class="slide">
-  <div class="slide-title-bar"><h2>10. Tier-A cast-variant collapse (Opts 18, 19, 20)</h2></div>
+  <div class="slide-title-bar"><h2>11. Tier-A cast-variant collapse (Opts 18, 19, 20)</h2></div>
 
   <p>These apply to the <i>cast variant</i> of mask_fn (TYPE=2 path or
   any version with explicit <code>.to(tl.int32)</code> conversions),
@@ -842,14 +1030,14 @@ out_i8    = out_f16.<span class="fn">to</span>(tl.int8)            <span class="
   many VCASTs — but the cast lowering path inserted them
   conservatively.</p>
 
-  <div class="slide-number">11 / 19</div>
+  <div class="slide-number">12 / 20</div>
 </div>
 
 <!-- =================================================================== -->
 <!-- SLIDE 11 — TIER-B + TIER-C                                           -->
 <!-- =================================================================== -->
 <div class="slide">
-  <div class="slide-title-bar"><h2>11. Tier-B and Tier-C — speculative / bigger swings</h2></div>
+  <div class="slide-title-bar"><h2>12. Tier-B and Tier-C — speculative / bigger swings</h2></div>
 
   <table>
     <tr><th>#</th><th>Tier</th><th>Optimization</th><th class="num-right">Saving</th><th>Notes</th></tr>
@@ -903,14 +1091,14 @@ out_i8    = out_f16.<span class="fn">to</span>(tl.int8)            <span class="
     </tr>
   </table>
 
-  <div class="slide-number">12 / 19</div>
+  <div class="slide-number">13 / 20</div>
 </div>
 
 <!-- =================================================================== -->
 <!-- SLIDE 12 — DEEP DIVE: OPT 2                                          -->
 <!-- =================================================================== -->
 <div class="slide">
-  <div class="slide-title-bar"><h2>12. Deep dive — Opt 2: Hold C in a P-reg <span class="tier-badge badge-a">−65 ops</span></h2></div>
+  <div class="slide-title-bar"><h2>13. Deep dive — Opt 2: Hold C in a P-reg <span class="tier-badge badge-a">−65 ops</span></h2></div>
 
   <div class="col2">
     <div>
@@ -965,14 +1153,14 @@ out_i8    = out_f16.<span class="fn">to</span>(tl.int8)            <span class="
     </div>
   </div>
 
-  <div class="slide-number">13 / 19</div>
+  <div class="slide-number">14 / 20</div>
 </div>
 
 <!-- =================================================================== -->
 <!-- SLIDE 13 — DEEP DIVE: OPT 4                                          -->
 <!-- =================================================================== -->
 <div class="slide">
-  <div class="slide-title-bar"><h2>13. Deep dive — Opt 4: Hoist V2 (VLDI + VADDS) <span class="tier-badge badge-a">−62 ops</span></h2></div>
+  <div class="slide-title-bar"><h2>14. Deep dive — Opt 4: Hoist V2 (VLDI + VADDS) <span class="tier-badge badge-a">−62 ops</span></h2></div>
 
   <div class="col2">
     <div>
@@ -1030,14 +1218,14 @@ out_i8    = out_f16.<span class="fn">to</span>(tl.int8)            <span class="
     </div>
   </div>
 
-  <div class="slide-number">14 / 19</div>
+  <div class="slide-number">15 / 20</div>
 </div>
 
 <!-- =================================================================== -->
 <!-- SLIDE 14 — DEEP DIVE: OPT 23                                         -->
 <!-- =================================================================== -->
 <div class="slide">
-  <div class="slide-title-bar"><h2>14. Deep dive — Opt 23: C-buffer 32 B alignment <span class="tier-badge badge-a">−160 ops</span></h2></div>
+  <div class="slide-title-bar"><h2>15. Deep dive — Opt 23: C-buffer 32 B alignment <span class="tier-badge badge-a">−160 ops</span></h2></div>
 
   <div class="col2">
     <div>
@@ -1093,14 +1281,14 @@ out_i8    = out_f16.<span class="fn">to</span>(tl.int8)            <span class="
     </div>
   </div>
 
-  <div class="slide-number">15 / 19</div>
+  <div class="slide-number">16 / 20</div>
 </div>
 
 <!-- =================================================================== -->
 <!-- SLIDE 15 — DEEP DIVE: OPT 21                                         -->
 <!-- =================================================================== -->
 <div class="slide">
-  <div class="slide-title-bar"><h2>15. Deep dive — Opt 21: Cross-launch prefetch <span class="tier-badge badge-c">−700 cyc / launch-pair</span></h2></div>
+  <div class="slide-title-bar"><h2>16. Deep dive — Opt 21: Cross-launch prefetch <span class="tier-badge badge-c">−700 cyc / launch-pair</span></h2></div>
 
   <div class="col2">
     <div>
@@ -1162,14 +1350,14 @@ launch N+1:                  | MTE2 prefetch              | VLOOP body | MTE3 |
     </div>
   </div>
 
-  <div class="slide-number">16 / 19</div>
+  <div class="slide-number">17 / 20</div>
 </div>
 
 <!-- =================================================================== -->
 <!-- SLIDE 16 — CUMULATIVE IMPACT                                         -->
 <!-- =================================================================== -->
 <div class="slide">
-  <div class="slide-title-bar"><h2>16. Cumulative impact — what each artifact could achieve</h2></div>
+  <div class="slide-title-bar"><h2>17. Cumulative impact — what each artifact could achieve</h2></div>
 
   <table>
     <tr><th>Artifact</th><th>Current state</th><th class="num-right">After Tier-A only</th><th class="num-right">After all incl. SIMT</th></tr>
@@ -1217,14 +1405,14 @@ launch N+1:                  | MTE2 prefetch              | VLOOP body | MTE3 |
     rule, Opt 23 is a launcher-side allocation rule.
   </div>
 
-  <div class="slide-number">17 / 19</div>
+  <div class="slide-number">18 / 20</div>
 </div>
 
 <!-- =================================================================== -->
 <!-- SLIDE 17 — WHICH PIPE EACH OPT SAVES ON                              -->
 <!-- =================================================================== -->
 <div class="slide">
-  <div class="slide-title-bar"><h2>17. Where on the AIV each optimization lands</h2></div>
+  <div class="slide-title-bar"><h2>18. Where on the AIV each optimization lands</h2></div>
 
   <p>Mapping each optimization to the pipe it saves ops on, with
   empirical utilization for context. RVECEX is the binding constraint
@@ -1297,14 +1485,14 @@ launch N+1:                  | MTE2 prefetch              | VLOOP body | MTE3 |
     acceptable.
   </div>
 
-  <div class="slide-number">18 / 19</div>
+  <div class="slide-number">19 / 20</div>
 </div>
 
 <!-- =================================================================== -->
 <!-- SLIDE 18 — SUMMARY                                                   -->
 <!-- =================================================================== -->
 <div class="slide">
-  <div class="slide-title-bar"><h2>18. Summary</h2></div>
+  <div class="slide-title-bar"><h2>19. Summary</h2></div>
 
   <div class="col2">
     <div>
@@ -1367,7 +1555,7 @@ launch N+1:                  | MTE2 prefetch              | VLOOP body | MTE3 |
     </div>
   </div>
 
-  <div class="slide-number">19 / 19</div>
+  <div class="slide-number">20 / 20</div>
 </div>
 
 </body>
