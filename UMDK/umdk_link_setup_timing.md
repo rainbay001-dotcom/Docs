@@ -2934,6 +2934,124 @@ wave is bounded by max-per-CPU rather than sum. If instead one core
 serializes all scans (e.g., topo table mutex), wall-clock grows
 linearly with N. The trace will distinguish these.
 
+### 10.21 `urma_perftest` execution stages
+
+Full pipeline for any `urma_perftest` subcommand (`send_lat`,
+`send_bw`, `read_*`, `write_*`, `atomic_*`), with file:line citations
+and kernel-touching annotations. Useful when interpreting ftrace
+captures — locating which stage produced which trace entries.
+
+#### A. Top-level `main()` at `urma_perftest.c:158`
+
+| # | Stage | Function | What | Kernel ioctl? |
+|---|---|---|---|---|
+| 1 | parse args | `perftest_parse_args` (`perftest_parameters.c:585`) | getopt parsing | no |
+| 2 | local config check | `check_local_cfg` | sanity-check derived params | no |
+| 3 | OOB TCP connect to peer | `establish_connection` (`perftest_communication.c`) | plain `socket()`/`connect()` between client & server | TCP only |
+| 4 | exchange + verify config | `check_remote_cfg` | exchange CLI config over the TCP socket from #3 | no |
+| 5 | **resource creation** | `create_ctx` (`perftest_resources.c:2263`) | dispatches to `create_simplex_ctx` or `create_duplex_ctx` | yes — many |
+| 6 | prepare test | `prepare_test` (`urma_perftest.c:139`) | rearm JFCE, allocate WR lists, sync "ready" with peer | one `MODIFY_JFC` for rearm |
+| 7 | **run the test** | `run_test` (`urma_perftest.c:25`) → `run_send_lat` / `run_send_bw` / etc. | the actual benchmark loop | mostly userspace-only: doorbell + CQ poll via mapped memory; no per-RPC ioctl |
+| 8 | destroy resources | `destroy_ctx` (`perftest_resources.c:2317`) | reverse-order teardown | yes — many |
+| 9 | TCP close | `close_connection` | `close()` the OOB TCP socket | TCP only |
+| 10 | free cfg | `destroy_cfg` | free CLI strings | no |
+
+#### B. Stage 5 expanded — `create_duplex_ctx()` at `perftest_resources.c:2198`
+
+This is the DUPLEX mode flow (used by `send_lat -d bonding_dev_0`,
+output shows `JETTY mode: DUPLEX`). SIMPLEX mode is similar but uses
+JFR/JFS separately; see `create_simplex_ctx()` at
+`perftest_resources.c:1968`.
+
+| # | Sub-stage | Function | What it does | Userland API → ioctl |
+|---|---|---|---|---|
+| 5a | open device | `init_device` (`perftest_resources.c:150`) | open named UB device | `urma_create_context` → `UBURMA_CMD_CREATE_CTX` |
+| 5b | create local jettys | `create_duplex_jettys` (`perftest_resources.c:658`) | per i: `urma_create_jfce × 2`, `urma_create_jfc × 2`, `urma_create_jetty` (combined SQ+RQ) | `UBURMA_CMD_CREATE_JFC` / `CREATE_JETTY` |
+| 5c | register memory | `register_mem` (`perftest_resources.c:743`) | `urma_register_seg` for the data region | `UBURMA_CMD_REGISTER_SEG` |
+| 5d | (opt) credit context | `create_credit_ctx` | flow-control machinery; only if `--enable_credit` | additional `register_seg` |
+| 5e | exchange descriptors | `exchange_connection_info` (`perftest_resources.c:1177`) | TCP-send local `(jetty_id, seg_info, tp_info)` to peer; read peer's back | pure TCP, no URMA ioctls |
+| 5f | import remote segments | `import_seg_for_duplex` (`perftest_resources.c:1304`) | `urma_import_seg` for each remote segment id | `UBURMA_CMD_IMPORT_SEG`; kernel side does a CM-MAD exchange and may fire `ubcore_get_main_primary_eid` topo scan |
+| **5g** | **import remote jettys (LINK SETUP)** | `connect_jetty` → `connect_jetty_default` (`:1510`) | per i: `urma_import_jetty` for each remote jetty; also `urma_bind_jetty` (RC) or `urma_advise_jetty` (non-UB) | `UBURMA_CMD_IMPORT_JETTY` → the 5-phase compat path in ubcore (§10.16 / §10.18 / §10.19) |
+| 5h | (opt) modify user TP | `modify_user_tp` | only if `--enable_user_tp` | `urma_modify_tp` → `UBURMA_CMD_MODIFY_TP` |
+| 5i | create run context | `create_run_ctx` | pre-allocate WR arrays, latency arrays, post-list templates | pure userland |
+
+**5g is the link-setup stage we've been measuring** across the whole
+investigation. 5f is the other CM-exchange stage (shorter, runs once
+for the segment).
+
+#### C. Stage 7 expanded — `run_test()` dispatch by API type
+
+All runners live in `perftest_run_test.c`:
+
+| Subcommand | Function | Inner loop |
+|---|---|---|
+| `send_lat` (DUPLEX) | `run_send_lat_duplex` | ping-pong: post SEND, poll completion, peer echoes, poll echo — N iters |
+| `send_lat` (SIMPLEX) | `run_send_lat_simplex` | same shape with JFS post + JFR poll |
+| `send_bw` | `run_send_bw_*` | pipeline-full: post N up to `tx_depth`, poll, repost; measure throughput |
+| `read_lat` / `read_bw` | `run_read_*` | URMA READ — pull from remote registered seg |
+| `write_lat` / `write_bw` / `write_with_imm_*` | `run_write_*` | URMA WRITE / WRITE_IMM |
+| `atomic_lat` / `atomic_bw` | `run_atomic_*` | CAS / FAA on remote memory |
+
+**Critical for trace interpretation**: the steady-state data path
+posts WRs to mapped userspace doorbells and polls JFC by reading
+mapped CQ memory — **no per-RPC ioctl**. The 3.47 µs steady-state
+latency JinDou measures has zero kernel transitions per op. Kernel
+involvement is **only** at stage 5 (setup) and stage 8 (teardown).
+
+#### D. Stage 8 expanded — `destroy_duplex_ctx()` at `perftest_resources.c:2292`
+
+Mirrors stage 5 in reverse:
+
+| # | Sub-stage | What |
+|---|---|---|
+| 8a | `destroy_run_ctx` | free WR arrays, latency results |
+| 8b | (opt) free user_tp | only if 5h ran |
+| 8c | `disconnect_jetty` | `urma_unimport_jetty` for each — releases vtpn refcount; **can take several ms per call** (§10.18 saw 5.13 ms for unimport #1) |
+| 8d | `sync_time(..., "unimport_jetty")` per pair | wait for peer to also unimport over TCP |
+| 8e | (opt) `unimport_credit` | only if 5d ran |
+| 8f | `unimport_seg` | `urma_unimport_seg` for each from 5f |
+| 8g | `destroy_connection_info` | free descriptor exchange buffers |
+| 8h | (opt) `destroy_credit_ctx` | only if 5d ran |
+| 8i | `unregister_mem` | `urma_unregister_seg` |
+| 8j | `destroy_duplex_jettys` | `urma_delete_jetty/jfc/jfce` per index |
+| 8k | `uninit_device` (`perftest_resources.c:261`) | `urma_delete_context` |
+
+#### E. Where each stage's wall-clock lands in JinDou's actual test
+
+For `urma_perftest send_lat -n 5 -s 2 -d bonding_dev_0 --single_path
+-p 0 -S X.X.X.X`:
+
+| Stage | Approx wall-clock (warm state) | Visible in ftrace? |
+|---|---|---|
+| 1–2 args/cfg | µs | no |
+| 3 TCP connect | low ms | no |
+| 4 cfg exchange | low ms | no |
+| 5a init_device | low ms | yes — `UBURMA_CMD_CREATE_CTX` entry |
+| 5b create jettys | < 1 ms | yes — JFC/jetty create entries (short) |
+| 5c register_mem | < 1 ms | yes |
+| 5e exchange info | few ms (TCP only) | no — userland TCP |
+| 5f import_seg | ~5–6 ms (one CM exchange + topo scan) | yes — `ubcore_import_seg` entries |
+| **5g connect_jetty** | **~11 ms warm, ~130 ms cold** (two CM exchanges + topo scan × 2) | yes — **the headline link-setup time** |
+| 5i prepare WRs | µs | no |
+| 6 prepare_test | ms (TCP sync) | one `MODIFY_JFC` ioctl |
+| 7 run_test (N=5) | ~17 µs total (5 × 3.47 µs) | almost none — kernel bypass |
+| 8c–8k teardown | ~6–8 ms (unimport_jetty CM RTT dominates) | yes — long unimport_jetty entry |
+
+So "link setup time" is almost always **stage 5g**
+(`connect_jetty` → kernel `ubcore_import_jetty`). 5f is the other
+CM-exchange stage but smaller. Everything else is sub-ms or
+non-ioctl.
+
+#### F. Source files for follow-up
+
+| File | What's in it |
+|---|---|
+| `src/urma/tools/urma_perftest/urma_perftest.c` | `main()` + `run_test()` + `prepare_test()` |
+| `src/urma/tools/urma_perftest/perftest_parameters.c` | CLI parsing, all `cfg` defaults |
+| `src/urma/tools/urma_perftest/perftest_resources.c` | `create_*_ctx`, `init_device`, `create_*_jettys`, `register_mem`, `exchange_connection_info`, `import_seg_*`, `connect_jetty_*`, mirror destroys |
+| `src/urma/tools/urma_perftest/perftest_communication.c` | TCP OOB channel — `establish_connection`, `check_remote_cfg`, `sync_time` |
+| `src/urma/tools/urma_perftest/perftest_run_test.c` | Per-API benchmark loops (`run_send_lat_*`, `run_send_bw_*`, etc.) |
+
 ## 11. TRACE_EVENT internals — how the macro actually works
 
 ### 11.1 Where `TRACE_EVENT` is defined
