@@ -176,7 +176,7 @@
     <div>
       <h3>Pre-loop + Pass A (lines 1–22)</h3>
       <pre class="code code-small"><span class="lnum"> 1</span>  <span class="fn">PSET</span>.b32  <span class="reg">P1</span>,#<span class="num">8</span>                          <span class="com">; P1 = VL64 mask</span>
-<span class="lnum"> 2</span>  <span class="fn">PSET</span>.b32  <span class="reg">P2</span>,#<span class="num">15</span>                         <span class="com">; P2 = ALLF (all lanes)</span>
+<span class="lnum"> 2</span>  <span class="fn">PSET</span>.b32  <span class="reg">P2</span>,#<span class="num">15</span>                         <span class="com">; P2 = ALLF (all 64 lanes FALSE = 0)</span>
 <span class="lnum"> 3</span>  <span class="fn">VLOOPV2_V310</span> <span class="reg">S3</span>,#<span class="num">35</span>,#<span class="num">1</span>,#<span class="num">1</span>             <span class="com">; loop S3 times, 35 insns/iter</span>
 <span class="lnum"> 4</span>  <span class="fn">VLDI</span> <span class="reg">V2</span>,[<span class="reg">S6</span>],#<span class="num">0</span>,#<span class="num">0</span>,#<span class="num">0</span>                <span class="com">; load k_offset pattern</span>
 <span class="lnum"> 5</span>  <span class="fn">VLDI</span> <span class="reg">V3</span>,[<span class="reg">S69</span>],#<span class="num">16</span>,#<span class="num">0</span>,#<span class="num">1</span>             <span class="com">; load q_offset[i] (per-iter)</span>
@@ -222,8 +222,9 @@
 
   <div class="callout">
     <b>One iteration produces two output rows</b> — pass A writes one row to <code>[S67]</code>,
-    pass B writes another to <code>[S65]</code>. The VLOOP runs S3 iterations
-    (likely 16 to produce 32 rows total).
+    pass B writes another to <code>[S65]</code>. The VLOOP runs <code>S3</code> iterations
+    where <code>S3</code> is a scalar register set by pre-loop code we don't see;
+    its exact value is not determinable from the disassembly alone.
   </div>
 
   <div class="slide-number">2 / 18</div>
@@ -300,14 +301,14 @@
     <tr>
       <td class="num-right">2</td>
       <td><code>PSET.b32 P2,#15</code></td>
-      <td>Set predicate <code>P2</code> = the <b>ALLF</b> token (#15 ⇒ "all 256 lanes high").</td>
-      <td>Holds an all-ones reference for the PXOR no-op on line 16. Never actually changes value.</td>
+      <td>Set predicate <code>P2</code> = the <b>ALLF</b> token (#15 ⇒ "all 64 i32 lanes FALSE", i.e. all-zeros).</td>
+      <td>Holds an all-zeros reference for the PXOR no-op on line 16 (<code>X XOR 0 = X</code>). Never changes value across the entire loop.</td>
     </tr>
     <tr>
       <td class="num-right">3</td>
       <td><code>VLOOPV2_V310 S3,#35,#1,#1</code></td>
       <td>Hardware loop: execute the next 35 instructions <code>S3</code> times.</td>
-      <td>The <code>_V310</code> suffix is the chip-revision encoding. <code>S3</code> holds the iteration count (probably 16 to produce 32 rows in two-row-per-iter mode).</td>
+      <td>Fields: <code>S3</code> = runtime iter count (set by pre-loop code we don't see), <code>#35</code> = body length, <code>#1</code> = innermost layer, <code>#1</code> = terminal at this layer. The <code>_V310</code> suffix is the chip-revision encoding.</td>
     </tr>
   </table>
 
@@ -532,7 +533,7 @@
       <td>1</td>
       <td>§6.6 Inline-recompute C</td>
       <td class="num-right">−34 ops</td>
-      <td>Skip the UB-buffered C; reuse <code>VCMP.EQ V5, #0</code> in body. Trades 1 VCMP for 4 setup ops (VLDAS+SMOV+VLDUI+MOVVP).</td>
+      <td>Skip the UB-buffered C; compute it fresh each iter as <code>VCMP.EQ V_kattn, V_zero</code>. Trades pre-loop VCMP+vstore plus per-iter VLDUI+MOVVP (2 ops/iter) for one in-body VCMP — net −1 op/iter + −2 pre-loop, −34 over 32 iters.</td>
     </tr>
     <tr class="tier-a">
       <td><b>2</b></td>
@@ -568,13 +569,13 @@
       <td>11</td>
       <td>§6.10 Share V3 across passes</td>
       <td class="num-right">−48 ops</td>
-      <td>Pass A and pass B both load V3 from the same row. Reuse pass-A's V3 in pass B as is already done for V4.</td>
+      <td>Pass A's <code>VLDI V3,[S69]</code> and pass B's <code>VLDI V3,[S66]</code> load from <i>different addresses</i> that hold <i>identical q_offset data</i> (both passes process the same query row). Reuse pass-A's V3 in pass B — same trick already applied to V4 (q_attn).</td>
     </tr>
     <tr class="tier-a">
       <td>12</td>
-      <td>§6.11 Hoist F = q_off == k_off</td>
+      <td>§6.11 Hoist F = q_off == k_off (packed)</td>
       <td class="num-right">−32 to −64 ops</td>
-      <td>F is computed twice per iter (line 19 + line 35) but doesn't depend on i within the same iter. Hoist once per pass, or share across passes.</td>
+      <td>F[i,j] = (q_off[i] == k_off[j]) <i>does</i> vary with the row i, so it isn't loop-invariant per row — but the <b>whole 1024-bit tile of F</b> is precomputable once. Hoist to a packed predicate (ppack pair of _b32 regs) or UB bitvector, then read per-row. Eliminates the 2 in-body VCMPs (lines 19 + 35). CANN 9.0.0 already does this; <code>assembler.as</code> doesn't.</td>
     </tr>
   </table>
 
@@ -772,36 +773,38 @@ out_i8    = out_f16.<span class="fn">to</span>(tl.int8)            <span class="
 
   <div class="col2">
     <div>
-      <h3>Current body (5 ops produce C every iter)</h3>
-      <pre class="code code-small"><span class="com">; lines 8, 13, 14, 15 + dependency on V6</span>
-<span class="fn">VLDAS</span> <span class="reg">ULD0</span>,[<span class="reg">S12</span>]            <span class="com">; setup unaligned ctx</span>
-<span class="fn">SMOV</span>.b32 <span class="reg">S70</span>,<span class="reg">S12</span>              <span class="com">; copy addr</span>
+      <h3>Current body (γ baseline — camodel-style aligned spill)</h3>
+      <pre class="code code-small"><span class="com">; pre-loop: 2 ops (compute C once, spill to UB byte buffer)</span>
+<span class="fn">VCMP</span>.EQ.s32 <span class="reg">P_C</span>,<span class="reg">V_kattn</span>,<span class="reg">V_zero</span>,<span class="reg">P1</span>
+<span class="com">; vstore P_C → UB byte buffer at S_C</span>
+
+<span class="com">; per iter: 2 ops (reload C from UB, narrow i8→i1)</span>
 <span class="fn">VLDUI</span> <span class="reg">V6</span>,<span class="reg">ULD0</span>,[<span class="reg">S70</span>],#<span class="num">0</span>       <span class="com">; load C-bytes</span>
-<span class="fn">SMOV</span>.b32 <span class="reg">S70</span>,<span class="reg">S18</span>              <span class="com">; reset S70 for pass B</span>
 <span class="fn">MOVVP</span>.b32 <span class="reg">P3</span>,<span class="reg">V6</span>,#<span class="num">0</span>            <span class="com">; V6 → P3</span></pre>
-      <p>Then P3 is consumed by lines 17–18 and immediately overwritten
-         by line 19. The C value is rematerialized identically next iter.</p>
+      <p>The unaligned-load preamble (VLDAS + SMOV) in <code>assembler.as</code>
+         lines 8–9 is a <i>separate</i> overhead handled by Opt 23 — it doesn't
+         affect the Opt 2 accounting.</p>
 
-      <h3>Optimized — once pre-loop, then read</h3>
-      <pre class="code code-small"><span class="com">; pre-loop (5 ops, ONCE):</span>
-<span class="fn">VLDI</span> <span class="reg">V5</span>,[<span class="reg">S10</span>],#<span class="num">0</span>,#<span class="num">0</span>,#<span class="num">0</span>     <span class="com">; load k_attn (already there)</span>
-<span class="fn">VCMP</span>.EQ.s32 <span class="reg">P6</span>,<span class="reg">V5</span>,<span class="reg">V0_zero</span>,<span class="reg">P1</span>  <span class="com">; P6 = (k_attn == 0)</span>
-<span class="com">; pre-loop has computed C ONCE into a preserved P-reg</span>
+      <h3>Optimized (β — hold C in a P-reg)</h3>
+      <pre class="code code-small"><span class="com">; pre-loop: 1 op (compute C once into a preserved P-reg)</span>
+<span class="fn">VCMP</span>.EQ.s32 <span class="reg">P6</span>,<span class="reg">V5</span>,<span class="reg">V_zero</span>,<span class="reg">P1</span>      <span class="com">; P6 = (k_attn == 0)</span>
 
-<span class="com">; body, now 5 fewer ops per iter:</span>
-<span class="com">; (skip lines 8, 13, 14, 15)</span>
+<span class="com">; per iter: 0 C-related ops — P6 is read directly</span>
 <span class="fn">POR</span> <span class="reg">P3</span>,<span class="reg">P4</span>,<span class="reg">P6</span>,<span class="reg">P1</span>             <span class="com">; B | C, reads P6 directly</span></pre>
     </div>
     <div>
-      <h3>Cost-benefit ledger</h3>
+      <h3>Cost-benefit ledger (per walkthrough §6.6)</h3>
       <table>
-        <tr><th></th><th class="num-right">Current</th><th class="num-right">Optimized</th></tr>
-        <tr><td>Pre-loop C ops</td><td class="num-right">0</td><td class="num-right">2</td></tr>
-        <tr><td>Per-iter C ops</td><td class="num-right">5</td><td class="num-right">0</td></tr>
-        <tr><td>Loop iters (S3)</td><td class="num-right">~32</td><td class="num-right">~32</td></tr>
-        <tr><th>Total C cost</th><th class="num-right">5×32=160</th><th class="num-right">2</th></tr>
-        <tr><th>Net saving</th><td colspan="2" class="num-right"><b>−158 ops</b> (Opt 2 alone × pass; ÷2 for two passes = −65 ops)</td></tr>
+        <tr><th></th><th class="num-right">Current (γ)</th><th class="num-right">Optimized (β)</th></tr>
+        <tr><td>Pre-loop C ops</td><td class="num-right">2 (VCMP + vstore)</td><td class="num-right">1 (VCMP)</td></tr>
+        <tr><td>Per-iter C ops</td><td class="num-right">2 (VLDUI + MOVVP)</td><td class="num-right">0</td></tr>
+        <tr><td>Loop iters (T)</td><td class="num-right">32</td><td class="num-right">32</td></tr>
+        <tr><th>Total C cost</th><th class="num-right">2 + 64 = 66</th><th class="num-right">1</th></tr>
+        <tr><th>Net saving</th><td colspan="2" class="num-right"><b>−65 ops</b></td></tr>
       </table>
+      <p class="label">Cost is one P-register held live across the loop body
+        (P6). The kernel already uses P1–P5; A5 has at least 8 P-regs, so
+        reserving a 6th is trivial.</p>
 
       <h3>Why it requires P-reg preservation</h3>
       <p>P-regs (P0..P7) are preserved across VLOOP iterations
@@ -857,13 +860,13 @@ out_i8    = out_f16.<span class="fn">to</span>(tl.int8)            <span class="
     </div>
 
     <div>
-      <h3>Cost-benefit ledger</h3>
+      <h3>Cost-benefit ledger (per walkthrough §6.8)</h3>
       <table>
         <tr><th></th><th class="num-right">Current</th><th class="num-right">Optimized</th></tr>
-        <tr><td>Pre-loop V2 ops</td><td class="num-right">0</td><td class="num-right">2</td></tr>
-        <tr><td>Per-iter V2 ops</td><td class="num-right">2</td><td class="num-right">0</td></tr>
-        <tr><td>Loop iters</td><td class="num-right">32</td><td class="num-right">32</td></tr>
-        <tr><th>Total V2 cost</th><th class="num-right">64</th><th class="num-right">2</th></tr>
+        <tr><td>Pre-loop V2 setup ops</td><td class="num-right">0</td><td class="num-right">2 (VLDI + VADDS, once)</td></tr>
+        <tr><td>Per-occurrence V2 setup ops</td><td class="num-right">2 (VLDI + VADDS)</td><td class="num-right">0</td></tr>
+        <tr><td>V2 setup occurrences (T)<br><small>= VLOOP iters × passes/iter (= 32 in walkthrough)</small></td><td class="num-right">32</td><td class="num-right">32</td></tr>
+        <tr><th>Total V2 setup ops</th><th class="num-right">2 × 32 = 64</th><th class="num-right">2</th></tr>
         <tr><th>Net saving</th><td colspan="2" class="num-right"><b>−62 ops</b></td></tr>
         <tr><th>UB bandwidth</th><th class="num-right">32 × 256 B</th><th class="num-right">256 B</th></tr>
         <tr><th>UB bw saved</th><td colspan="2" class="num-right"><b>−8 KB UB read bandwidth</b></td></tr>
@@ -921,20 +924,22 @@ out_i8    = out_f16.<span class="fn">to</span>(tl.int8)            <span class="
     </div>
 
     <div>
-      <h3>Cost-benefit ledger</h3>
+      <h3>Cost-benefit ledger (matches walkthrough §6.20)</h3>
       <table>
-        <tr><th></th><th class="num-right">Current</th><th class="num-right">Optimized</th></tr>
-        <tr><td>Ops per pass</td><td class="num-right">4 (lines 8,9,13,14)</td><td class="num-right">1 (VLDI)</td></tr>
-        <tr><td>Passes per iter</td><td class="num-right">2</td><td class="num-right">2</td></tr>
-        <tr><td>Iters</td><td class="num-right">~32</td><td class="num-right">~32</td></tr>
-        <tr><th>Total cost</th><th class="num-right">256</th><th class="num-right">64</th></tr>
-        <tr><th>Net saving</th><td colspan="2" class="num-right"><b>−192 ops</b><br>(rounded to "−160 ops" because some VLDAS/SMOV overlap MTE2 latency and don't truly serialize)</td></tr>
+        <tr><th>Ops eliminated</th><th class="num-right">Per pass</th><th class="num-right">Per VLOOP iter</th><th class="num-right">Total (T=32)</th></tr>
+        <tr><td><code>VLDAS</code> (unaligned ctx setup)</td><td class="num-right">1</td><td class="num-right">2</td><td class="num-right">64</td></tr>
+        <tr><td><code>SMOV</code> (addr snapshot for VLDUI)</td><td class="num-right">1</td><td class="num-right">2</td><td class="num-right">64</td></tr>
+        <tr><td><code>SMOV</code> (mid-iter reset between passes)</td><td>—</td><td class="num-right">1</td><td class="num-right">32</td></tr>
+        <tr><td><code>VLDUI → VLDI</code> (1:1 swap)</td><td class="num-right">0</td><td class="num-right">0</td><td class="num-right">0</td></tr>
+        <tr><th>Net saving</th><td colspan="3" class="num-right"><b>−160 ops total</b> (= 64 + 64 + 32)</td></tr>
       </table>
+      <p class="label">T = 32 in the walkthrough's accounting counts each VLDAS/SMOV occurrence across both passes (16 VLOOP iters × 2 passes = 32 occurrences).</p>
 
       <h3>Pipe-level breakdown of saved ops</h3>
       <ul class="tight">
-        <li><b>RVECLD</b>: −64 VLDAS, −32 VLDUI (these are partial loads)</li>
-        <li><b>RVECSU</b> (scalar): −64 SMOV</li>
+        <li><b>RVECLD</b>: −64 VLDAS ops (these run on the load pipe)</li>
+        <li><b>RVECSU</b> (scalar): −96 SMOV ops (64 addr-snapshots + 32 mid-iter resets)</li>
+        <li>VLDUI is a 1:1 swap to VLDI — same op count, but aligned VLDI is faster per op (~10 cyc vs ~10-12 cyc), so a small additional latency win.</li>
         <li>Both pipes have lots of slack in the current trace (RVECLD 18%, RVECSU 2% utilized) — so the cycle saving on the critical path is ~−40-60 cyc, not the full −160.</li>
       </ul>
 
