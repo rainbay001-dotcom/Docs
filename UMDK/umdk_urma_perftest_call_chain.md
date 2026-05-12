@@ -83,13 +83,47 @@ This is the only stage where setup latency actually accumulates. Sub-stages are 
 
 Local creates total ~280 μs. The wall-clock damage is the three CM-send paths.
 
-### 3.2 The two `ubcore_import_jetty` calls are *different code paths*
+The Count column reflects **bondp library fan-out** — see §3.2 for why one userspace call produces multiple kernel events.
 
-Critical point — they are **not duplicates**, they are sequential phases of the same logical connection setup:
+### 3.2 Why the counts: bondp `dev_num` vs `active_count` fan-out
 
-**Call #1** — `ubcore_connect_exchange_udata_when_import_jetty`
+`urma_perftest -d bonding_dev_0` runs against a bonded device, so every URMA call goes through the bondp library (`~/Documents/Repo/ub-stack/umdk/src/urma/lib/urma/bond/`). Bondp applies one of **two fan-out rules** depending on the operation type. See [`umdk_virtual_vs_physical_handles.md`](umdk_virtual_vs_physical_handles.md) for the vjetty/pjetty primer.
+
+| Operation type | Fan-out rule | Why |
+| -------------- | ------------ | --- |
+| Local resource create (jfc / jfr / jetty / seg-register) | × `dev_num` | Create the resource on **every** slave NIC so the bonding can switch active path without re-allocating. |
+| Remote resource import (`import_jetty`) | **v-side (1) + p-side (× `active_count`)** | The v-side does peer-metadata exchange once for the virtual handle; the p-side programs hardware VTP per currently active slave. |
+| Remote seg import (`import_seg`) | v-side only (1) | A remote seg is just an address handle, not a hardware resource — no per-slave state needed. |
+
+`dev_num` and `active_count` are both fields of `bondp_comp` (`bondp_types.h:209`):
+
+| Field | Set at | This config (`--single_path`) | Source |
+| ----- | ------ | ----------------------------- | ------ |
+| `dev_num` | bonding device setup | **2** (all members) | `bondp_create_jfc:276`, `bondp_create_jetty:1175` loops |
+| `active_count` | path selection | **1** (one active path) | `bondp_import_pjetty:1442` loop |
+
+### 3.3 The two `ubcore_import_jetty` calls — v-side phase + p-side phase
+
+`bondp_import_jetty` (`bondp_api.c:1486`) is structured as two distinct phases. With `active_count=1`, each fires exactly one kernel `ubcore_import_jetty`, hence the trace shows two with **different child trees**:
+
 ```
-ubcore_import_jetty #1                          # 5333.59 μs
+urma_import_jetty(v_ctx, ...)                       [one userspace call]
+  └─ bondp_import_jetty
+     ├─ bondp_import_vjetty  ────────────────────  PHASE A (v-side)
+     │   └─ urma_cmd_import_jetty(v_ctx, ...)
+     │       └─ kernel: ubcore_import_jetty #1
+     │
+     └─ bondp_import_pjetty  ────────────────────  PHASE B (p-side, × active_count)
+         for n in 0..active_count-1:
+           └─ urma_import_jetty(p_ctxs[idx], ...)
+               └─ kernel: ubcore_import_jetty #2
+```
+
+The two kernel events take fundamentally different code paths inside ubcore because they are doing different work — not because they are duplicates.
+
+**Phase A (v-side)** — `ubcore_connect_exchange_udata_when_import_jetty`. Exchanges peer metadata (jetty ID, segment info) for the virtual tjetty. Does not touch hardware TP yet.
+```
+ubcore_import_jetty #1 (Phase A, v-side)        # 5333.59 μs
 └─ ubcore_connect_exchange_udata_when_import_jetty   # 5309.06 μs
    ├─ ubcore_find_physical_device                     2.08 μs
    ├─ create_session_for_exchange_udata.constprop.0   2.54 μs
@@ -103,9 +137,10 @@ ubcore_import_jetty #1                          # 5333.59 μs
 └─ ubagg_import_jetty                                23.06 μs
 ```
 
-**Call #2** — `ubcore_import_jetty_compat` (TP-aware, programs hardware VTP)
+**Phase B (p-side)** — `ubcore_import_jetty_compat`. TP-aware path: fetches the TP list, exchanges TP info with the peer, programs the hardware VTP. One invocation per active slave NIC.
+
 ```
-ubcore_import_jetty #2                          # 6104.82 μs
+ubcore_import_jetty #2 (Phase B, p-side)        # 6104.82 μs
 └─ ubcore_import_jetty_compat
    ├─ ubcore_get_tp_list                          176.74 μs
    │  └─ udma_get_tp_list                         175.17 μs
@@ -118,9 +153,11 @@ ubcore_import_jetty #2                          # 6104.82 μs
       └─ ubcore_connect_vtp_ctrlplane             171.66 μs
 ```
 
-Same pattern in `ubcore_import_seg` (stage 4d): `send_seg_info_req` → `ubmad_post_send` → ~4.9 ms CPU scan + tiny wire send, then `ubcore_session_wait` ~870 μs for peer ack.
+Under a real multipath config (`active_count=2`), this trace would show **three** `ubcore_import_jetty` events: 1 v-side (Phase A) + 2 p-side (Phase B per slave). The v-side phase always fires first because Phase B needs the metadata it gathers.
 
-### 3.3 Concurrent kworker activity (not on critical path)
+`ubcore_import_seg` (stage 4d) is v-side only — count is 1, not 2 — because a remote seg is just an address handle. Its internal cost still follows the same pattern as Phase A: `send_seg_info_req` → `ubmad_post_send` → ~4.9 ms CPU scan + tiny wire send, then `ubcore_session_wait` ~870 μs for peer ack.
+
+### 3.4 Concurrent kworker activity (not on critical path)
 
 While stage 4 is blocked in `ubcore_session_wait`, kworker threads run ubcore's *internal* control plane:
 
@@ -310,6 +347,11 @@ Each round's wrong answer followed from depth-truncated traces. The pattern is g
 | `create_duplex_ctx`, `connect_jetty_default` | `tools/perftest/perftest_resources.c:1512` | userland; setup loop |
 | `-J N` gate (only allowed for `send_bw`) | `tools/perftest/perftest_parameters.c:677` | use `send_bw` for serial scale tests |
 | `unimport_seg` (error silently swallowed) | `tools/perftest/perftest_resources.c:1231-1240` | leaks kernel handles on failure |
+| `bondp_create_jetty` (× `dev_num` fan-out) | `lib/urma/bond/bondp_api.c:1175` | resource-creation rule |
+| `bondp_create_jfc` (× `dev_num` fan-out) | `lib/urma/bond/bondp_api.c:268` | resource-creation rule |
+| `bondp_import_jetty` (v-side + p-side phases) | `lib/urma/bond/bondp_api.c:1486` | structural source of the 2 `ubcore_import_jetty` events |
+| `bondp_import_pjetty` (loop × `active_count`) | `lib/urma/bond/bondp_api.c:1442` | p-side fan-out site |
+| `bondp_comp.dev_num` / `.active_count` | `lib/urma/bond/bondp_types.h:209` | the two fan-out parameters |
 | `ubmad_post_send` (MAD send origin) | `drivers/ub/urma/ubcore/ubcm/ubmad_datapath.c:817` | calls `ubcore_get_main_primary_eid` *before* wire send |
 | `ubcore_get_main_primary_eid` (the scan) | `drivers/ub/urma/ubcore/ubcore_topo_info.c:452` | O(N) over `topo_map`, no hash |
 | `find_primary_eid_in_ues` | (inside `ubcore_get_primary_eid`) | per-agg_dev loop body |
