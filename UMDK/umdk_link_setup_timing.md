@@ -3341,6 +3341,191 @@ Example: trace shows `ubcore_exchange_tp_info` = 5.49 ms. From §10.22.F:
 parent is `ubcore_exchange_tp_info`. That confirms the topo-scan
 attribution rather than misreading the 5.49 ms as "network RTT."
 
+### 10.23 URMA verb semantics — which ops need `import_seg`, which need `import_jetty`
+
+§10.22 mapped traced kernel functions to stages. This section maps
+**URMA verb opcodes** to the resources they require — specifically
+whether they need a peer's segment imported, a peer's jetty/JFR
+imported, or neither. Useful when reading `urma_perftest` source
+and asking "what does this test actually exercise?" or when sizing
+the setup-overhead vs the operation itself.
+
+#### A. URMA segments — the conceptual model
+
+A segment is a registered local memory region exposed for **one-sided
+remote access**. The owner calls
+`urma_register_seg(buf, len, token, access_flags)`. The kernel pins
+the pages, DMA-maps them, and returns a descriptor: a globally-unique
+segment ID, the registered virtual address, the length, and the
+authentication token from the call.
+
+For a peer to read/write/atomically-update that memory, the peer
+needs a local **handle** that bundles three things into every
+outgoing one-sided WR:
+
+- the owner's **virtual address** (so the responder's hardware
+  computes the local physical offset)
+- the owner's **segment ID + token** (so the responder's hardware
+  validates access)
+- the owner's **EID** (so the initiator's hardware routes correctly)
+
+`urma_import_seg(ctx, &rseg, &token, ...)` builds that handle.
+Subsequent WRs reference it:
+
+```c
+urma_jfs_wr_t wr = { .opcode = URMA_OPC_READ,
+                     .remote = imported_seg,         /* the handle */
+                     .remote_offset = 0, .length = ... };
+urma_post_jfs_wr(jfs, &wr, &bad_wr);
+```
+
+RDMA-IB analogy: `urma_register_seg` ≈ `ibv_reg_mr`, and
+`urma_import_seg` builds a remote-MR-handle that holds the peer's
+rkey + address. URMA bundles the auth token into the import step.
+
+The responder's CPU is **not involved** in the access. Hardware
+validates the token against the registered segment and DMAs the data.
+
+#### B. The full URMA verb opcode table
+
+Canonical enum at `kernel/include/ub/urma/ubcore_opcode.h:58–77`.
+14 opcodes total in 4 semantic families:
+
+| Opcode | Hex | Family | What it does | Needs `import_seg`? | Needs `import_jetty`/`import_jfr`? |
+|---|---|---|---|---|---|
+| `WRITE` | 0x00 | one-sided write | RDMA-WRITE — push bytes into remote memory | **yes** | yes (the jetty whose TP it rides on) |
+| `WRITE_IMM` | 0x01 | one-sided write | WRITE + 32-bit immediate that triggers a CQE on the receiver — sender's piggyback "here's where I wrote, react please" | **yes** | yes |
+| `WRITE_NOTIFY` | 0x02 | one-sided write | WRITE + a notification (CQE-like signal without immediate data) — receiver gets an event without consuming a RECV WR | **yes** | yes |
+| `READ` | 0x10 | one-sided read | RDMA-READ — pull bytes from remote memory | **yes** | yes |
+| `CAS` | 0x20 | one-sided atomic | Compare-and-swap on a remote 64-bit value | **yes** | yes |
+| `SWAP` | 0x21 | one-sided atomic | Atomic swap (no compare) | **yes** | yes |
+| `FADD` | 0x22 | one-sided atomic | Fetch-and-add | **yes** | yes |
+| `FSUB` | 0x23 | one-sided atomic | Fetch-and-subtract | **yes** | yes |
+| `FAND` | 0x24 | one-sided atomic | Fetch-and-and (bitmask clear) | **yes** | yes |
+| `FOR` | 0x25 | one-sided atomic | Fetch-and-or (bitmask set) | **yes** | yes |
+| `FXOR` | 0x26 | one-sided atomic | Fetch-and-xor (bitmask toggle) | **yes** | yes |
+| `SEND` | 0x40 | two-sided message | Push a message into the receiver's next pre-posted RECV buffer | no | **yes** |
+| `SEND_IMM` | 0x41 | two-sided message | SEND + 32-bit immediate carried in the CQE on the receiver | no | **yes** |
+| `SEND_INVALIDATE` | 0x42 | two-sided + side-effect | SEND + tells the receiver to invalidate a specific local segment token id — revocation primitive | no | **yes** |
+| `NOP` | 0x51 | local-only | No-op WR — used for fencing, signaled-completion-without-payload, queue draining, keepalive | no | no |
+| `WRITE_ATOMIC` | 0x60 | one-sided write (atomic block) | Write whose **payload arrival** is atomic — receiver never sees a partial buffer. Distinct from CAS/FADD: those are read-modify-write on one value; this is "the full N-byte payload lands atomically." | **yes** | yes |
+
+#### C. Three semantic categories
+
+**One-sided (need imported seg).** Operations that act on remote
+**memory** addressed by virtual address. WR carries
+`(remote_seg_handle, offset, length)`. Hardware on the responder
+validates against the registered segment's token and DMAs without
+involving the responder's CPU.
+
+- WRITE family: `WRITE`, `WRITE_IMM`, `WRITE_NOTIFY`, `WRITE_ATOMIC`
+- READ: `READ`
+- Atomics: `CAS`, `SWAP`, `FADD`, `FSUB`, `FAND`, `FOR`, `FXOR`
+
+All eleven require the initiator to have called `urma_import_seg`
+against the responder's registered segment beforehand. Plus
+`urma_import_jetty` to know which TP to ride on (the per-peer TP
+the WR uses for transport).
+
+**Two-sided (need imported jetty/JFR, NOT seg).** Operations that
+act on a remote **endpoint**, not remote memory. WR carries
+`(remote_jetty_handle, payload)`. The receiver's hardware pops the
+next pre-posted RECV WR from the JFR and uses that WR's `sge[]` as
+the landing spot.
+
+- `SEND`, `SEND_IMM`, `SEND_INVALIDATE`
+
+Need `urma_import_jetty` (or `urma_import_jfr` in SIMPLEX mode) to
+know which remote endpoint to address. **Never** need
+`urma_import_seg`.
+
+**Local-only.** `NOP` doesn't go to the wire. Used internally for
+fencing, signaled-completion-without-payload, or queue mechanics.
+
+#### D. Notable subtleties
+
+- **`WRITE_IMM` vs. `WRITE_NOTIFY`**: both let the receiver react to
+  a write without polling the destination buffer. `WRITE_IMM` carries
+  32 bits of user data to the receiver's CQE; `WRITE_NOTIFY` just
+  generates an event (no data payload).
+- **`SEND_INVALIDATE`**: the canonical revocation primitive. Combines
+  SEND with "stop accepting access through this key" notification.
+  Receiver's HW invalidates the named token id atomically with
+  consuming the SEND. Useful when an RPC server hands out short-lived
+  keys to clients and wants to revoke them after completion.
+- **`WRITE_ATOMIC` is not in the CAS/FADD family**. The CAS family
+  does read-modify-write on a single 64-bit value. `WRITE_ATOMIC` is
+  a normal-size WRITE whose **arrival** is atomic at the receiver —
+  no torn buffers. Distinct semantic; distinct opcode (0x60 vs
+  0x20–0x26).
+- **`NOP`** is rarely user-visible; libraries use it to flush a queue
+  or generate a CQE without doing real work. Some implementations
+  use it for keepalive.
+
+#### E. Why `urma_perftest` imports a seg even for SEND tests
+
+`create_duplex_ctx()` at `perftest_resources.c:2198` calls
+`import_seg_for_duplex` **unconditionally**, regardless of
+subcommand. Reasons:
+
+1. **Uniform setup code path.** Creating the same context structure
+   for SEND, READ, WRITE, and ATOMIC tests means the framework can
+   share `create_ctx` / `destroy_ctx` / `prepare_test`. The cost is
+   one wasted `urma_import_seg` per SEND test.
+2. **Optional credit-based flow control.** With `--enable_credit`,
+   perftest registers and imports a second segment for credit
+   signaling. Some pipelined send tests benefit. The default
+   `--enable_credit=false` path doesn't use it but the import still
+   runs.
+3. **Test-result + sync exchanges.** Some perftest variants do small
+   one-sided WRITEs at end-of-test to deposit final results. Cleaner
+   with a pre-imported seg available.
+
+Per §10.18.B / §10.21.E, the cost of this gratuitous import is
+~5–6 ms during stage 5f, almost all of it inside `ubmad_post_send`'s
+topo scan (§10.22.A) on the `send_seg_info_req` CM exchange.
+
+For "characterize first-RPC for SEND specifically," that 5–6 ms is
+removable overhead. For "characterize first-RPC for WRITE/READ/ATOMIC,"
+it's an honest part of the cost.
+
+#### F. Optional patch to skip import_seg for SEND tests
+
+3-line patch in `create_duplex_ctx()`:
+
+```c
+-   if (import_seg_for_duplex(ctx, cfg) != 0) goto delete_remote_info;
++   /* Segments are only needed for one-sided ops (READ/WRITE/ATOMIC)
++    * and for the credit flow control mechanism. Skip for SEND tests
++    * with credit disabled — saves ~5 ms of first-RPC. */
++   if ((cfg->api_type != PERFTEST_SEND || cfg->enable_credit) &&
++       import_seg_for_duplex(ctx, cfg) != 0)
++       goto delete_remote_info;
+```
+
+Plus a matching guard in `destroy_duplex_ctx`. After this, `send_lat`
+first-RPC drops by the ~5–6 ms of segment-import CM exchange. Worth
+doing if you're characterizing pure SEND link-setup minimum; not
+needed for concurrent-stress testing.
+
+#### G. Test → resources-needed cheat sheet
+
+For deciding what overhead is essential vs. gratuitous in a given
+`urma_perftest` invocation:
+
+| Subcommand | URMA opcode used | Needs imported seg? | Needs imported jetty/JFR? |
+|---|---|---|---|
+| `send_lat` / `send_bw` | `SEND` | no (perftest imports anyway) | yes |
+| `send_with_imm_lat` / `send_with_imm_bw` | `SEND_IMM` | no (perftest imports anyway) | yes |
+| `read_lat` / `read_bw` | `READ` | **yes — essential** | yes |
+| `write_lat` / `write_bw` | `WRITE` | **yes — essential** | yes |
+| `write_with_imm_lat` / `write_with_imm_bw` | `WRITE_IMM` | **yes — essential** | yes |
+| `atomic_lat` / `atomic_bw` | (CAS / FADD / ...) | **yes — essential** | yes |
+
+The "needs imported jetty/JFR" column is universally yes because all
+verbs ride on a TP between the two endpoints, and the TP only exists
+once `urma_import_jetty` (or `_jfr`) has run.
+
 ## 11. TRACE_EVENT internals — how the macro actually works
 
 ### 11.1 Where `TRACE_EVENT` is defined

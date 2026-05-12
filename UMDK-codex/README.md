@@ -37,6 +37,8 @@ Two local document directories were found:
 - [Architecture diagrams and workflows](./architecture-diagrams-and-workflows.md)
 - [UMQ architecture and workflows](./umq-architecture-and-workflows.md)
 - [UB MAD VTP link setup flow](./ub-mad-vtp-link-setup-flow.md)
+- [UBASE local hardware and control queue](./ubase-local-hardware-and-ctrlq.md)
+- [URMA TP type comparison and call chains](./urma-tp-type-comparison-call-chains.md)
 - [HiSilicon IMP interface](./hisilicon-imp-interface.md)
 - [UB root bus, udev, and device enumeration](./ub-root-bus-udev-device-enumeration.md)
 - [UB and PCIe probe process comparison](./ub-vs-pcie-probe-process-comparison.md)
