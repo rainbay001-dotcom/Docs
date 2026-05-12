@@ -159,7 +159,7 @@
     Companion to <code>a5_pto_bool_vloop_walkthrough.md</code> (§3 body, §6 optimizations).<br>
     Source: <code>~/Documents/docs/assembler.as</code> — 39 lines of disassembled PTO ISA from an A5 (351x / Atlas 350) build of <code>mask_kernel</code>.
   </div>
-  <div class="slide-number">1 / 18</div>
+  <div class="slide-number">1 / 19</div>
 </div>
 
 <!-- =================================================================== -->
@@ -227,7 +227,7 @@
     its exact value is not determinable from the disassembly alone.
   </div>
 
-  <div class="slide-number">2 / 18</div>
+  <div class="slide-number">2 / 19</div>
 </div>
 
 <!-- =================================================================== -->
@@ -281,7 +281,7 @@
     </div>
   </div>
 
-  <div class="slide-number">3 / 18</div>
+  <div class="slide-number">3 / 19</div>
 </div>
 
 <!-- =================================================================== -->
@@ -328,7 +328,7 @@
   hit higher RVECEX utilization than equivalent Triton-emitted scalar
   loops.</p>
 
-  <div class="slide-number">4 / 18</div>
+  <div class="slide-number">4 / 19</div>
 </div>
 
 <!-- =================================================================== -->
@@ -401,14 +401,155 @@
     </tr>
   </table>
 
-  <div class="slide-number">5 / 18</div>
+  <div class="slide-number">5 / 19</div>
+</div>
+
+<!-- =================================================================== -->
+<!-- SLIDE 5.5 — PER-BLOCK PARALLELISM (WHY q DOESN'T ADVANCE BETWEEN PASSES) -->
+<!-- =================================================================== -->
+<div class="slide">
+  <div class="slide-title-bar"><h2>5. Why q doesn't advance between pass A and pass B — per-block view</h2></div>
+
+  <p>The two passes don't process two elements of the same row one-by-one
+  — they process <b>two key-blocks of the same row in parallel within
+  each pass</b>. Elements within a row land in different
+  <i>vreg lanes</i>, not in different instructions. That's why q is
+  invariant across the pass boundary.</p>
+
+  <div class="col2">
+    <div>
+      <h3>The output mask, with two key-blocks side-by-side</h3>
+
+      <svg viewBox="0 0 560 340" width="100%" style="font-family:'SF Mono',Menlo,Consolas,monospace; font-size: 11px;">
+        <!-- block A header -->
+        <rect x="40" y="20" width="200" height="22" fill="#bbdefb" stroke="#1565c0"/>
+        <text x="140" y="36" text-anchor="middle" fill="#0d47a1" font-weight="bold" font-size="12">K-block A (lanes 0..31)</text>
+        <!-- block B header -->
+        <rect x="280" y="20" width="200" height="22" fill="#c8e6c9" stroke="#2e7d32"/>
+        <text x="380" y="36" text-anchor="middle" fill="#1b5e20" font-weight="bold" font-size="12">K-block B (lanes 0..31)</text>
+
+        <!-- row labels + body cells -->
+        <g font-size="11" text-anchor="middle">
+          <!-- row i=0 -->
+          <text x="20" y="62">i=0</text>
+          <rect x="40" y="50" width="200" height="22" fill="#eef5ff" stroke="#1565c0" stroke-width="0.7"/>
+          <rect x="280" y="50" width="200" height="22" fill="#e8f5e9" stroke="#2e7d32" stroke-width="0.7"/>
+          <text x="140" y="65" fill="#555">M[0, 0..31]</text>
+          <text x="380" y="65" fill="#555">M[0, 32..63]</text>
+
+          <!-- row i=1 -->
+          <text x="20" y="92">i=1</text>
+          <rect x="40" y="80" width="200" height="22" fill="#eef5ff" stroke="#1565c0" stroke-width="0.7"/>
+          <rect x="280" y="80" width="200" height="22" fill="#e8f5e9" stroke="#2e7d32" stroke-width="0.7"/>
+          <text x="140" y="95" fill="#555">M[1, 0..31]</text>
+          <text x="380" y="95" fill="#555">M[1, 32..63]</text>
+
+          <!-- row i=2 HIGHLIGHTED -->
+          <text x="20" y="122" font-weight="bold" fill="#e65100">i=2</text>
+          <rect x="40" y="110" width="200" height="22" fill="#fff3e0" stroke="#e65100" stroke-width="2"/>
+          <rect x="280" y="110" width="200" height="22" fill="#fff3e0" stroke="#e65100" stroke-width="2"/>
+          <text x="140" y="125" fill="#bf360c" font-weight="bold">pass A fills 32 lanes →</text>
+          <text x="380" y="125" fill="#bf360c" font-weight="bold">pass B fills 32 lanes →</text>
+
+          <!-- row i=3 -->
+          <text x="20" y="152">i=3</text>
+          <rect x="40" y="140" width="200" height="22" fill="#eef5ff" stroke="#1565c0" stroke-width="0.7"/>
+          <rect x="280" y="140" width="200" height="22" fill="#e8f5e9" stroke="#2e7d32" stroke-width="0.7"/>
+          <text x="140" y="155" fill="#555">M[3, 0..31]</text>
+          <text x="380" y="155" fill="#555">M[3, 32..63]</text>
+        </g>
+
+        <!-- arrow showing q feeding both blocks for row i=2 -->
+        <g>
+          <rect x="120" y="200" width="280" height="40" fill="#ffe082" stroke="#f57c00" stroke-width="2" rx="6"/>
+          <text x="260" y="220" text-anchor="middle" font-weight="bold" fill="#bf360c">q_attn[i=2], q_off[i=2]</text>
+          <text x="260" y="234" text-anchor="middle" fill="#5d4037" font-size="10">scalars — loaded ONCE per VLOOP iter (advance with i, NOT with pass)</text>
+
+          <!-- arrows from q to both passes -->
+          <line x1="200" y1="200" x2="140" y2="135" stroke="#bf360c" stroke-width="2" marker-end="url(#arr)"/>
+          <line x1="320" y1="200" x2="380" y2="135" stroke="#bf360c" stroke-width="2" marker-end="url(#arr)"/>
+
+          <!-- arrows from k_attn_A and k_attn_B (separate) -->
+          <rect x="40" y="270" width="200" height="40" fill="#bbdefb" stroke="#1565c0" stroke-width="1.5" rx="6"/>
+          <text x="140" y="290" text-anchor="middle" font-weight="bold" fill="#0d47a1">k_attn_A[0..31]</text>
+          <text x="140" y="304" text-anchor="middle" fill="#555" font-size="10">block-A vector (V5 from [S10])</text>
+          <line x1="140" y1="270" x2="140" y2="135" stroke="#0d47a1" stroke-width="1.5" marker-end="url(#arr)"/>
+
+          <rect x="280" y="270" width="200" height="40" fill="#c8e6c9" stroke="#2e7d32" stroke-width="1.5" rx="6"/>
+          <text x="380" y="290" text-anchor="middle" font-weight="bold" fill="#1b5e20">k_attn_B[0..31]</text>
+          <text x="380" y="304" text-anchor="middle" fill="#555" font-size="10">block-B vector (V5 reloaded from [S16])</text>
+          <line x1="380" y1="270" x2="380" y2="135" stroke="#1b5e20" stroke-width="1.5" marker-end="url(#arr)"/>
+        </g>
+
+        <defs>
+          <marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+            <path d="M 0 0 L 10 5 L 0 10 z" fill="#666"/>
+          </marker>
+        </defs>
+      </svg>
+    </div>
+
+    <div>
+      <h3>What "element-by-element" actually means here</h3>
+      <p>Pass A's <code>VCMP.EQ.s32 P4,V4,V5,P1</code> at line 12 is
+      <i>one</i> instruction that produces <b>32 results at once</b>:</p>
+
+      <pre class="code code-small">P4_A[<span class="num">0</span>] = (V4[<span class="num">0</span>] == V5[<span class="num">0</span>])  <span class="com">; q_attn[2] == k_attn_A[0]</span>
+P4_A[<span class="num">1</span>] = (V4[<span class="num">1</span>] == V5[<span class="num">1</span>])  <span class="com">; q_attn[2] == k_attn_A[1]</span>
+P4_A[<span class="num">2</span>] = (V4[<span class="num">2</span>] == V5[<span class="num">2</span>])  <span class="com">; q_attn[2] == k_attn_A[2]</span>
+…
+P4_A[<span class="num">31</span>]= (V4[<span class="num">31</span>] == V5[<span class="num">31</span>]) <span class="com">; q_attn[2] == k_attn_A[31]</span></pre>
+
+      <p>All 32 lane comparisons happen in <i>parallel</i> (one VCMP issue,
+      one cycle of issue, ~8 cycles of latency). The element index
+      <code>j</code> varies <b>across lanes</b>, not across instructions.</p>
+
+      <p>Because V4 is brc_b32-loaded (<code>#dist=3</code>), all 32 lanes
+      of V4 hold the same scalar <code>q_attn[2]</code> — that scalar
+      gets compared against each of V5's 32 different lane values.</p>
+
+      <h3>What changes between pass A and pass B</h3>
+
+      <table>
+        <tr><th>Operand</th><th>Pass A</th><th>Pass B</th><th>Same?</th></tr>
+        <tr><td>V4 (q_attn[i])</td><td><code>q_attn[2]</code></td><td><code>q_attn[2]</code></td><td>✓ (q is row-side)</td></tr>
+        <tr><td>V3 (q_off[i])</td><td><code>q_off[2]</code></td><td><code>q_off[2]</code></td><td>✓ (q is row-side)</td></tr>
+        <tr><td>V5 (k_attn row)</td><td>block-A 32 values</td><td>block-B 32 values</td><td>✗ (different K)</td></tr>
+        <tr><td>V2 (k_off row)</td><td>block-A 32 values</td><td>block-B 32 values</td><td>✗ (different K)</td></tr>
+      </table>
+
+      <div class="callout">
+        <b>So q doesn't advance between passes</b> because q hasn't
+        changed — the same row index i is being processed against
+        two different K-blocks in parallel. q advances when the
+        VLOOP iter advances (i → i+1), which happens exactly once
+        per iter, not once per pass.
+      </div>
+
+      <h3>Per-iter advance accounting</h3>
+      <ul class="tight" style="font-size: 13px">
+        <li><b>V4 (q_attn)</b>: <code>S68 += 4 B</code> per iter
+            (one i32 scalar). Brc_b32 broadcasts it to all 32 lanes.
+            Pass B reuses what pass A loaded.</li>
+        <li><b>V3 (q_offset)</b>: <code>S69 += 512 B</code> per iter
+            (full pre-replicated vreg). Pass B should reuse pass A's V3
+            but currently doesn't — that's Opt 11.</li>
+        <li><b>V5 / V2 (K-side)</b>: no per-iter advance
+            (<code>#p=0</code>). The pass switch uses
+            <b>different base addresses</b> (S10 vs S16, S6 vs S14),
+            not a post-increment.</li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="slide-number">6 / 19</div>
 </div>
 
 <!-- =================================================================== -->
 <!-- SLIDE 6 — LOOP-INVARIANTS (THE OPTIMIZATION SURFACE)                 -->
 <!-- =================================================================== -->
 <div class="slide">
-  <div class="slide-title-bar"><h2>5. Loop-invariants exposed — what the body needlessly recomputes</h2></div>
+  <div class="slide-title-bar"><h2>6. Loop-invariants exposed — what the body needlessly recomputes</h2></div>
 
   <p>Inside the VLOOP, certain instructions produce <i>bit-identical
   results every iteration</i>. They're loop-invariants the compiler
@@ -458,14 +599,14 @@
     </div>
   </div>
 
-  <div class="slide-number">6 / 18</div>
+  <div class="slide-number">7 / 19</div>
 </div>
 
 <!-- =================================================================== -->
 <!-- SLIDE 7 — OPTIMIZATION TAXONOMY                                      -->
 <!-- =================================================================== -->
 <div class="slide">
-  <div class="slide-title-bar"><h2>6. The 23 optimizations — taxonomy</h2></div>
+  <div class="slide-title-bar"><h2>7. The 23 optimizations — taxonomy</h2></div>
 
   <table>
     <tr><th>Category</th><th>Opts</th><th>What they attack</th></tr>
@@ -518,14 +659,14 @@
     <span class="tier-badge badge-c" style="margin-left:8px">Tier C</span> — speculative or requires significant codegen rework.
   </div>
 
-  <div class="slide-number">7 / 18</div>
+  <div class="slide-number">8 / 19</div>
 </div>
 
 <!-- =================================================================== -->
 <!-- SLIDE 8 — TIER-A STRUCTURAL HOIST                                    -->
 <!-- =================================================================== -->
 <div class="slide">
-  <div class="slide-title-bar"><h2>7. Tier-A loop-invariant hoists (Opts 1–6, 11–12)</h2></div>
+  <div class="slide-title-bar"><h2>8. Tier-A loop-invariant hoists (Opts 1–6, 11–12)</h2></div>
 
   <table>
     <tr><th>#</th><th>Optimization</th><th class="num-right">Saving</th><th>Mechanism</th></tr>
@@ -587,14 +728,14 @@
     from an older / different compiler that didn't.
   </div>
 
-  <div class="slide-number">8 / 18</div>
+  <div class="slide-number">9 / 19</div>
 </div>
 
 <!-- =================================================================== -->
 <!-- SLIDE 9 — TIER-A μARCH ALIGNMENT                                     -->
 <!-- =================================================================== -->
 <div class="slide">
-  <div class="slide-title-bar"><h2>8. Tier-A μarch alignment (Opts 13, 14, 22, 23)</h2></div>
+  <div class="slide-title-bar"><h2>9. Tier-A μarch alignment (Opts 13, 14, 22, 23)</h2></div>
 
   <table>
     <tr><th>#</th><th>Optimization</th><th class="num-right">Saving</th><th>Mechanism</th></tr>
@@ -641,14 +782,14 @@
   already-present <code>MOVVP</code>. <b>3 ops/iter × 32 iters = ~96
   ops</b>, plus the SMOV scalar work, brings total saving to ~160.</p>
 
-  <div class="slide-number">9 / 18</div>
+  <div class="slide-number">10 / 19</div>
 </div>
 
 <!-- =================================================================== -->
 <!-- SLIDE 10 — TIER-A CAST COLLAPSE                                      -->
 <!-- =================================================================== -->
 <div class="slide">
-  <div class="slide-title-bar"><h2>9. Tier-A cast-variant collapse (Opts 18, 19, 20)</h2></div>
+  <div class="slide-title-bar"><h2>10. Tier-A cast-variant collapse (Opts 18, 19, 20)</h2></div>
 
   <p>These apply to the <i>cast variant</i> of mask_fn (TYPE=2 path or
   any version with explicit <code>.to(tl.int32)</code> conversions),
@@ -701,14 +842,14 @@ out_i8    = out_f16.<span class="fn">to</span>(tl.int8)            <span class="
   many VCASTs — but the cast lowering path inserted them
   conservatively.</p>
 
-  <div class="slide-number">10 / 18</div>
+  <div class="slide-number">11 / 19</div>
 </div>
 
 <!-- =================================================================== -->
 <!-- SLIDE 11 — TIER-B + TIER-C                                           -->
 <!-- =================================================================== -->
 <div class="slide">
-  <div class="slide-title-bar"><h2>10. Tier-B and Tier-C — speculative / bigger swings</h2></div>
+  <div class="slide-title-bar"><h2>11. Tier-B and Tier-C — speculative / bigger swings</h2></div>
 
   <table>
     <tr><th>#</th><th>Tier</th><th>Optimization</th><th class="num-right">Saving</th><th>Notes</th></tr>
@@ -762,14 +903,14 @@ out_i8    = out_f16.<span class="fn">to</span>(tl.int8)            <span class="
     </tr>
   </table>
 
-  <div class="slide-number">11 / 18</div>
+  <div class="slide-number">12 / 19</div>
 </div>
 
 <!-- =================================================================== -->
 <!-- SLIDE 12 — DEEP DIVE: OPT 2                                          -->
 <!-- =================================================================== -->
 <div class="slide">
-  <div class="slide-title-bar"><h2>11. Deep dive — Opt 2: Hold C in a P-reg <span class="tier-badge badge-a">−65 ops</span></h2></div>
+  <div class="slide-title-bar"><h2>12. Deep dive — Opt 2: Hold C in a P-reg <span class="tier-badge badge-a">−65 ops</span></h2></div>
 
   <div class="col2">
     <div>
@@ -824,14 +965,14 @@ out_i8    = out_f16.<span class="fn">to</span>(tl.int8)            <span class="
     </div>
   </div>
 
-  <div class="slide-number">12 / 18</div>
+  <div class="slide-number">13 / 19</div>
 </div>
 
 <!-- =================================================================== -->
 <!-- SLIDE 13 — DEEP DIVE: OPT 4                                          -->
 <!-- =================================================================== -->
 <div class="slide">
-  <div class="slide-title-bar"><h2>12. Deep dive — Opt 4: Hoist V2 (VLDI + VADDS) <span class="tier-badge badge-a">−62 ops</span></h2></div>
+  <div class="slide-title-bar"><h2>13. Deep dive — Opt 4: Hoist V2 (VLDI + VADDS) <span class="tier-badge badge-a">−62 ops</span></h2></div>
 
   <div class="col2">
     <div>
@@ -889,14 +1030,14 @@ out_i8    = out_f16.<span class="fn">to</span>(tl.int8)            <span class="
     </div>
   </div>
 
-  <div class="slide-number">13 / 18</div>
+  <div class="slide-number">14 / 19</div>
 </div>
 
 <!-- =================================================================== -->
 <!-- SLIDE 14 — DEEP DIVE: OPT 23                                         -->
 <!-- =================================================================== -->
 <div class="slide">
-  <div class="slide-title-bar"><h2>13. Deep dive — Opt 23: C-buffer 32 B alignment <span class="tier-badge badge-a">−160 ops</span></h2></div>
+  <div class="slide-title-bar"><h2>14. Deep dive — Opt 23: C-buffer 32 B alignment <span class="tier-badge badge-a">−160 ops</span></h2></div>
 
   <div class="col2">
     <div>
@@ -952,14 +1093,14 @@ out_i8    = out_f16.<span class="fn">to</span>(tl.int8)            <span class="
     </div>
   </div>
 
-  <div class="slide-number">14 / 18</div>
+  <div class="slide-number">15 / 19</div>
 </div>
 
 <!-- =================================================================== -->
 <!-- SLIDE 15 — DEEP DIVE: OPT 21                                         -->
 <!-- =================================================================== -->
 <div class="slide">
-  <div class="slide-title-bar"><h2>14. Deep dive — Opt 21: Cross-launch prefetch <span class="tier-badge badge-c">−700 cyc / launch-pair</span></h2></div>
+  <div class="slide-title-bar"><h2>15. Deep dive — Opt 21: Cross-launch prefetch <span class="tier-badge badge-c">−700 cyc / launch-pair</span></h2></div>
 
   <div class="col2">
     <div>
@@ -1021,14 +1162,14 @@ launch N+1:                  | MTE2 prefetch              | VLOOP body | MTE3 |
     </div>
   </div>
 
-  <div class="slide-number">15 / 18</div>
+  <div class="slide-number">16 / 19</div>
 </div>
 
 <!-- =================================================================== -->
 <!-- SLIDE 16 — CUMULATIVE IMPACT                                         -->
 <!-- =================================================================== -->
 <div class="slide">
-  <div class="slide-title-bar"><h2>15. Cumulative impact — what each artifact could achieve</h2></div>
+  <div class="slide-title-bar"><h2>16. Cumulative impact — what each artifact could achieve</h2></div>
 
   <table>
     <tr><th>Artifact</th><th>Current state</th><th class="num-right">After Tier-A only</th><th class="num-right">After all incl. SIMT</th></tr>
@@ -1076,14 +1217,14 @@ launch N+1:                  | MTE2 prefetch              | VLOOP body | MTE3 |
     rule, Opt 23 is a launcher-side allocation rule.
   </div>
 
-  <div class="slide-number">16 / 18</div>
+  <div class="slide-number">17 / 19</div>
 </div>
 
 <!-- =================================================================== -->
 <!-- SLIDE 17 — WHICH PIPE EACH OPT SAVES ON                              -->
 <!-- =================================================================== -->
 <div class="slide">
-  <div class="slide-title-bar"><h2>16. Where on the AIV each optimization lands</h2></div>
+  <div class="slide-title-bar"><h2>17. Where on the AIV each optimization lands</h2></div>
 
   <p>Mapping each optimization to the pipe it saves ops on, with
   empirical utilization for context. RVECEX is the binding constraint
@@ -1156,14 +1297,14 @@ launch N+1:                  | MTE2 prefetch              | VLOOP body | MTE3 |
     acceptable.
   </div>
 
-  <div class="slide-number">17 / 18</div>
+  <div class="slide-number">18 / 19</div>
 </div>
 
 <!-- =================================================================== -->
 <!-- SLIDE 18 — SUMMARY                                                   -->
 <!-- =================================================================== -->
 <div class="slide">
-  <div class="slide-title-bar"><h2>17. Summary</h2></div>
+  <div class="slide-title-bar"><h2>18. Summary</h2></div>
 
   <div class="col2">
     <div>
@@ -1226,7 +1367,7 @@ launch N+1:                  | MTE2 prefetch              | VLOOP body | MTE3 |
     </div>
   </div>
 
-  <div class="slide-number">18 / 18</div>
+  <div class="slide-number">19 / 19</div>
 </div>
 
 </body>
