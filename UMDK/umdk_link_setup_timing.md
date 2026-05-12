@@ -3052,6 +3052,295 @@ non-ioctl.
 | `src/urma/tools/urma_perftest/perftest_communication.c` | TCP OOB channel — `establish_connection`, `check_remote_cfg`, `sync_time` |
 | `src/urma/tools/urma_perftest/perftest_run_test.c` | Per-API benchmark loops (`run_send_lat_*`, `run_send_bw_*`, etc.) |
 
+### 10.22 Trace-leaf to stage mapping — where each commonly-seen kernel function fits in `urma_perftest`
+
+§10.21 mapped userland stages to kernel ioctls. This section does the
+inverse: given a kernel function you see in an ftrace capture, where
+does it fit in `urma_perftest`'s stage chain, what's its parent, and
+what's inside it? Useful when reading a trace and asking "what is
+this entry actually a part of?"
+
+The functions covered here are the ones JinDou's traces surfaced as
+significant and the ones the rest of §10 keeps referring back to.
+
+#### A. `ubmad_post_send` — the leaf MAD-send primitive
+
+**File:line**: `ubcm/ubmad_datapath.c:768`.
+
+**What it is**: the kernel's "send a control message to the peer"
+function. Every kernel-initiated CM (Connection Manager) message
+funnels through it. NOT one of the named stages — it's a leaf that
+runs *inside* the named CM-send wrappers (e.g., `send_jetty_info_req`,
+`ubcore_exchange_tp_info`, `send_seg_info_req`, `send_close_req`).
+
+**Body shape** (simplified):
+
+```c
+int ubmad_post_send(struct ubmad_send_buf *send_buf, ...) {
+    ...
+    /* line 817 — ~4.9 ms of CPU scan PER CALL */
+    ret = ubcore_get_main_primary_eid(device, &dst_eid, ...);
+    if (ret != 0) return ret;
+    ...
+    /* the actual hardware WQE post — 2–7 µs */
+    return ubmad_do_post_send(send_buf, ...);
+}
+```
+
+The topo-scan cost (§10.19) lives inside `ubcore_get_main_primary_eid`
+at line 817, *before* any packet leaves the wire. Each
+`ubmad_post_send` invocation pays the full ~4.9 ms scan even if the
+underlying network would have been microseconds.
+
+**Where it's reached from in a urma_perftest run**:
+
+```
+                                              registered cm-send op
+                                              = ubmad_ubc_send         ubcm/ubmad_datapath.c:1155
+                                                  └─ ubmad_post_send   ubcm/ubmad_datapath.c:768
+                                                         │
+                                                         ▼
+   stage 5f  send_seg_info_req     ───→  ubmad_ubc_send  ───→  ubmad_post_send   ★ call site 1
+   stage 5g  send_jetty_info_req   ───→  ubmad_ubc_send  ───→  ubmad_post_send   ★ call site 2
+             (from ubcore_connect_exchange_udata_when_import_jetty)
+   stage 5g  send_create_req       ───→  ubmad_ubc_send  ───→  ubmad_post_send   ★ call site 3
+             (from ubcore_exchange_tp_info)
+   stage 8c  send_close_req        ───→  ubmad_ubc_send  ───→  ubmad_post_send   ★ call site 4
+             (from urma_unimport_jetty)
+```
+
+**Per-run invocation count**: JinDou's round-5 trace observed **~8
+call sites** of `ubcore_get_main_primary_eid` per perftest run,
+which means ~8 `ubmad_post_send` invocations (some CM-send wrappers
+fire multiple sub-messages). Distribution:
+
+- 1 from stage 5f (single segment import)
+- 2–3 from stage 5g 1st `ubcore_import_jetty` (bonding udata exchange)
+- 2–3 from stage 5g 2nd `ubcore_import_jetty` (TP info exchange)
+- 1–2 from stage 8c (unimport)
+
+**Total per-run CPU cost** (warm, 22 active fabric nodes): ~8 × 4.9 ms
+= ~39 ms of CPU work, distributed across the named stages.
+
+**Implication**: when you see `ubmad_post_send` (or its CM-send
+wrappers like `send_jetty_info_req`) take milliseconds in a trace,
+that's NOT "the moment the packet went out." It's "~4.9 ms of CPU
+scan, then a tiny send." Pre-round-5 we kept misreading the parents
+of this function as "network-RTT-dominated"; round 5 showed the cost
+is entirely CPU.
+
+#### B. `ubcore_get_tp_list` — the compat-path TP discovery
+
+**File:line**: `ubcore_tp.c:26`.
+
+**What it is**: one of the 5 sequential sub-phases inside
+`ubcore_import_jetty_compat` (the path udma takes because of its
+`_ex`-only ops registration). Calls `dev->ops->get_tp_list` =
+`udma_get_tp_list`, which goes through firmware ctrlq
+(`udma_ctrlq_get_tpid_list`) to query the local hardware for its
+available TPs.
+
+**Where it sits in stage 5g**:
+
+```
+stage 5g  ubcore_import_jetty (compat path)
+            └─ ubcore_import_jetty_compat
+                 ├─ ★ ubcore_get_tp_list ★      ← sub-phase 1 (this function)
+                 │     └─ udma_get_tp_list
+                 │           └─ udma_ctrlq_get_tpid_list  (ctrlq → firmware)
+                 ├─ ubcore_exchange_tp_info       sub-phase 2 (RM+RTP only)
+                 ├─ ubcore_import_jetty_ex        sub-phase 3
+                 │     └─ ubcore_connect_vtp_ctrlplane  sub-phase 4
+                 │           └─ ubcore_active_tp        sub-phase 5
+```
+
+**Self-instruments**: at `ubcore_tp.c:48`, logs
+`"[DRV_INFO]get_tp_list consumes: %llu"` when duration >
+`UBCORE_DRV_TP_THRESHOLD_MS` (1 ms). Gated by the
+`g_ubcore_log_level` module param (see §10.4).
+
+**Two distinct trace contexts you'll see it in**:
+
+| Context | Task | What it is | Typical duration |
+|---|---|---|---|
+| Synchronous on caller | `urma_pe-*` (e.g., CPU 46 in JinDou's trace) | Inside the local caller's stage 5g compat path | 151 µs (round 3) |
+| Concurrent in kworker | `kworker-*` (e.g., CPU 64) | The local kernel responding to a CM message from the peer — peer is doing its own import and queries our TP info | 200 µs (round 3) |
+
+So when you see two `ubcore_get_tp_list` entries in a trace, **only
+the `urma_pe-*` one belongs to your own local urma_perftest's stage
+5g**. The `kworker-*` one is the local side of the peer's stage 5g
+— it's outside your own perftest's call chain.
+
+Awk filter for local-only:
+
+```bash
+awk -F'|' '/ubcore_get_tp_list/ && /urma_pe/ {
+    if (match($0, /([0-9.]+) us/, m)) print m[1]
+}' /sys/kernel/debug/tracing/trace
+```
+
+**Implication**: `ubcore_get_tp_list` is **not** the headline cost
+despite the name suggesting it might be. Its hardware-query
+(~150–200 µs via ctrlq) is fast. The 5 ms-scale cost during link
+setup is in `ubmad_post_send`'s topo scan (§10.22.A), inside the CM
+siblings of `get_tp_list`, not inside `get_tp_list` itself.
+
+#### C. `ubcore_session_wait` — the CM reply wait
+
+**File:line**: `ubcore_connect_bonding.c:567` (in
+`ubcore_connect_exchange_udata_when_import_jetty`).
+
+**What it is**: `wait_for_completion` on the response to a
+`send_jetty_info_req`. Fires only on the bonding path (1st
+`ubcore_import_jetty` for a bonded device). Blocks the caller until
+the peer's response MAD arrives back via the local CM workqueue.
+
+**Where it sits**:
+
+```
+stage 5g  1st ubcore_import_jetty (bonding aggregate path)
+            └─ ubcore_connect_exchange_udata_when_import_jetty   bonding.c:497
+                 ├─ create_session_for_exchange_udata
+                 ├─ send_jetty_info_req                          ← fires ubmad_post_send
+                 ├─ ★ ubcore_session_wait ★                      ← blocks here for peer reply
+                 └─ copy_to_user
+```
+
+**Self-instruments**: when duration > `UBCORE_EXC_THRESHOLD_MS`, logs
+`"[EXC_INFO]exchange_jetty_info consumes: %llu"`.
+
+**Cold vs warm behavior**: highly variable. JinDou's round-1 trace
+showed `ubcore_session_wait` = 6012 µs (cold); round-3 trace, same
+test minutes later, showed 452 µs (warm). The first-time-to-a-peer
+case includes the peer's full setup work; subsequent reconnects skip
+most of it. See §10.18.F for the cold-vs-warm discrepancy and the
+unran modprobe protocol.
+
+This is one of the very few **actual waits on the peer** in the link
+setup path — most "wait-looking" rows are actually CPU loops
+(`ubmad_post_send` → topo scan).
+
+#### D. `udma_ctrlq_*` family — firmware ctrlq commands
+
+**Files**: `hw/udma/udma_ctrlq_tp.c`, with `ubase_ctrlq_send_msg` as
+the leaf at `drivers/ub/ubase/ubase_ctrlq.c:926`.
+
+**What it is**: the family of "send a command to the SoC firmware
+via the control queue" functions. Each takes one MMIO write +
+doorbell + `wait_for_completion_timeout` for the firmware ack via
+CRQ interrupt.
+
+**Functions in the family** (most often seen):
+
+| Function | What it asks firmware |
+|---|---|
+| `udma_ctrlq_get_tpid_list` | enumerate local TPs |
+| `udma_ctrlq_set_active_tp_ex` | activate a TP (program local HW context) |
+| `udma_k_ctrlq_deactive_tp` | deactivate a TP (HW teardown) |
+| `udma_notify_mue_save_tp` | tell firmware to persist TP state |
+
+**Where each sits**:
+
+```
+stage 5g sub-phase 1: ubcore_get_tp_list
+                        └─ udma_get_tp_list
+                              └─ ★ udma_ctrlq_get_tpid_list ★      (this function)
+                                    └─ ubase_ctrlq_send_msg → wait_for_completion_timeout
+stage 5g sub-phase 5: ubcore_active_tp
+                        └─ udma_active_tp
+                              └─ udma_ctrlq_set_active_tp_ex
+                                    └─ udma_k_ctrlq_create_active_tp_msg
+                                          └─ ubase_ctrlq_send_msg → wait_for_completion_timeout
+stage 8 unimport:   urma_unimport_jetty / urma_unimport_jfr
+                        └─ ... → udma_k_ctrlq_deactive_tp
+```
+
+**Typical duration**: 150–250 µs per call, regardless of which one.
+Hardware-bounded; the firmware is local and fast. Runs in either:
+
+- **Userspace caller's context** when called from `ubcore_get_tp_list`'s
+  synchronous path (in stage 5g 2nd import)
+- **kworker context** when fired by the local kernel's CM handler in
+  response to the peer's import. JinDou's round-3 trace showed
+  `udma_ctrlq_get_tpid_list` = 193 µs and `udma_ctrlq_set_active_tp_ex`
+  = 190 µs both **in a CPU-64 kworker, concurrent with the userspace
+  `ubcore_session_wait`**
+
+**Implication**: udma ctrlq operations are **fast** and **off the
+critical path** (kworker runs in parallel with the userspace wait).
+This is why the codex `udma-tp-cache` patch — even if it perfectly
+caches every ctrlq result — saves at most ~600 µs out of a multi-ms
+first-RPC. The udma layer is not where the time goes.
+
+#### E. `ubcore_active_tp` — firmware install
+
+**File:line**: `ubcore_vtp.c:1129`.
+
+**What it is**: stage 5g sub-phase 5. Calls `dev->ops->active_tp` =
+`udma_active_tp`, which programs the hardware TP context via ctrlq.
+
+**Body**:
+
+```c
+/* ubcore_vtp.c:1129 */
+static int ubcore_active_tp(...) {
+    uint64_t start, duration;
+    start = ktime_get_ns();
+    ret = dev->ops->active_tp(dev, active_tp_cfg);    /* udma_active_tp */
+    duration = (ktime_get_ns() - start) / UBCORE_NS_TO_MS;
+    ...
+    if (duration > UBCORE_DRV_TP_THRESHOLD_MS)
+        ubcore_log_info_rl("[DRV_INFO]active_tp init consumes: %llu", duration);
+    return ret;
+}
+```
+
+**Self-instruments**. Same log-level gate caveat as `get_tp_list`.
+
+**Typical duration**: ~190–250 µs in JinDou's trace. Fast.
+
+**Common misconception**: pre-§10.18 we kept calling this "the
+firmware install bottleneck." It is not. It's ~200 µs, and it runs
+in a kworker concurrent with userspace, so it doesn't add to the
+critical path. The §10.5 / §10.6 framing of "host CPU sleeps in
+ubase_ctrlq_wait_completed while firmware does the slow thing" was
+wrong on two counts: (a) the firmware is fast, (b) the host CPU isn't
+sleeping waiting for it (the userspace caller is busy in
+`ubmad_post_send`'s topo scan instead).
+
+#### F. Function → stage → parent → cost summary table
+
+Quick-lookup table for any commonly-traced kernel function:
+
+| Function | Stage(s) | Direct parent | Critical-path? | Typical cost | Hot spot inside? |
+|---|---|---|---|---|---|
+| `ubmad_post_send` | 5f, 5g (×2 paths), 8c | `ubmad_ubc_send` (called from each CM-send wrapper) | YES — always synchronous | **~4.9 ms (90%+ topo scan)** | `ubcore_get_main_primary_eid` at line 817 |
+| `ubcore_get_main_primary_eid` | inside every `ubmad_post_send` | `ubmad_post_send` line 817 | YES | ~4.9 ms | `ubcore_get_primary_eid` → ~117k `is_eid_match` calls |
+| `ubcore_get_tp_list` | 5g sub-phase 1 (synchronous) + kworker mirror | `ubcore_import_jetty_compat` (sync) / CM workqueue (kworker) | sync: yes, kworker: no | 150–200 µs | `udma_ctrlq_get_tpid_list` (firmware ctrlq, fast) |
+| `ubcore_exchange_tp_info` | 5g sub-phase 2 | `ubcore_import_jetty_compat` | YES | ~5.5 ms (90% topo scan inside child `ubmad_post_send`) | `ubmad_post_send` |
+| `ubcore_session_wait` | 5g 1st import (bonding path) | `ubcore_connect_exchange_udata_when_import_jetty` | YES | 0.45–6.01 ms (warm/cold) | `wait_for_completion` on peer MAD reply |
+| `send_jetty_info_req` | 5g 1st import | `ubcore_connect_exchange_udata_when_import_jetty` | YES | ~4.8 ms (90% topo scan inside child `ubmad_post_send`) | `ubmad_post_send` |
+| `ubcore_active_tp` | 5g sub-phase 5 | `ubcore_connect_vtp_ctrlplane` | mostly NO (runs in kworker, concurrent w/ userspace wait) | ~190 µs | `udma_active_tp` → ctrlq (fast) |
+| `udma_ctrlq_get_tpid_list` | 5g sub-phase 1 (kernel inside) | `udma_get_tp_list` | yes-in-its-own-context | ~190 µs | firmware ctrlq cmd + completion |
+| `udma_ctrlq_set_active_tp_ex` | 5g sub-phase 5 (kernel inside) | `udma_active_tp` | no (kworker, off critical path) | ~190 µs | firmware ctrlq cmd + completion |
+| `ubase_ctrlq_wait_completed` | wherever a ctrlq cmd fires | `__ubase_ctrlq_send` | depends on caller | µs–ms | `wait_for_completion_timeout`; ack from firmware via CRQ ISR |
+
+#### G. How to use this section when reading a trace
+
+1. Spot the longest exit lines (highest-numbered durations).
+2. Look the function up in §10.22.F to find its **direct parent** and
+   **stage location**.
+3. Check **"hot spot inside?"** column — if the cost is in a child,
+   re-grep the trace for that child to confirm.
+4. Cross-reference with **§10.21.E** to see whether the duration is
+   consistent with the expected wall-clock for that stage.
+
+Example: trace shows `ubcore_exchange_tp_info` = 5.49 ms. From §10.22.F:
+"hot spot inside? → `ubmad_post_send`". Grep the trace for
+`ubmad_post_send` exits — should see one with ~4.9 ms duration whose
+parent is `ubcore_exchange_tp_info`. That confirms the topo-scan
+attribution rather than misreading the 5.49 ms as "network RTT."
+
 ## 11. TRACE_EVENT internals — how the macro actually works
 
 ### 11.1 Where `TRACE_EVENT` is defined
