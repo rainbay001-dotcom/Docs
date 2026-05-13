@@ -3888,6 +3888,109 @@ atomic-arrival WRITE, and (4) optional split SQ/RQ as separate
 objects. The losses are MW, XRC, UC, and most of the IB ecosystem of
 Ethernet-bridging features.
 
+### 10.25 Source-verified: the topo-scan path is lock-free — what JinDou's 100-process data must mean
+
+After §10.20.G's framing landed (linear-growth ⇒ serialization, parallel-growth ⇒ per-CPU work), JinDou ran the 100-process scale test on UMDK#2. The data — `import_jetty #1` 5.3 → 108.7 ms (**20.5×**), `import_jetty #2` 6.1 → 554 ms (**91×**) — shows obvious linear-to-superlinear growth, which §10.20.G said implies serialization. The thread's bot then hypothesized the serialization was a global topo-table rwlock degrading under contention. **That hypothesis is impossible by source.** This section pins down what can and cannot be the actual mechanism.
+
+#### A. The lock hypothesis as posted
+
+The bot wrote (issue #2, 2026-05-12 comment):
+
+> 若该函数持有全局读锁（或 rwlock 在高并发时退化为互斥），100 个进程序列化执行时：
+> - 第 k 个进程等待时间 ≈ k × 4.9ms
+> - 平均等待 ≈ 50 × 4.9ms = 245ms（与实测 108ms/554ms 数量级吻合）
+
+The arithmetic is correct *if* there is a contended global lock. The premise is wrong.
+
+#### B. Source check: zero locks in the scan path
+
+The dominant cost in §10.19 is `ubcore_get_main_primary_eid` (called 8× per `import_jetty`, ~4.9 ms each). Its entire call chain is:
+
+```
+ubmad_post_send                       drivers/ub/urma/ubcore/ubcm/ubmad_datapath.c:817
+  └─> ubcore_get_main_primary_eid     drivers/ub/urma/ubcore/ubcore_topo_info.c:452
+        ├─> ubcore_get_primary_eid                                              :353
+        ├─> ubcore_get_primary_eid_array                                        :388
+        │     └─> find_primary_eid_in_ues                                       :306
+        │           └─> is_eid_match × N                                        :116
+        └─> ubcore_get_min_eid                                                  :432
+```
+
+Locks in this chain — verified with `grep -nE 'spin_lock|mutex_lock|read_lock|write_lock|rcu_read|down_read|down_write|topo_lock|topo_mutex|topo_rwlock|topo_sem'`:
+
+| File | Hits in scan path |
+| --- | --- |
+| `drivers/ub/urma/ubcore/ubcore_topo_info.c` (1196 lines) | **0** |
+| `drivers/ub/urma/ubcore/ubcm/ubmad_datapath.c` around `:817` | the only lock is `spin_lock_irqsave(&rsrc->tjetty_hlist_lock, flag)` at `:825` — **after** the scan, held only across a brief hash-list lookup, then released at `:827` |
+
+`g_ubcore_topo_map` is a plain `static struct ubcore_topo_map *` at `ubcore_topo_info.c:21`, accessed without synchronization at lines 27, 29, 34, 36, 37, 42, 359, 365, 396, 401, 487, 603, 834, 1142. There is no rwlock, no rcu, no mutex protecting it. The structure is assumed effectively read-only after init.
+
+**Therefore the bot's "rwlock degrades to mutex" mechanism cannot exist.** Whatever serializes the 100-process workload, it is not lock contention on the topo scan.
+
+#### C. What can and cannot explain the 91× slowdown
+
+Given (B), candidate mechanisms for the observed linear-to-superlinear scaling:
+
+| Mechanism | Plausible at 91×? | Why |
+| --- | --- | --- |
+| Topo-table rwlock | **No** | does not exist (B) |
+| CPU saturation (100 procs, ≤96 cores) | **No** | best case ~2× from runqueue contention |
+| Memory-bandwidth contention on read-mostly globals | **No** | observed 2-3× ceiling on cache-thrashing workloads at this size, not 20-91× |
+| `ubcore_session_wait` server-side queue (Effect B in bot's post) | **Yes** | single peer kernel processes incoming MAD on one workqueue; 100 concurrent clients → response time grows linearly with queue depth |
+| Thundering-herd alignment between phases | **Yes** | the 108→554 ms doubling between `import_jetty #1` and `#2` is the textbook signature: all 100 clients exit the first serialization point at the same instant and pile into the second tighter than they entered the first |
+| Per-NIC or per-tjetty-hlist spinlock at `ubmad_datapath.c:825` | **Marginal** | held only across hash lookup, ~microseconds; would need >1000× growth to dominate |
+
+A strong reading of JinDou's data is therefore: **the 39 ms of CPU scan inside each `import_jetty` is roughly invariant under concurrency** (since it's lock-free and runs on different CPUs in parallel), **but the server-side response wait inside `ubcore_session_wait` grows linearly with concurrent-client count**, and **`import_jetty #2`'s 91× vs #1's 20× is the thundering-herd alignment**, not deeper contention.
+
+This makes a sharp prediction: in a depth-3 ftrace of one observed process within the 100-process run, `ubcore_get_main_primary_eid` should still measure ~4.9 ms per call (unchanged), but `ubcore_session_wait` should measure roughly 100× longer than it did in the single-process baseline (~0.45 ms → ~45 ms or more). If the depth-3 retrace shows `ubcore_get_main_primary_eid` itself dilated, then (B) is somehow being bypassed and the mechanism is more interesting; otherwise the hypothesis stands.
+
+#### D. The codex `udma-tp-cache` patch is orthogonal to the dominant cost
+
+Branch `codex/udma-tp-cache` on `atomgit.com/ray-yang0218/kernel` (5 commits on top of OLK-6.6, 1304 lines added) places its entire cache + warmup machinery under `drivers/ub/urma/hw/udma/`:
+
+```
+drivers/ub/urma/hw/udma/Makefile         +  1
+drivers/ub/urma/hw/udma/udma_ctrlq_tp.c  +118 / -65   (TP-list fetch path)
+drivers/ub/urma/hw/udma/udma_ctrlq_tp.h  + 12
+drivers/ub/urma/hw/udma/udma_ctx.c       +  6
+drivers/ub/urma/hw/udma/udma_ctx.h       +  1
+drivers/ub/urma/hw/udma/udma_dev.h       +  3
+drivers/ub/urma/hw/udma/udma_main.c      +  9
+drivers/ub/urma/hw/udma/udma_tp_cache.c  +1185         (new cache + warmup)
+drivers/ub/urma/hw/udma/udma_tp_cache.h  + 33
+```
+
+`git diff OLK-6.6..codex/udma-tp-cache | grep -iE 'topo|primary_eid|ubmad_post_send|get_main_primary'` returns **zero hits**. The patch:
+
+- Caches the result of `udma_get_tp_list` (one phase out of the 5-phase compat path, the one that goes through `ubase_ctrlq_send_msg` to local firmware, not through MAD-send to peer).
+- Adds an optional warmup mechanism that pre-populates the cache for declared peer-EID pairs at module init.
+- Does **not** touch `ubcore_topo_info.c`, does **not** touch `ubcm/ubmad_datapath.c`, does **not** touch the scan inside `ubcore_get_main_primary_eid`.
+
+The 8 × 4.9 ms = 39 ms CPU scan happens inside `ubmad_post_send`, which is called from the **other** phases of the compat path (`exchange_tp_info`, `connect_vtp_ctrlplane`, etc) — the phases that the patch leaves untouched. So the patch can hide one stage's firmware-ctrlq roundtrip but cannot hide any of the MAD-send scans. Under JinDou's 100-process workload — where the bottleneck is server-side serialization in `ubcore_session_wait` (a peer-MAD-wait, not a local-firmware-wait) — the patch should show essentially no improvement at all.
+
+This does not mean the patch is wrong; it means it is solving a *different* problem (firmware-ctrlq-roundtrip on warm-cache repeated imports) than the one the 100-process test is exposing.
+
+#### E. Refined experiment plan, post-lock-out
+
+The bot's two-step proposal in the 2026-05-12 comment is largely still valid — but step 1 (the depth-3 trace) can now be sharpened with the lock-out:
+
+**Step 1 (refined).** Add `ubcore_get_main_primary_eid` and `ubcore_session_wait` to `set_graph_function` with `max_graph_depth=3`, run the 100-process workload, observe one process. **Expected:** `ubcore_get_main_primary_eid` ≈ 4.9 ms (unchanged from the single-process baseline of §10.19), `ubcore_session_wait` ≈ 50–500 ms (scaled from the single-process ~0.45 ms warm baseline). **If** `ubcore_get_main_primary_eid` is itself dilated to >10 ms per call, the lock-out is wrong somewhere and (B) needs revisiting.
+
+**Step 2 (unchanged).** N = 1, 5, 10, 20, 50, 100 scaling curve for `import_jetty` total. If linear in N, single-queue server serialization. If sub-linear (e.g., N^0.5), batched server processing. If super-linear (N^1.5+ or N²), some additional cumulative-state pathology on the server side.
+
+**New step 3.** **Server-side ftrace.** Run the 100-process workload again, but this time the observed process is on the **server** (the side that receives `send_jetty_info_req` MADs). Filter on `ubmad_recv_work_handler`, `ubmad_process_msg`, `ubmad_process_conn_resp`, `ubmad_cm_process_msg`, `ubcm_recv_handler`. The single-workqueue hypothesis predicts these will all serialize on one CPU and show queue-depth-proportional wait between consecutive entries. If they're spread across CPUs, the bottleneck is elsewhere (most likely a single-threaded firmware request handler one layer deeper).
+
+**Optional step 4.** **Disconfirm by staggering.** Wrap `urma_perftest` in a script that introduces 0–50 ms uniform-random startup delay across the 100 processes (no barrier file). If the 91× drops to 5–10×, the thundering-herd reading is confirmed and the fix path is rate-limiting on the client side (or per-NIC backpressure on the server side). If the slowdown is unchanged, server-side single-queue is the actual constraint and the fix must be on the server.
+
+#### F. What this means for the codex patch's evaluation
+
+JinDou's 100-process run is **not** the right workload to evaluate `codex/udma-tp-cache`. The patch's design target is the warm-cache repeated-import case (reusing TP-list across many imports for the same `<pid, eid_index, trans_mode>` tuple). To evaluate it fairly, run two patterns and compare with/without the patch:
+
+1. **Sequential repeated imports** (single process, 10× `urma_import_jetty` + `urma_unimport_jetty` of the same remote): patch should reduce per-import time by exactly the `udma_get_tp_list` ctrlq roundtrip — typically 100s of µs to a few ms. Won't help at the 100×-concurrent scale.
+2. **Sequential repeated send_lat runs** (script that runs `send_lat -n 1` 100 times back-to-back): a tighter version of #1; should show similar small-millisecond savings on the second-and-later runs.
+
+Both will likely show ~5-30% reduction. **Neither will compress the 108→554 ms thundering-herd cost** because the patch does not reduce `ubmad_post_send`'s scan and does not reduce server-side serialization.
+
 ## 11. TRACE_EVENT internals — how the macro actually works
 
 ### 11.1 Where `TRACE_EVENT` is defined
