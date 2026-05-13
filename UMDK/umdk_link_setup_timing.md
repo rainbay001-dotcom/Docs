@@ -3991,6 +3991,134 @@ JinDou's 100-process run is **not** the right workload to evaluate `codex/udma-t
 
 Both will likely show ~5-30% reduction. **Neither will compress the 108→554 ms thundering-herd cost** because the patch does not reduce `ubmad_post_send`'s scan and does not reduce server-side serialization.
 
+### 10.26 Server-side ftrace results — kworker concurrency and firmware ctrlq dilation (2026-05-13)
+
+JinDou ran the corrected server-side ftrace described in §10.25.E (no PID filter, traces `ubcore_get_tp_list` and `ubcore_active_tp` on `master` while 100 concurrent `urma_perftest send_lat --single_path` processes run on `worker1`). Results overturn one of §10.25's two predictions and flip the codex-patch verdict back to "relevant" on the server side. The other prediction (client-side thundering-herd alignment) is consistent with the data so far but needs additional traces to confirm.
+
+#### A. Trace data summary
+
+Total kworker lines: 1010 over ~55 s wall-clock. The trace fragments JinDou shared show three patterns worth distinguishing:
+
+**Pattern 1 — back-to-back fast pairs on one kworker (start of trace):**
+
+```
+100545.916038  74) kworker-3438559   ubcore_get_tp_list {
+100545.916040  74) kworker-3438559   ! 159.200 us  udma_get_tp_list
+100545.916241  73) kworker-3438559   ! 202.800 us  } /* ubcore_get_tp_list */
+100545.916241  73) kworker-3438559   ubcore_active_tp {
+100545.916408  73) kworker-3438559   ! 166.730 us  }
+```
+
+`ubcore_get_tp_list` = 202.8 μs (firmware path 159.2 μs); `ubcore_active_tp` = 166.7 μs.
+
+**Pattern 2 — long inter-pair gap (884 ms between successive get_tp_list pairs on the same kworker):**
+
+```
+100545.916240  ...  ubcore_get_tp_list ends
+100546.800800  ...  next ubcore_get_tp_list starts          (+884.6 ms)
+```
+
+**Pattern 3 — mid-test outlier where `udma_get_tp_list` dilates 50×:**
+
+```
+100565.397581  65) kworker-3462916   ubcore_get_tp_list {
+100565.407914  65) kworker-3462916   * 10333.99 us  } /* ubcore_get_tp_list */
+                                     ^^^^^^^^^^^^^^^ ten thousand microseconds = 10.3 ms
+100565.418319  65) kworker-3462916   ubcore_get_tp_list { (~10 ms later)
+100565.418446  65) kworker-3462916   ! 127.120 us  }
+100565.428599  65) kworker-3462916   ubcore_get_tp_list { (~10 ms later again)
+100565.428739  65) kworker-3462916   ! 140.230 us  }
+```
+
+One call ballooned to 10.3 ms while neighboring calls on the same kworker stayed at ~125-140 μs.
+
+**Inter-call delta distribution (20 samples, JinDou's `awk` pipe):**
+
+```
+0.203 ms, 884.559 ms, 72.317 ms, 95.653 ms, 125.295 ms, 52.964 ms,
+160.916 ms, 345.108 ms, 108.837 ms, 782.609 ms, 2835.875 ms,
+9223.094 ms, 205.015 ms, 143.360 ms, 615.130 ms, 553.740 ms,
+2424.006 ms, 184.719 ms, 82.212 ms, 585.930 ms
+```
+
+These alternate between intra-call durations and inter-call (exit→next-entry) gaps. Most are in the 50-600 ms range; outliers reach 9.2 s.
+
+#### B. Three findings
+
+**B1. kworker IS multi-threaded — single-workqueue hypothesis ruled out.**
+
+Distinct kworker PIDs active on different CPUs during the trace: `kworker-3438559` (CPUs 73, 74), `kworker-3319643` (CPU 73), `kworker-3462916` (CPU 65). Context-switch lines like `74) kworker-3438559 => kworker-3462916` confirm multi-CPU activity. §10.25's effect B framing — "server-side single workqueue serializes" — is **dead at the workqueue layer**. Whatever serializes the server's response throughput, it is not the kworker dispatch.
+
+**B2. `udma_get_tp_list` shows >50× duration variance — firmware ctrlq tail latency.**
+
+| Sample | `udma_get_tp_list` duration |
+| --- | --- |
+| Start (`100545.91`, kworker-3438559) | 159 μs |
+| Mid (`100546.80`, kworker-3438559) | 147 μs |
+| **Mid (`100565.39`, kworker-3462916)** | **10,331 μs (10.3 ms)** |
+| Mid (`100565.41`, kworker-3462916) | 125 μs |
+| Mid (`100565.42`, kworker-3462916) | 139 μs |
+
+One call dilated 50× while neighbors on the same CPU stayed fast. `udma_get_tp_list` is the firmware command queue path (`udma_ctrlq_*`), and this tail-latency pattern is consistent with intermittent ctrlq backpressure (depth-1 contention, hardware interlock during TP programming, or DMA bus contention). Without a histogram across the full trace, we cannot tell if this is a 1-in-200 outlier or affects 10-50% of calls.
+
+**B3. Inter-call gaps point to client cadence dominating, not server queueing.**
+
+If server-side queueing were the bottleneck, we would see uniform short gaps (~200 μs intra-call + a few μs inter-call) clustered together as the queue drains. Instead we see gaps spanning four orders of magnitude (200 μs → 9.2 s). The 9.2 s gap especially cannot be explained by ctrlq dilation (single calls stay <11 ms). The most plausible reading: 100 client processes are staggered by bash's `&` spawn cadence (3-5 s spread) and each individual client is slow between consecutive MAD rounds because of the 39 ms client-side CPU scan in `ubcore_get_main_primary_eid`. The server sits mostly idle, waking up briefly to process each request.
+
+This would mean the 108→554 ms `import_jetty` cost is dominated by **client-side** topo-scan CPU contention (100 processes × 39 ms × N MAD rounds / available CPUs), not server-side queueing. The 5× ratio between #1 and #2 is alignment compression as predicted in §10.25.C — phase-1 staggers naturally and phase-2 clients arrive aligned within a few ms.
+
+#### C. Codex `udma-tp-cache` patch verdict — flipped for the server side
+
+§10.25.D ruled the patch irrelevant because the **client-side** hot spot (39 ms in `ubcore_get_main_primary_eid`, file `ubcore_topo_info.c`) lives in `drivers/ub/urma/ubcore/`, while the patch caches in `drivers/ub/urma/hw/udma/`. That logic is still correct for the client.
+
+But finding B2 changes the picture on the server: `udma_get_tp_list` is *exactly* what the patch caches, and its 10 ms tail is real. The patch should compress that tail to a few μs (cache hit) for any imports targeting the same `<peer EID, trans_mode>` tuple as a prior import.
+
+| Side | Bottleneck | Codex patch |
+| --- | --- | --- |
+| Client (worker1, initiator) | 39 ms CPU scan in `ubcore_get_main_primary_eid` | Irrelevant |
+| Server (master, kworker responder) | Intermittent 10 ms tail in `udma_get_tp_list` | **Directly applicable** |
+
+For a fair codex-patch benchmark, apply it to **master only** (the server). Expected impact on the 100-process workload:
+
+- Per-call `udma_get_tp_list` tail (the 10 ms case) → drops to ~10 μs cache hit
+- Per-process `import_jetty` server-wait component drops by however much of it came from ctrlq dilation
+- Client-side `import_jetty #1/#2` wall-clock drops by that same amount, but **the #2/#1 ratio (~5×) should persist** because thundering-herd alignment is a client-side phenomenon unaffected by server-side caching
+
+If the patch eliminates the 10 ms outliers and yet the 554 ms `import_jetty #2` barely changes, that's strong evidence the client-side topo scan + alignment is the true bottleneck and finding B3 stands.
+
+#### D. Sharpened experiments (replaces §10.25.E steps 3-4 with newer ones)
+
+**Experiment 5 — `udma_get_tp_list` duration histogram.** Resolves how often the 10 ms tail hits.
+
+```bash
+grep "udma_get_tp_list" trace | grep -oE '[*!] +[0-9.]+ us' \
+  | awk '{x=$2+0;
+          if(x<1000) a++;
+          else if(x<5000) b++;
+          else if(x<10000) c++;
+          else d++}
+         END {print "<1ms:" a "  1-5ms:" b "  5-10ms:" c "  >10ms:" d}'
+```
+
+Predictions: if `>10ms` is ≤5 % of calls, dilation is a rare tail and codex patch wins are marginal. If 30 %+, ctrlq is a steady-state bottleneck and the patch is high-leverage.
+
+**Experiment 6 — add `ubmad_recv_work_handler` + `ubcm_recv_handler`.** Both are confirmed in `available_filter_functions`. Adding them to `set_graph_function` (keeping `max_graph_depth=2`) captures the timestamp each MAD arrives at the server vs when kworker dispatches it.
+
+If 100 MADs arrive in a tight burst (within ms) but kworker activity spreads over 55 s → server is queueing badly. If they trickle in over seconds → client cadence dominates (the B3 reading).
+
+**Experiment 7 — apply codex `udma-tp-cache` to master only and re-run.** Predicts:
+
+- `udma_get_tp_list` 10 ms tail vanishes (now ~10 μs cache-hit for warm tuple)
+- Client-side `import_jetty #1` drops by ~10 ms × (10ms-fraction-of-calls) per import
+- `import_jetty #2/#1` ratio (~5×) should persist (alignment, not cache)
+- If `#2/#1` ratio drops noticeably, that would falsify B3 and rehabilitate the server-side-queueing story
+
+#### E. What this leaves unsettled
+
+1. The "ghost" 9.2 s gap. Even client-cadence dominance shouldn't produce a 9.2 s wait between consecutive MAD events at the server. Either one specific client stalled for 9 s, or the trace buffer wrapped at that point. Experiment 6's `ubmad_recv_work_handler` timestamps will clarify.
+2. The 10.3 ms `udma_get_tp_list` outlier on `kworker-3462916` is the only one visible in the shared excerpt. Experiment 5's histogram is the cheap way to see how many more such outliers exist.
+3. We still don't have client-side wall-clock per import in this trace (worker1 ftrace was kept at depth-1 in earlier runs). A coordinated dual-side trace (server-side + client-side, global trace_clock for cross-comparison) is the next-level step if Experiments 5-7 don't close the question.
+
 ## 11. TRACE_EVENT internals — how the macro actually works
 
 ### 11.1 Where `TRACE_EVENT` is defined
