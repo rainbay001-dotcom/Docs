@@ -826,38 +826,205 @@ k_expanded = [
 <!-- SLIDE 13 — HOW IT MAPS TO HARDWARE                                   -->
 <!-- =================================================================== -->
 <div class="slide">
-  <div class="slide-title-bar"><h2>13. How it maps to A5 (351x) hardware — one VLOOP iter</h2></div>
+  <div class="slide-title-bar"><h2>13. How it maps to A5 (351x) hardware — VLOOP iter 0 and iter 1</h2></div>
 
-  <p>Each row of the M×N mask becomes one iteration of a 35-instruction
-  hardware loop body. The 5 Triton-level comparisons collapse into
-  4 <code>VCMP</code>s + 3 predicate combiners + 1 select:</p>
+  <p style="margin-top:0">The M=N=4 mask matrix becomes a <b>VLOOP of M=4 iters</b>,
+  one row per iter. Inside each iter the body runs <b>twice</b>:
+  <span style="background:#e3f2fd;padding:1px 5px">pass A</span> computes
+  block 0 (j=0..1), <span style="background:#e8f5e9;padding:1px 5px">pass B</span>
+  computes block 1 (j=2..3). Imagined VL = 2 lanes for illustration
+  (real A5 VL is wider). The 5 Triton-level comparisons collapse into
+  4 <code>VCMP</code>s + 3 predicate combiners + 1 <code>VSEL</code>.</p>
 
-  <pre class="code"><span class="com">; Pass A: compute one row of the bool-mask matrix (32 i32 lanes per VL)</span>
-VLDI V2,[S6],#0,#0,#0          <span class="com">; load k_offset pattern</span>
-VLDI V3,[S69],#16,#0,#1        <span class="com">; load q_offset[i] (broadcast)</span>
-VLDI V4,[S68],#1,#3,#1         <span class="com">; load q_attn[i] (broadcast)</span>
-VLDI V5,[S10],#0,#0,#0         <span class="com">; load k_attn vector</span>
-VLDAS ULD0,[S12]               <span class="com">; load q==k positional info</span>
-VADDS.s32 V2,V2,S8,P1          <span class="com">; k_offset += pid*BLOCK   (launcher's arange+stride)</span>
-VCMP.LE.s32 P5,V3,V2,P1        <span class="com">; P5 = (q_off[:,None] <= k_off[None,:])   ← triu_causal</span>
-VCMP.EQ.s32 P4,V4,V5,P1        <span class="com">; P4 = (q_attn[:,None] == k_attn[None,:]) ← group match</span>
+  <div class="col2" style="grid-template-columns: 1.05fr 0.95fr; gap:24px">
+    <div>
+      <h3 style="margin-top:0">Pass A body — 17 instructions</h3>
+      <pre class="code" style="font-size:12.5px; padding:12px 14px"><span class="com">; one K-block of the current row's bool-mask</span>
+VLDI V2,[S6],#0,#0,#0          <span class="com">; k_off pattern (full-VL)</span>
+VLDI V3,[S69],#16,#0,#1        <span class="com">; q_off[i] (full-VL,+512B/iter)</span>
+VLDI V4,[S68],#1,#3,#1         <span class="com">; q_attn[i] (brc_b32,+4B/iter)</span>
+VLDI V5,[S10],#0,#0,#0         <span class="com">; k_attn vector (block 0)</span>
+VLDAS ULD0,[S12]               <span class="com">; q==k positional info</span>
+VADDS.s32 V2,V2,S8,P1          <span class="com">; V2 += pid*BLOCK base</span>
+VCMP.LE.s32 P5,V3,V2,P1        <span class="com">; P5 = triu_causal</span>
+VCMP.EQ.s32 P4,V4,V5,P1        <span class="com">; P4 = group match</span>
 VLDUI V6,ULD0,[S70],#0
-MOVVP.b32 P3,V6,#0             <span class="com">; P3 = (k_attn == 0)                       ← wildcard</span>
-PXOR P3,P3,P2,P1               <span class="com">; (no-op for bool; sign-flip helper)</span>
-POR P3,P4,P3,P1                <span class="com">; P3 = (group match) | (wildcard)         ← inner OR</span>
-PAND P3,P5,P3,P1               <span class="com">; P3 = triu &amp; (above)                     ← AND</span>
-VCMP.EQ.s32 P4,V3,V2,P1        <span class="com">; P4 = (q_off == k_off)                    ← diagonal</span>
-POR P3,P3,P4,P1                <span class="com">; P3 = (...) | diag                        ← top-level OR</span>
-VSEL.b32 V2,V1,V0,P3           <span class="com">; V2 = where(P3, 1, 0)                     ← tl.where</span>
-VSTI V2,[S67],#16,#2,P1,#1     <span class="com">; store row back to UB (later MTE3 → GM)</span></pre>
+MOVVP.b32 P3,V6,#0             <span class="com">; P3 = (k_attn == 0) wildcard</span>
+PXOR P3,P3,P2,P1               <span class="com">; (no-op: P2 = all FALSE)</span>
+POR P3,P4,P3,P1                <span class="com">; P3 = group | wildcard</span>
+PAND P3,P5,P3,P1               <span class="com">; P3 = triu &amp; above</span>
+VCMP.EQ.s32 P4,V3,V2,P1        <span class="com">; P4 = diagonal</span>
+POR P3,P3,P4,P1                <span class="com">; P3 = ... | diag (final)</span>
+VSEL.b32 V2,V1,V0,P3           <span class="com">; tl.where(P3, 1, 0)</span>
+VSTI V2,[S67],#16,#2,P1,#1     <span class="com">; store row back to UB</span></pre>
+      <p style="font-size:13px; margin:6px 0 0">Pass B reruns this body
+      with different sources: <code>S10 → S16</code> for k_attn[2..3],
+      and the V2 base advances to k_off[2..3]. <b>q-side data (V3, V4,
+      ULD0) does NOT reload between passes</b> — same row, different
+      K-block.</p>
+    </div>
 
-  <div class="callout">
-    <b>One row = one VL.</b> With VL = 32 i32 lanes per RegTensor, an
-    N=32 mask row fits exactly. M iterations of this loop produce the
-    full M×N output. Predicate registers P3/P4/P5 carry the boolean
-    intermediates — they never touch a vreg until the final
-    <code>VSEL</code>. See <code>a5_aiv_vector_parallelism.html</code>
-    §5 for the dual-issue back-end details.
+    <div>
+      <h3 style="margin-top:0">Step 1 — block layout (mask matrix, empty)</h3>
+      <svg viewBox="0 0 540 200" width="100%" style="font-family:'SF Mono',Menlo,Consolas,monospace; font-size:11px;">
+        <text x="140" y="18" text-anchor="middle" fill="#0d47a1" font-weight="bold">pass A — block 0</text>
+        <text x="340" y="18" text-anchor="middle" fill="#1b5e20" font-weight="bold">pass B — block 1</text>
+        <text x="140" y="34" text-anchor="middle" fill="#666" font-size="10.5">k_attn[0..1]=[0,1] @ [S10]</text>
+        <text x="340" y="34" text-anchor="middle" fill="#666" font-size="10.5">k_attn[2..3]=[1,2] @ [S16]</text>
+
+        <text x="80" y="60" text-anchor="middle" font-size="10.5">j=0</text>
+        <text x="200" y="60" text-anchor="middle" font-size="10.5">j=1</text>
+        <text x="280" y="60" text-anchor="middle" font-size="10.5">j=2</text>
+        <text x="400" y="60" text-anchor="middle" font-size="10.5">j=3</text>
+
+        <g font-size="10.5" text-anchor="middle">
+          <text x="30" y="90" font-weight="bold">i=0</text>
+          <text x="30" y="120" font-weight="bold">i=1</text>
+          <text x="30" y="150" font-weight="bold">i=2</text>
+          <text x="30" y="180" font-weight="bold">i=3</text>
+
+          <text x="465" y="90" fill="#bf360c" text-anchor="start">q_attn[0]=1</text>
+          <text x="465" y="120" fill="#bf360c" text-anchor="start">q_attn[1]=1</text>
+          <text x="465" y="150" fill="#bf360c" text-anchor="start">q_attn[2]=2</text>
+          <text x="465" y="180" fill="#bf360c" text-anchor="start">q_attn[3]=2</text>
+
+          <!-- block 0 cells -->
+          <rect x="50" y="75" width="60" height="22" fill="#e3f2fd" stroke="#1565c0" stroke-width="0.5"/>
+          <rect x="50" y="105" width="60" height="22" fill="#e3f2fd" stroke="#1565c0" stroke-width="0.5"/>
+          <rect x="50" y="135" width="60" height="22" fill="#e3f2fd" stroke="#1565c0" stroke-width="0.5"/>
+          <rect x="50" y="165" width="60" height="22" fill="#e3f2fd" stroke="#1565c0" stroke-width="0.5"/>
+          <rect x="170" y="75" width="60" height="22" fill="#e3f2fd" stroke="#1565c0" stroke-width="0.5"/>
+          <rect x="170" y="105" width="60" height="22" fill="#e3f2fd" stroke="#1565c0" stroke-width="0.5"/>
+          <rect x="170" y="135" width="60" height="22" fill="#e3f2fd" stroke="#1565c0" stroke-width="0.5"/>
+          <rect x="170" y="165" width="60" height="22" fill="#e3f2fd" stroke="#1565c0" stroke-width="0.5"/>
+
+          <!-- block 1 cells -->
+          <rect x="250" y="75" width="60" height="22" fill="#e8f5e9" stroke="#2e7d32" stroke-width="0.5"/>
+          <rect x="250" y="105" width="60" height="22" fill="#e8f5e9" stroke="#2e7d32" stroke-width="0.5"/>
+          <rect x="250" y="135" width="60" height="22" fill="#e8f5e9" stroke="#2e7d32" stroke-width="0.5"/>
+          <rect x="250" y="165" width="60" height="22" fill="#e8f5e9" stroke="#2e7d32" stroke-width="0.5"/>
+          <rect x="370" y="75" width="60" height="22" fill="#e8f5e9" stroke="#2e7d32" stroke-width="0.5"/>
+          <rect x="370" y="105" width="60" height="22" fill="#e8f5e9" stroke="#2e7d32" stroke-width="0.5"/>
+          <rect x="370" y="135" width="60" height="22" fill="#e8f5e9" stroke="#2e7d32" stroke-width="0.5"/>
+          <rect x="370" y="165" width="60" height="22" fill="#e8f5e9" stroke="#2e7d32" stroke-width="0.5"/>
+        </g>
+
+        <line x1="240" y1="45" x2="240" y2="195" stroke="#999" stroke-width="2" stroke-dasharray="4,3"/>
+      </svg>
+      <p style="font-size:12.5px; margin:6px 0 0">Each VLOOP iter fills
+      one row: pass A fills the blue half (j=0..1), pass B fills the
+      green half (j=2..3). Predicate composition runs in P3/P4/P5 —
+      P-regs never touch a vreg until the final <code>VSEL</code>.</p>
+    </div>
+  </div>
+
+  <h3 style="margin-top:14px">Step 2 — VLOOP iter 0 fills row i=0 (q_attn[0]=1, q_off[0]=0)</h3>
+  <table style="font-size:12px; width:100%; border-collapse:collapse">
+    <tr style="background:#f5f5f5">
+      <th style="width:120px; text-align:left; padding:4px 8px">Phase</th>
+      <th style="text-align:left; padding:4px 8px">Loads / advances</th>
+      <th style="text-align:left; padding:4px 8px">Predicate trail</th>
+      <th style="width:130px; text-align:left; padding:4px 8px">Output cells</th>
+    </tr>
+    <tr>
+      <td style="padding:4px 8px"><b>iter 0 prelude</b></td>
+      <td style="padding:4px 8px">V3=[0,0], V4=[1,1], ULD0 ← q==k info; S68/S69/S12 advance</td>
+      <td style="padding:4px 8px">—</td>
+      <td style="padding:4px 8px">—</td>
+    </tr>
+    <tr style="background:#e3f2fd">
+      <td style="padding:4px 8px"><b>iter 0 ·pass A</b></td>
+      <td style="padding:4px 8px">V2=[0,1] (k_off[0..1]), V5=[0,1] (k_attn @ S10)</td>
+      <td style="padding:4px 8px; font-family:'SF Mono',monospace; font-size:11.5px">P5=[T,T] triu · P4=[F,T] grp · wild=[T,F] → P3=[T,T] · diag=[T,F] → P3=[T,T]</td>
+      <td style="padding:4px 8px">M[0, 0..1] = <span style="background:#c8e6c9; padding:1px 4px">T</span> <span style="background:#c8e6c9; padding:1px 4px">T</span></td>
+    </tr>
+    <tr style="background:#e8f5e9">
+      <td style="padding:4px 8px"><b>iter 0 ·pass B</b></td>
+      <td style="padding:4px 8px">V2=[2,3] (k_off[2..3] via VADDS), V5=[1,2] (k_attn @ S16); V3/V4 unchanged</td>
+      <td style="padding:4px 8px; font-family:'SF Mono',monospace; font-size:11.5px">P5=[T,T] · P4=[T,F] grp · wild=[F,F] → P3=[T,F] · diag=[F,F] → P3=[T,F]</td>
+      <td style="padding:4px 8px">M[0, 2..3] = <span style="background:#c8e6c9; padding:1px 4px">T</span> <span style="background:#ffcdd2; padding:1px 4px">F</span></td>
+    </tr>
+  </table>
+  <p style="margin:4px 0 0; font-size:13px"><b>Row 0 fully filled:</b>
+    <span style="background:#c8e6c9; padding:1px 8px; font-family:monospace">T</span>
+    <span style="background:#c8e6c9; padding:1px 8px; font-family:monospace">T</span>
+    <span style="background:#c8e6c9; padding:1px 8px; font-family:monospace">T</span>
+    <span style="background:#ffcdd2; padding:1px 8px; font-family:monospace">F</span>
+    — matches slide 11 / 12 row 0.</p>
+
+  <h3 style="margin-top:14px">Step 3 — VLOOP iter 1 fills row i=1 (q_attn[1]=1, q_off[1]=1)</h3>
+  <table style="font-size:12px; width:100%; border-collapse:collapse">
+    <tr style="background:#f5f5f5">
+      <th style="width:120px; text-align:left; padding:4px 8px">Phase</th>
+      <th style="text-align:left; padding:4px 8px">Loads / advances</th>
+      <th style="text-align:left; padding:4px 8px">Predicate trail</th>
+      <th style="width:130px; text-align:left; padding:4px 8px">Output cells</th>
+    </tr>
+    <tr>
+      <td style="padding:4px 8px"><b>iter 1 prelude</b></td>
+      <td style="padding:4px 8px">V3=[1,1], V4=[1,1] (★ q_attn[1]=1 same value as q_attn[0]); S68/S69/S12 advance</td>
+      <td style="padding:4px 8px">—</td>
+      <td style="padding:4px 8px">—</td>
+    </tr>
+    <tr style="background:#e3f2fd">
+      <td style="padding:4px 8px"><b>iter 1 ·pass A</b></td>
+      <td style="padding:4px 8px">V2=[0,1], V5=[0,1] (re-fetched @ [S10] — block-0 invariant across rows)</td>
+      <td style="padding:4px 8px; font-family:'SF Mono',monospace; font-size:11.5px">P5=[F,T] triu kills j=0 · P4=[F,T] grp · wild=[T,F] → P3=[F,T] · diag=[F,T] → P3=[F,T]</td>
+      <td style="padding:4px 8px">M[1, 0..1] = <span style="background:#ffcdd2; padding:1px 4px">F</span> <span style="background:#c8e6c9; padding:1px 4px">T</span></td>
+    </tr>
+    <tr style="background:#e8f5e9">
+      <td style="padding:4px 8px"><b>iter 1 ·pass B</b></td>
+      <td style="padding:4px 8px">V2=[2,3], V5=[1,2] (@ [S16]); V3/V4 unchanged</td>
+      <td style="padding:4px 8px; font-family:'SF Mono',monospace; font-size:11.5px">P5=[T,T] · P4=[T,F] grp · wild=[F,F] → P3=[T,F] · diag=[F,F] → P3=[T,F]</td>
+      <td style="padding:4px 8px">M[1, 2..3] = <span style="background:#c8e6c9; padding:1px 4px">T</span> <span style="background:#ffcdd2; padding:1px 4px">F</span></td>
+    </tr>
+  </table>
+  <p style="margin:4px 0 0; font-size:13px"><b>Row 1 fully filled:</b>
+    <span style="background:#ffcdd2; padding:1px 8px; font-family:monospace">F</span>
+    <span style="background:#c8e6c9; padding:1px 8px; font-family:monospace">T</span>
+    <span style="background:#c8e6c9; padding:1px 8px; font-family:monospace">T</span>
+    <span style="background:#ffcdd2; padding:1px 8px; font-family:monospace">F</span>
+    — matches slide 11 / 12 row 1.</p>
+
+  <div class="col2" style="margin-top:14px; grid-template-columns: 1fr 1.1fr; gap:24px">
+    <div>
+      <h3 style="margin-top:0">After all M=4 iters</h3>
+      <table class="matrix" style="font-size:13px; margin:0">
+        <tr><td class="hdr"></td><td class="hdr">j=0</td><td class="hdr">j=1</td><td class="hdr">j=2</td><td class="hdr">j=3</td></tr>
+        <tr><td class="hdr">i=0</td><td class="t">T</td><td class="t">T</td><td class="t">T</td><td class="f">F</td></tr>
+        <tr><td class="hdr">i=1</td><td class="f">F</td><td class="t">T</td><td class="t">T</td><td class="f">F</td></tr>
+        <tr><td class="hdr">i=2</td><td class="f">F</td><td class="f">F</td><td class="t">T</td><td class="t">T</td></tr>
+        <tr><td class="hdr">i=3</td><td class="f">F</td><td class="f">F</td><td class="f">F</td><td class="t">T</td></tr>
+      </table>
+      <p style="font-size:12.5px; margin:6px 0 0">Iters 2–3 follow the
+      same prelude / pass A / pass B template with V4 advancing to
+      <code>q_attn[2]=2</code> then <code>q_attn[3]=2</code>; the
+      composite mask is identical to slide 11 / 12, just decomposed
+      into M × 2 passes by the hardware loop.</p>
+    </div>
+    <div>
+      <h3 style="margin-top:0">Register-life cadence</h3>
+      <table style="font-size:12.5px; border-collapse:collapse; width:100%">
+        <tr style="background:#f5f5f5">
+          <th style="text-align:left; padding:3px 6px">Reg</th>
+          <th style="text-align:left; padding:3px 6px">Role</th>
+          <th style="text-align:left; padding:3px 6px">Advance cadence</th>
+        </tr>
+        <tr><td style="padding:3px 6px"><code>V2</code></td><td style="padding:3px 6px">k_off (per-block)</td><td style="padding:3px 6px">reloaded + VADDS base, <b>per pass</b></td></tr>
+        <tr><td style="padding:3px 6px"><code>V3</code></td><td style="padding:3px 6px">q_off[i] (replicated)</td><td style="padding:3px 6px">full-VL, post-incr <b>per iter</b></td></tr>
+        <tr><td style="padding:3px 6px"><code>V4</code></td><td style="padding:3px 6px">q_attn[i] broadcast</td><td style="padding:3px 6px">brc_b32, +4 B <b>per iter</b></td></tr>
+        <tr><td style="padding:3px 6px"><code>V5</code></td><td style="padding:3px 6px">k_attn (per-block)</td><td style="padding:3px 6px">reloaded [S10]→[S16] <b>per pass</b>, no per-iter advance</td></tr>
+        <tr><td style="padding:3px 6px"><code>ULD0</code></td><td style="padding:3px 6px">q==k positional</td><td style="padding:3px 6px">advances <b>per iter</b></td></tr>
+        <tr><td style="padding:3px 6px"><code>P3/P4/P5</code></td><td style="padding:3px 6px">predicate accumulators</td><td style="padding:3px 6px">live <b>only within one pass</b> — never spill to a vreg until <code>VSEL</code></td></tr>
+      </table>
+      <div class="callout" style="margin:10px 0 0; font-size:13px">
+        <b>Bool variant fast path.</b> All composition stays in P-regs,
+        no <code>i32 ↔ f16 ↔ i1</code> round-trips. The cast variant
+        (TYPE&ne;1) emits the same logic in i32 arithmetic, ~3× more
+        vector ops. See <code>a5_aiv_vector_parallelism.html</code> §5
+        for the dual-issue back-end.
+      </div>
+    </div>
   </div>
 
   <div class="slide-number">14 / 15</div>
