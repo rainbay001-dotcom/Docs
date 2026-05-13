@@ -4119,6 +4119,219 @@ If 100 MADs arrive in a tight burst (within ms) but kworker activity spreads ove
 2. The 10.3 ms `udma_get_tp_list` outlier on `kworker-3462916` is the only one visible in the shared excerpt. Experiment 5's histogram is the cheap way to see how many more such outliers exist.
 3. We still don't have client-side wall-clock per import in this trace (worker1 ftrace was kept at depth-1 in earlier runs). A coordinated dual-side trace (server-side + client-side, global trace_clock for cross-comparison) is the next-level step if Experiments 5-7 don't close the question.
 
+### 10.27 Synthesis after JinDou's statistical analysis — server excluded, `find_primary_eid_in_ues` is the leading suspect (2026-05-13)
+
+JinDou ran the five analyses requested in §10.26.D. The results corrected §10.26 finding B1 (kworker concurrency), strengthened B3 (client cadence), and reduced the predicted codex-patch impact significantly. This section synthesizes the final picture from today's session and lays out the two experiments that will close the bottleneck question.
+
+#### A. The corrected kworker picture — effectively single-threaded
+
+Five analyses across two trace runs (`trace_server_P100_round4_new.log` and `..._new2.log`).
+
+**Per-kworker call count:**
+
+| Run | Dominant kworker | Calls | Share | Other kworkers |
+| --- | --- | --- | --- | --- |
+| 1 | `kworker-3462916` | 93 / 100 | **93 %** | `3438559`: 7 |
+| 2 | `kworker-3462916` | 98 / 102 | **98 %** | `3478059`: 3, `3494642`: 1 |
+
+Same kworker PID across both runs → long-lived warm worker.
+
+**Active time windows:**
+
+```
+Run 1:
+  3438559:  100545.92 ── 100547.31 (1.4 s, 7 calls)
+                                  ↓ handoff
+  3462916:                  100547.65 ─────────── 100566.23 (18.6 s, 93 calls)
+
+Run 2:
+  3478059:  102005.73 ── 102006.59 (0.85 s, 3 calls)
+                                  ↓ handoff
+  3462916:                  102006.69 ─────────── 102026.71 (20.0 s, 98 calls)
+```
+
+Time windows **barely overlap** — this is sequential handoff, not parallel processing. So §10.26 finding B1 ("kworker IS multi-threaded → single-workqueue ruled out") is **correct at the source-code layer** (`WQ_UNBOUND | max_active=0` allows ≤512 concurrent works) but **wrong in practice** — only one worker actually runs.
+
+**Slow calls (>5 ms) per kworker:**
+
+| Run | Kworker | Fast (<5 ms) | Slow (>5 ms) | Slow share |
+| --- | --- | --- | --- | --- |
+| 1 | `3462916` | 138 | 9 | ~6 % |
+| 1 | `3438559` | 52 | 4 | ~7 % |
+| 2 | `3462916` | 147 | 3 | ~2 % |
+| 2 | `3478059` | 49 | 0 | 0 % |
+
+Slow calls are 2-7 % of total, not steady-state. The 50× variance noted in §10.26.B2 is a tail effect, not a typical case.
+
+**`get_tp_list : active_tp` ratio:** exactly **1.00** in both runs (200:200, 202:202). No fast-path skips active_tp.
+
+**Per-kworker internal inter-call gap (`ubcore_get_tp_list` entry-to-entry):**
+
+| Run | Kworker | n | median | p90 | max |
+| --- | --- | --- | --- | --- | --- |
+| 1 | `3462916` | 92 | **10.27 ms** | 143 ms | 9223 ms |
+| 2 | `3462916` | 97 | **10.25 ms** | 191 ms | 8456 ms |
+
+Median 10 ms across both runs is remarkably stable.
+
+#### B. Server utilization calculation rules out queueing
+
+Total real CPU work on dominant kworker = 200 events × ~400 μs (get_tp_list + active_tp) = **80 ms**.
+Active wall-clock span = 18-20 s.
+**Utilization = 80 / 18,500 ≈ 0.4 %.**
+
+99.6 % of the span the dominant kworker is idle. Server-side queueing **cannot** be the dominant wall-clock cost — there is no queue to drain because there is no sustained backlog.
+
+#### C. Thundering-herd alignment vs deeper queueing — diagnostic distinction
+
+Both mechanisms produce N-process slowdowns but with different signatures and different fixes.
+
+| Property | Thundering-herd alignment | Deeper queueing |
+| --- | --- | --- |
+| Mechanism | N actors finish a previous step nearly simultaneously, then all hit the next step at the same instant | Requests arrive at sustainable rate, bottleneck's service rate too slow → queue grows |
+| Resource utilization | Bursty: high peak, low average | Steady-state high (often near 100 %) |
+| Inter-arrival pattern | Many tight gaps + a few large idle gaps | Uniform short gaps |
+| Latency variance | High: most fast, some slow | Low: everyone waits similarly |
+| Scaling with N | Sublinear (often √N or log N) | Linear or worse |
+| Right fix | Break the alignment (stagger, jitter, randomized backoff) | Add capacity (more workers, faster service, batching) |
+
+Mapping to UMDK#2 100-process data:
+
+| Signal | Thundering-herd prediction | Deeper queueing prediction | Observed |
+| --- | --- | --- | --- |
+| Server kworker utilization | low | high | **0.5 %** ✓ thundering |
+| Inter-MAD-arrival gaps | bursty: many tight + few big | uniform short | **median 10 ms, max 9.2 s** ✓ thundering |
+| `import_jetty #2 / #1` ratio | alignment compression at phase boundary | similar slowdown on both | **5×** ✓ thundering |
+| Latency variance | high | low | **slow tail 2-7 %, rest fast** ✓ thundering |
+
+**Every signal matches thundering-herd; none matches deeper queueing.** §10.26 finding B3 (client cadence dominates) is the right read.
+
+#### D. Refined codex `udma-tp-cache` patch verdict
+
+Three updates today:
+
+| Stage | Verdict | Reasoning |
+| --- | --- | --- |
+| §10.25.D (earlier today) | Irrelevant | Patch in `hw/udma/`, client hot spot in `ubcore/` |
+| §10.26.C (first server data) | Relevant on server side | `udma_get_tp_list` is what the patch caches; 10 ms tail is real |
+| **§10.27 (now)** | **Relevant but small win** | Eliminates 2-7 % slow tail = ~30-90 ms saved out of 18-20 s = 0.2-0.5 % wall-clock improvement |
+
+The patch is technically applicable to the server side, but the impact on `import_jetty` wall-clock is bounded by how much time is actually spent in slow `udma_get_tp_list` calls — and that's <100 ms out of the 18-20 s span. Server-side investment has diminishing returns from here.
+
+#### E. The remaining suspect — client-side `find_primary_eid_in_ues`
+
+**The math without contention:**
+
+`ubcore_get_main_primary_eid` calls `find_primary_eid_in_ues` which loops through ~117 k EID entries with `is_eid_match`. Single-process baseline (§10.19): ~4.9 ms per `ubcore_get_main_primary_eid` invocation, called ~8× per setup = **~39 ms per `import_jetty`** (CPU bound, in `ubmad_post_send` at `ubcm/ubmad_datapath.c:817`).
+
+For 100 procs × ~4-8 MAD rounds per import = **150-300 ms per process for scans alone**, even with no contention. Already in the ballpark of the observed 108→554 ms.
+
+**Plus thundering-herd amplification:** all 100 procs hit each phase boundary aligned, so when they enter the next round they all run `ubcore_get_main_primary_eid` at the same instant → CPU contention amplifies the per-call cost further. The 5× ratio between `#1` (~108 ms) and `#2` (~554 ms) is the alignment compressing between phases.
+
+**This hasn't been directly measured.** The 4.9 ms baseline is single-process; the per-call cost under 100-process load is unknown. Tests A and B (below) measure it.
+
+#### F. Test A — direct measurement of `ubcore_get_main_primary_eid` under load
+
+**Setup (on worker1):**
+
+```bash
+cd /sys/kernel/debug/tracing
+echo nop > current_tracer
+echo > trace
+echo 0 > tracing_on
+echo global > trace_clock
+
+cat > set_graph_function << 'EOF'
+ubcore_get_main_primary_eid
+EOF
+
+echo 0 > tracing_thresh
+echo 3 > max_graph_depth          # depth 3 to see find_primary_eid_in_ues inside
+echo 1 > options/funcgraph-abstime
+echo 1 > options/funcgraph-proc
+echo 65536 > buffer_size_kb
+echo function_graph > current_tracer
+
+# Filter to one observed urma_perftest process (so the trace isn't massive)
+# (set_ftrace_pid <pid> on the chosen process)
+echo 1 > tracing_on
+```
+
+**Run** the 100-process workload. **Save** the trace.
+
+**Analyze:**
+
+```bash
+f=trace_client_P100_get_primary_eid.log
+
+# Distribution of ubcore_get_main_primary_eid call durations
+grep "ubcore_get_main_primary_eid" $f | grep -oE '[*!] +[0-9.]+ us' \
+  | awk '{x=$2+0; if(x<5000) a++; else if(x<10000) b++; else if(x<20000) c++; else d++}
+         END {print "<5ms:"a"  5-10ms:"b"  10-20ms:"c"  >20ms:"d}'
+
+# Median / p90 / p99 of the function duration
+grep "ubcore_get_main_primary_eid" $f | grep -oE '[*!] +[0-9.]+ us' \
+  | awk '{print $2+0}' | sort -n \
+  | awk 'BEGIN{c=0} {a[c++]=$1}
+         END {printf "n=%d median=%.2fus p90=%.2fus p99=%.2fus max=%.2fus\n",
+                     c, a[int(c*0.5)], a[int(c*0.9)], a[int(c*0.99)], a[c-1]}'
+```
+
+**Three possible outcomes:**
+
+1. **Median ~5 ms** (baseline holds under load): pure round-count × concurrency arithmetic. No contention amplification. The fix path is "reduce per-call cost" (replace the linear scan with a hash; or cache primary_eid lookup per (peer_eid, trans_mode) tuple).
+2. **Median 30-50 ms** (dilates ~10× under load): CPU contention is amplifying. Both "reduce per-call cost" AND "stagger to avoid alignment" would help.
+3. **Median ~5 ms but p99 huge**: the average isn't dilating but individual instances stall; tail-latency problem. Stagger fix is enough.
+
+#### G. Test B — disconfirm thundering-herd by adding random stagger
+
+**Wrapper script** (`stagger-wrapper.sh`):
+
+```bash
+#!/bin/bash
+# Random 0-50ms startup delay per process
+sleep $(awk -v s=$$ 'BEGIN{srand(s); printf "%.4f", rand()*0.05}')
+exec urma_perftest send_lat -n 5 -s 2 -d bonding_dev_0 --single_path -p 0
+```
+
+**Run:** 100 instances of this wrapper in parallel (same way you run the unstaggered version). Compare `import_jetty #1` / `#2` wall-clock vs the unstaggered baseline.
+
+**Two outcomes:**
+
+1. **Slowdown drops from 91× to <10×** → thundering-herd alignment is the dominant amplification mechanism. Stagger is the cheap fix.
+2. **Slowdown stays at ~91×** → alignment is not the amplifier; raw CPU/network cost per round is dominant. The fix has to address per-call cost.
+
+#### H. Why both tests, not just one
+
+| Test | Pins | Doesn't pin |
+| --- | --- | --- |
+| A alone | Function's per-call behavior under load | Whether alignment matters separately from raw load |
+| B alone | Whether stagger fixes it | What the underlying mechanism is or what the cost floor is |
+| **A + B** | Both the function cost under load AND the alignment effect | — |
+
+Combined, the answers cleanly map to a fix:
+
+| A outcome | B outcome | Fix |
+| --- | --- | --- |
+| baseline holds | stagger fixes it | client-side stagger (free) |
+| baseline holds | stagger doesn't help | reduce per-call scan cost (hash / cache) |
+| dilates under load | stagger fixes it | client-side stagger (free) plus optional scan optimization |
+| dilates under load | stagger doesn't help | both fixes needed |
+
+#### I. Status of all open follow-ups
+
+| Follow-up | Status | Notes |
+| --- | --- | --- |
+| Plan B sequential scale test | Open | Lower priority now that thundering-herd reading is confirmed |
+| `git diff master..codex/udma-tp-cache` read | **Done** §10.25.D | Patch is `hw/udma`-only |
+| Cold-vs-warm `modprobe -r/-i` protocol | Open | Less load-bearing now |
+| §10 doc refactor | Open | §10.25 + §10.26 + §10.27 form the authoritative chain |
+| dmesg `post_wq consumes` check (§10.26.D #5 / experiment a) | Open | Cheap (5 s); predicted: 0 events |
+| Experiment 6 (`ubmad_recv_work_handler` trace) | De-prioritized | Existing data already shows MAD arrival is bursty |
+| Experiment 7 (codex patch on master) | Open | Expected: removes 2-7 % slow tail, but `import_jetty` wall-clock barely changes |
+| **Test A — client-side `ubcore_get_main_primary_eid` ftrace** | **Highest priority** | Pins the suspected function's behavior under load |
+| **Test B — random stagger disconfirm** | **Highest priority** | Pins whether alignment is the amplifier |
+
 ## 11. TRACE_EVENT internals — how the macro actually works
 
 ### 11.1 Where `TRACE_EVENT` is defined
