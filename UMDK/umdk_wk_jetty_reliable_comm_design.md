@@ -1,7 +1,7 @@
 # 公知Jetty可靠通信设计文档（三次握手 / 四次挥手）
 
 _面向读者：对 UMDK/URMA/UBMAD 代码零基础的新开发者。_
-_文档版本：v3.12（修正 LAST_ACK 路径多余 put 导致的 UAF；清理 process_wk_syn 关于 ref 持有者的过时注释）_
+_文档版本：v3.13（修正 SYN_RCVD 重传超限时 alloc ref 泄漏 — 与 v3.12 的 LAST_ACK UAF 同源）_
 _最后更新：2026-05-14_
 
 ---
@@ -2106,7 +2106,18 @@ static void ubmad_wk_syn_rt_work_handler(struct work_struct *work)
         else
             complete(&session->connected);
 
-        ubmad_put_session(session);
+        /* v3.13 修订：在 SYN_RCVD 重传超限的情况下，alloc 拿到的那 1 份 ref
+         * 还从未通过 on_established 移交给上层（连接根本没建成功），所以这里
+         * 必须释放它，否则 session 永远 leak。其它三种状态不需要：
+         *   - SYN_SENT：alloc ref 由 connect() 调用方持有；同步模式下
+         *     wait_for_completion_timeout 醒来后会 put（v3.5）；异步模式下
+         *     调用方收到 on_closed 通知，由它调 ubmad_wk_close consume。
+         *   - FIN_WAIT_1 / LAST_ACK：alloc ref 已经在 ubmad_wk_close
+         *     consume（§6.2），此时 session 上只剩 timer ref。 */
+        if (state == UBMAD_WK_SYN_RCVD)
+            ubmad_put_session(session);
+
+        ubmad_put_session(session);   /* timer ref */
         return;
     }
 
@@ -3021,3 +3032,15 @@ _v3.12 修订（2026-05-14）相对 v3.11 的主要变化_：
 | 2 | **process_wk_syn 末尾注释"session 引用计数由哈希表持有"**（LOW）：与 v3.9 invariant 矛盾。实际情况是 alloc 拿到的那 1 份 ref 在被动 server 路径上是预备移交给上层的——后续 process_wk_ack 推到 ESTABLISHED 时通过 on_established 回调把 session 指针传给上层，相当于把 alloc ref 隐式转移；上层完成业务后调 ubmad_wk_close 时被 consume。 | 改写注释，明确 alloc ref 的去向（→ on_established → upper-layer → close consume）以及 timer ref 的释放路径。 |
 
 UAF 的发现说明哪怕 v3.9 重写了 ref 模型，"哈希表不持有 ref"这个 invariant 还有遗留代码点没跟上。v3.12 关闭这个 LAST_ACK 漏洞之后应当全部修齐。
+
+_v3.13 修订（2026-05-14）相对 v3.12 的主要变化_：
+
+第十二轮 reviewer 又找出 1 项真实 HIGH 缺陷，与 v3.12 的 LAST_ACK 是**同一类**问题：alloc ref 的所有权在某条非主流路径上没人接管。
+
+| # | 缺陷 | v3.13 修复 |
+|---|------|-----------|
+| 1 | **SYN_RCVD 重传超限时 alloc ref 泄漏**（HIGH）：服务端在 process_wk_syn 里 alloc 了 session（kref=1），又 kref_get 一次给 SYN_ACK 重传 timer（kref=2）。若客户端永远不发最终 ACK，rt_work_handler 会撞到 UBMAD_WK_MAX_RETRY，把 state 标 CLOSED、调 on_closed（如果有）、然后只 put 自己（timer ref）。alloc ref 从未通过 on_established 移交给上层（因为连接根本没建成），但 handler 也没释放它——session 永久泄漏，且在哈希表里残留。 | rt_work_handler 重传超限分支增加：`if (state == UBMAD_WK_SYN_RCVD) ubmad_put_session(session);`——只针对 SYN_RCVD 这一个状态做这件事。其它三个 retry-relevant 状态不需要：SYN_SENT 由 connect() 调用方持有 alloc ref（同步等超时、异步在 on_closed 后 close consume）；FIN_WAIT_1 / LAST_ACK 在 ubmad_wk_close 时 alloc ref 已经被 consume，session 只剩 timer ref。注释里把这四种状态的所有权差异列清楚，避免后续改动再踩同样的坑。 |
+
+注意 v3.13 与 v3.12 都属于"v3.9 invariant 重写后留下的遗留 ref 不平衡"。v3.12 修了 LAST_ACK 的过度 put，v3.13 修了 SYN_RCVD 的不足 put。这两个加起来覆盖了所有 alloc-ref-应当-显式-释放 的状态。FIN_WAIT_2 / TIME_WAIT 已经 v3.7-3.9 处理过；ESTABLISHED 阶段的 alloc ref 一定在某个外部（connect 调用方或 on_established 上层）手里，不会因为内部超时事件而泄漏。
+
+如果还有第三个同类残留，预期 round 13 会找到。
