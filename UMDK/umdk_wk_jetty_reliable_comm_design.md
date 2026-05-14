@@ -1,7 +1,7 @@
 # 公知Jetty可靠通信设计文档（三次握手 / 四次挥手）
 
 _面向读者：对 UMDK/URMA/UBMAD 代码零基础的新开发者。_
-_文档版本：v3.5（修正 v3.4 残留：connect 返回 session 指针、SYN_ACK/FIN 重传幂等响应、async 文档与同步 import 行为统一）_
+_文档版本：v3.6（修正 v3.5 残留：close-consume 所有权统一、test 代码同步新签名、CLOSE_WAIT/TIME_WAIT FIN isn 校验）_
 _最后更新：2026-05-14_
 
 ---
@@ -1277,19 +1277,20 @@ struct ubmad_device_priv {
 编写简单的内核模块测试（非生产代码，仅验证编译链路）：
 
 ```c
-/* 测试：验证 connect 在没有对端时超时返回 -ETIMEDOUT */
+/* 测试：验证 connect 在没有对端时超时返回 ERR_PTR(-ETIMEDOUT) */
 void test_ubmad_wk_connect_timeout(struct ubmad_device_priv *dev_priv)
 {
     union ubcore_eid fake_eid = {};
-    int ret;
+    struct ubmad_wk_session *session;   /* v3.5 起 connect 返回指针 */
 
     /* 填入一个不存在的对端 EID */
     memset(fake_eid.raw, 0xFF, sizeof(fake_eid.raw));
 
-    ret = ubmad_wk_connect(dev_priv, &fake_eid, NULL, NULL, NULL);
-    WARN_ON(ret != -ETIMEDOUT);
+    session = ubmad_wk_connect(dev_priv, &fake_eid, NULL, NULL, NULL);
+    WARN_ON(!IS_ERR(session) || PTR_ERR(session) != -ETIMEDOUT);
     pr_info("ubmad_wk: connect timeout test %s\n",
-            ret == -ETIMEDOUT ? "PASS" : "FAIL");
+            (IS_ERR(session) && PTR_ERR(session) == -ETIMEDOUT) ? "PASS" : "FAIL");
+    /* 失败路径上 connect 内部已 put session；此处不需要再清理。 */
 }
 ```
 
@@ -1645,17 +1646,30 @@ ubmad_process_wk_ack      [server side]
 
 ```c
 /**
- * ubmad_wk_close - 发起四次挥手（主动关闭）
+ * ubmad_wk_close - 发起四次挥手（主动或被动关闭通用）
  *
- * @session: 要关闭的会话
+ * @session: 要关闭的会话（来自 ubmad_wk_connect 或 on_established 回调）
  *
- * 只有在 ESTABLISHED 状态下才允许主动发起 FIN。
- * 被动方处理 FIN 并准备好后，也调用此函数发起自己的 FIN（Step 6.5）。
+ * **v3.6 修订：本函数 consume 调用方持有的那一份 ref**——返回后调用方
+ * MUST NOT 再访问 session 指针。后续状态推进、FIN 重传、TIME_WAIT、最终
+ * 释放都由内部定时器和接收路径自动完成。
  *
- * 流程：
- *   1. 验证状态为 ESTABLISHED
- *   2. 迁移到 FIN_WAIT_1
- *   3. 发送 UBMAD_WK_FIN
+ * 这是 v3.5 留下的所有权歧义的最终解法（v3.5 让 connect 返回指针让调用方
+ * 持有 ref，但没说 close 怎么处理这份 ref，造成"调 close 之后还要不要
+ * 自己 put 一次"的不确定）。v3.6 选择"close consume"语义，理由：
+ *   - 类比 fclose / close(fd)：调用后 fd 不再可用。
+ *   - 调用方除了 close 也无法用 session 干别的事（不暴露其它 API）。
+ *   - 简化使用：调用方只需 if (!IS_ERR(session = wk_connect(...))) wk_close(session)。
+ *
+ * 状态合法性：
+ *   - ESTABLISHED → FIN_WAIT_1（主动关闭，发自己的 FIN）
+ *   - CLOSE_WAIT → LAST_ACK（被动关闭，对端已 FIN，本端回 FIN）
+ *   - 其它状态：返回 -EINVAL，**仍然 consume 调用方的 ref**（统一释放语义）
+ *
+ * 错误返回值：
+ *   - 0：FIN 已投递，重传定时器已挂；session 异步推进直至 CLOSED 后自动释放。
+ *   - -EINVAL：状态不合法（既不是 ESTABLISHED 也不是 CLOSE_WAIT）；session 已 put。
+ *   - 其它负数：FIN 投递失败；状态已回滚；session 已 put。
  */
 int ubmad_wk_close(struct ubmad_wk_session *session)
 {
@@ -1674,6 +1688,7 @@ int ubmad_wk_close(struct ubmad_wk_session *session)
         session->state = UBMAD_WK_LAST_ACK;
     } else {
         spin_unlock(&session->lock);
+        ubmad_put_session(session);   /* v3.6: consume caller's ref even on -EINVAL */
         return -EINVAL;
     }
 
@@ -1690,17 +1705,23 @@ int ubmad_wk_close(struct ubmad_wk_session *session)
         spin_lock(&session->lock);
         session->state = prev_state;     /* v3.3：回滚到原状态（不是硬编码 ESTABLISHED） */
         spin_unlock(&session->lock);
+        ubmad_put_session(session);   /* v3.6: consume caller's ref */
         return ret;
     }
 
     /* v3.2 新增：启动 FIN 重传定时器。
      * 复用 rt_work（握手已完成，rt_work 此刻空闲）。
      * rt_work_handler 会按 session->state 分派到 SYN/SYN_ACK/FIN 重传。
-     * 必须先 kref_get（见 §7.4）。 */
+     * 必须先 kref_get（见 §7.4）——这是给 timer 的独立一份 ref，
+     * 与下面要 put 掉的 caller ref 是两份不同的 ref。 */
     session->rt_cnt = 0;
     kref_get(&session->kref);
     queue_delayed_work(session->rt_wq, &session->rt_work,
                        msecs_to_jiffies(2));
+
+    /* v3.6: consume caller's ref。timer 持有自己那份 ref，
+     * session 不会被立即释放；teardown 完成后 timer 会 put 让 kref 归零。 */
+    ubmad_put_session(session);
     return 0;
 }
 EXPORT_SYMBOL_GPL(ubmad_wk_close);
@@ -1771,28 +1792,30 @@ static void ubmad_process_wk_fin(struct ubmad_msg *msg,
         if (session->on_closed)
             session->on_closed(session, 0 /* 正常关闭 */, session->cb_ctx);
 
-    } else if (old_state == UBMAD_WK_TIME_WAIT) {
-        /* v3.2 新增：场景三 — 处于 TIME_WAIT 时收到对端重传的 FIN
-         * （我们的 FIN_ACK 之前可能丢了）。重发 FIN_ACK 让对端能完成关闭。
-         * 注意：不重启 TIME_WAIT 定时器；如果 4 秒内还有重传 FIN，
-         * 同样能从此分支再 ACK 一次。 */
+    } else if (old_state == UBMAD_WK_TIME_WAIT ||
+               old_state == UBMAD_WK_CLOSE_WAIT) {
+        /* v3.2 / v3.5：处于 TIME_WAIT 或 CLOSE_WAIT 时收到对端重传的 FIN。
+         * 重发 FIN_ACK 让对端能推进。
+         *
+         * v3.6：先校验 wk_hdr->isn 与首次记录的 remote_fin_seq 一致——这是
+         * 同一连接的同一个 FIN 的重传。如果不同（异常或攻击），不应该用旧的
+         * remote_fin_seq+1 去 ACK 一个不同的 isn，会破坏对端的 ack 校验。
+         * 直接丢弃并 warn。 */
+        if (wk_hdr->isn != session->remote_fin_seq) {
+            spin_unlock(&session->lock);
+            pr_warn("ubmad_wk: FIN isn mismatch in state=%d session=%u "
+                    "expect=%u got=%u (drop)\n",
+                    old_state, session->session_id,
+                    session->remote_fin_seq, wk_hdr->isn);
+            ubmad_put_session(session);
+            return;
+        }
         spin_unlock(&session->lock);
-        pr_debug("ubmad_wk: re-ACK FIN in TIME_WAIT for session=%u\n",
-                 session->session_id);
+        pr_debug("ubmad_wk: re-ACK FIN in state=%d for session=%u\n",
+                 old_state, session->session_id);
         ubmad_post_send_wk(dev_priv, session, UBMAD_WK_FIN_ACK,
                             0, session->remote_fin_seq + 1);
-
-    } else if (old_state == UBMAD_WK_CLOSE_WAIT) {
-        /* v3.5 新增：场景四 — 被动方处于 CLOSE_WAIT 时收到对端重传的 FIN。
-         * 我们之前的 FIN_ACK 可能丢了，对端在 FIN_WAIT_1 状态下超时重传 FIN。
-         * 重发 FIN_ACK，使用首次记录的 remote_fin_seq（已在 ESTABLISHED 分支
-         * 设置过；这里不更新，以防对端因 ISN 边界差异发出不同 isn）。
-         * 不通知上层（on_closed 已在首次 FIN 时回调）。 */
-        spin_unlock(&session->lock);
-        pr_debug("ubmad_wk: re-ACK FIN in CLOSE_WAIT for session=%u\n",
-                 session->session_id);
-        ubmad_post_send_wk(dev_priv, session, UBMAD_WK_FIN_ACK,
-                            0, session->remote_fin_seq + 1);
+        /* 不重启 TIME_WAIT；不重新触发 on_closed（已在首次 FIN 时回调）。 */
 
     } else {
         spin_unlock(&session->lock);
@@ -2071,9 +2094,10 @@ static void ubmad_wk_time_wait_handler(struct work_struct *work)
 | 分配 session | `kref_init`（=1） | — |
 | 哈希表插入 | 无额外 get（哈希表不加引用） | `ubmad_release_session` 中移除 |
 | `ubmad_alloc_session` 返回给调用者 | 已有的 1 个 | 调用者用完后 `ubmad_put_session` |
-| `find_by_id` | `kref_get` | 调用者用完后 `ubmad_put_session` |
-| rt_work 入队前 | `kref_get` | `rt_work_handler` 末尾 `put` |
-| tw_work 入队前 | `kref_get` | `tw_work_handler` 末尾 `put` |
+| `find_by_id` / `find_by_peer` | `kref_get` | 调用者用完后 `ubmad_put_session` |
+| rt_work 入队前 | `kref_get` | `rt_work_handler` 末尾 `put`（或 cancel 路径补 put） |
+| tw_work 入队前 | `kref_get` | `tw_work_handler` 末尾 `put`（或 cancel 路径补 put） |
+| `ubmad_wk_connect` 返回给上层调用方 | 把 alloc 的那 1 个 ref 转给调用方 | **调用方调 `ubmad_wk_close(session)` 时被 consume**（v3.6） |
 
 > **重要**：每次 `queue_delayed_work` 之前必须先 `kref_get`，并在 handler 最后 `kref_put`。否则 session 对象可能在 handler 执行中途被释放。
 >
@@ -2096,6 +2120,8 @@ static void ubmad_wk_time_wait_handler(struct work_struct *work)
 > }
 > ```
 > 这个模式在持锁时不能用（`flush_delayed_work` 会等 handler，handler 要拿同一把锁就死锁）。所以：所有同步等待 handler 退出的 cancel 都必须发生在解锁后。本设计的 §4.4 connect() 同步超时分支就是这样写的。
+>
+> **v3.6 补充：调用方持有的 ref 由 `ubmad_wk_close()` consume**——v3.5 让 `ubmad_wk_connect()` 返回 session 指针并把 alloc 的那份 ref 交给调用方，但当时没说清楚 `ubmad_wk_close()` 怎么处理这份 ref，留下了"调 close 之后要不要再 put 一次"的歧义。v3.6 选 close-consume 语义：调用 `ubmad_wk_close(session)` 后，调用方 MUST NOT 再访问 session 指针；不论 close 返回 0 还是 -EINVAL/其它错，调用方那一份 ref 都已被释放。理由：close 之后调用方除了 put 外没别的操作可做，统一 consume 简化使用方代码。
 
 ---
 
@@ -2317,11 +2343,21 @@ void on_established_cb(struct ubmad_wk_session *session, void *ctx)
 void client_thread(struct ubmad_device_priv *dev_priv,
                    union ubcore_eid *server_eid)
 {
-    int ret = ubmad_wk_connect(dev_priv, server_eid, NULL, NULL, NULL);
-    if (ret == 0)
-        pr_info("Client: 3-way handshake complete!\n");
-    else
-        pr_err("Client: connect failed ret=%d\n", ret);
+    /* v3.5 起 connect 返回 session 指针或 ERR_PTR */
+    struct ubmad_wk_session *session =
+        ubmad_wk_connect(dev_priv, server_eid, NULL, NULL, NULL);
+
+    if (IS_ERR(session)) {
+        pr_err("Client: connect failed ret=%ld\n", PTR_ERR(session));
+        return;
+    }
+    pr_info("Client: 3-way handshake complete, session=%u\n",
+            session->session_id);
+
+    /* ... 这里跑业务（v1 没有数据平面，所以业务通常意味着"知道连接已就绪即可"） ... */
+
+    /* v3.6 起 close consume 调用方持有的那一份 ref；返回后 session 不可再用 */
+    ubmad_wk_close(session);
 }
 ```
 
@@ -2772,3 +2808,17 @@ _v3.5 修订（2026-05-14）相对 v3.4 的主要变化_：
 到 v3.5 为止，握手和挥手两个方向上「ACK 单次丢失」这一类问题都被对称地补全了。这是 TCP 实现里教科书级的边界条件，对应于 RFC 793 中的"FIN_WAIT_2 接收 FIN 重传"、"ESTABLISHED 接收 SYN_ACK 重传"等场景。
 
 剩余 §18 设计问题（数据平面、v1 消费者）依旧未答；这些不会出现在再下一轮代码 review 里，需要 stakeholder 输入。
+
+_v3.6 修订（2026-05-14）相对 v3.5 的主要变化_：
+
+第五轮外部 reviewer 在 v3.5 上找出 3 项问题——一项 API 所有权歧义（仍是 BLOCKER）、一项过期示例代码、一项协议幂等性硬化。v3.6 全部修复：
+
+| # | 缺陷（v3.5 残留） | v3.6 修复 |
+|---|------|-----------|
+| 1 | **ubmad_wk_close 所有权语义未定**：v3.5 让 connect 返回 session 指针、把 alloc 的 ref 交给调用方，但没说 close 怎么处理这份 ref。`ubmad_wk_close()` 只发 FIN + 排重传，没 put；TIME_WAIT 只 put 自己的 timer ref。结果调用方拿到的那一份 ref 永远不释放——session 永远不会被 free。 | **`ubmad_wk_close()` consume 调用方持有的那一份 ref**（v3.6 选用 close-consume 语义，类比 fclose / close(fd)）。在所有返回路径上都 put：成功路径在排完重传定时器后 put；失败路径（`-EINVAL`、FIN 投递失败）也 put。调用方 MUST NOT 在调 close 之后访问 session 指针。§7.4 ref 表新增对应行；§7.4 v3.6 补充段落详细说明语义和理由。 |
+| 2 | **测试示例还在用旧的 int 返回值**：Step 4.4 / Step 10 的两段示例代码（timeout test、client 集成测试）写着 `int ret = ubmad_wk_connect(...)`，与 v3.5 实际签名 `struct ubmad_wk_session *` 不一致——按文档照抄会编译失败。 | 两段示例都改用 `struct ubmad_wk_session *session = ubmad_wk_connect(...)` + `IS_ERR / PTR_ERR` 判断；client 测试同时演示 v3.6 的 `ubmad_wk_close(session)` consume 语义。 |
+| 3 | **CLOSE_WAIT/TIME_WAIT 重传 FIN 不校验 isn**：v3.5 在 `ubmad_process_wk_fin()` 加了 CLOSE_WAIT/TIME_WAIT 状态下重发 FIN_ACK 的逻辑，但用的是首次记录的 `remote_fin_seq + 1` 作为 ack；如果第二次到达的 FIN 携带不同的 isn（异常或恶意），我们会错误地给一个不同 FIN 回 ACK。 | CLOSE_WAIT/TIME_WAIT 分支合并并加 isn 校验：先比较 `wk_hdr->isn == session->remote_fin_seq`，相等才重发 FIN_ACK；不等则 warn 并丢弃。这避免给"非首次 FIN" 错误地 ACK，也保护对端的 ack 校验逻辑。 |
+
+到 v3.6 为止，调用方 API 表面（`connect → session pointer; close consumes`）应当无歧义；ref-counting 在所有正常和异常路径上都成对；TCP 风格的重传幂等性（SYN_ACK 重传、FIN 重传）都有正确的状态分支处理。本文档的代码示例**应当能直接编译并照着写实现**。
+
+剩余的不确定性只在两个方面：(a) 没有人在真实内核上跑过这份代码；(b) §18 的开放设计问题（数据平面缺失、v1 消费者）需要 stakeholder 输入。这两类问题都不在 doc review 的能力范围内。
