@@ -1,7 +1,7 @@
 # 公知Jetty可靠通信设计文档（三次握手 / 四次挥手）
 
 _面向读者：对 UMDK/URMA/UBMAD 代码零基础的新开发者。_
-_文档版本：v3.6（修正 v3.5 残留：close-consume 所有权统一、test 代码同步新签名、CLOSE_WAIT/TIME_WAIT FIN isn 校验）_
+_文档版本：v3.7（修正 v3.6 残留：FIN_WAIT_2 keep-alive ref + 30s 超时；FIN isn 校验 record 块缩小到首次状态）_
 _最后更新：2026-05-14_
 
 ---
@@ -456,6 +456,15 @@ struct ubmad_wk_hdr {
  * 详细推导见 §0.3。注意这不是 TCP 风格的 2×MSL（TCP 通常 60-120s）。
  */
 #define UBMAD_WK_TIME_WAIT_MS       4000
+
+/* FIN_WAIT_2 等待时长（毫秒）。v3.7 新增。
+ * 主动关闭方收到 FIN_ACK 之后等对端发自己的 FIN。如果对端永远不发
+ * （进程死、对端节点崩溃、对端代码 bug），不能让 session 永驻 FIN_WAIT_2。
+ * 借鉴 Linux 内核 net.ipv4.tcp_fin_timeout，默认 60s；这里取 30s 折中
+ * （同步关闭场景大多在几十毫秒内完成；30s 留出足够余量给跨节点慢路径）。
+ * 这个超时同时是 FIN_WAIT_2 期间唯一的 session 持有者，详见 §6.4 / §7.3。
+ */
+#define UBMAD_WK_FIN_WAIT_2_MS      30000
 
 /* ============================================================
  * 核心会话对象
@@ -1757,10 +1766,18 @@ static void ubmad_process_wk_fin(struct ubmad_msg *msg,
     spin_lock(&session->lock);
     old_state = session->state;
 
-    /* v3.3：记录对端 FIN 的 seq，FIN_ACK 的 ack 字段需要回填 wk_hdr->isn+1 */
+    /* v3.3：首次见到对端 FIN 的状态——记录对端 FIN 的 seq，
+     * 后续 FIN_ACK 的 ack 字段需要回填 wk_hdr->isn+1。
+     *
+     * v3.7：原来 TIME_WAIT 也在这个 record 块里，结果下面的"FIN 重传校验"
+     * 形同虚设——每次进来都会被覆盖成 wk_hdr->isn，与之比较自然永远相等。
+     * 现在限制只在首次见到 FIN 的两个状态记录：
+     *   - ESTABLISHED → CLOSE_WAIT（被动方首次收 FIN）
+     *   - FIN_WAIT_2  → TIME_WAIT（主动方首次收对端 FIN）
+     * CLOSE_WAIT / TIME_WAIT 是重传 FIN 的处理路径，必须保留首次记录的值
+     * 以便对 isn 做有效校验。 */
     if (old_state == UBMAD_WK_FIN_WAIT_2 ||
-        old_state == UBMAD_WK_ESTABLISHED ||
-        old_state == UBMAD_WK_TIME_WAIT) {
+        old_state == UBMAD_WK_ESTABLISHED) {
         session->remote_fin_seq = wk_hdr->isn;
     }
 
@@ -1772,6 +1789,12 @@ static void ubmad_process_wk_fin(struct ubmad_msg *msg,
         /* 发送 FIN_ACK（v3.3：ack = remote_fin_seq + 1） */
         ubmad_post_send_wk(dev_priv, session, UBMAD_WK_FIN_ACK,
                             0, session->remote_fin_seq + 1);
+
+        /* v3.7：先取消 FIN_WAIT_2 keep-alive 定时器（process_wk_fin_ack
+         * FIN_WAIT_1→FIN_WAIT_2 那里挂的）。cancel 成功要补 put。
+         * 然后才能 reuse tw_work 走 TIME_WAIT 路径。 */
+        if (cancel_delayed_work(&session->tw_work))
+            ubmad_put_session(session);
 
         /* 启动 TIME_WAIT 定时器（UBMAD_WK_TIME_WAIT_MS = 4000ms）
          * v3.2：必须先 kref_get，否则 tw_work_handler 的 put 会跌破 0。 */
@@ -1876,7 +1899,22 @@ static void ubmad_process_wk_fin_ack(struct ubmad_msg *msg,
         /* v3.3：cancel 成功要释放 timer 持有的 ref */
         if (cancel_delayed_work(&session->rt_work))
             ubmad_put_session(session);
-        /* 等待对端的 FIN（ubmad_process_wk_fin 处理） */
+
+        /* v3.7：FIN_WAIT_2 必须有自己的 keep-alive ref，否则对端 FIN
+         * 到达之前 session 没有任何 ref（caller ref 早被 close 消费、
+         * timer ref 刚被 cancel-then-put、find ref 马上要在函数末尾 put）
+         * 就会被 free。同时也需要一个超时——TCP 标准做法（Linux
+         * tcp_fin_timeout，默认 60s）防止对端永远不发 FIN。
+         *
+         * 复用 tw_work：它本来就是"等若干秒然后释放 session"的形态。
+         * tw_work_handler 现在按 state 分派：FIN_WAIT_2 表示对端没在期限内
+         * 发 FIN，本端放弃并迁到 CLOSED；TIME_WAIT 表示等待重传 FIN，
+         * 期满后干净释放。 */
+        kref_get(&session->kref);
+        queue_delayed_work(session->rt_wq, &session->tw_work,
+                           msecs_to_jiffies(UBMAD_WK_FIN_WAIT_2_MS));
+        /* 等待对端的 FIN（由 ubmad_process_wk_fin 处理；它会先 cancel
+         * 这个 FIN_WAIT_2 keep-alive，再启动真正的 TIME_WAIT 定时器） */
 
     } else if (old_state == UBMAD_WK_LAST_ACK) {
         session->state = UBMAD_WK_CLOSED;
@@ -2058,29 +2096,48 @@ static void ubmad_wk_syn_rt_work_handler(struct work_struct *work)
 
 ```c
 /**
- * ubmad_wk_time_wait_handler - TIME_WAIT 超时处理
+ * ubmad_wk_time_wait_handler - TIME_WAIT / FIN_WAIT_2 超时处理（v3.7 起 reuse）
  *
- * 在 UBMAD_WK_TIME_WAIT_MS（4000ms）后自动调用。
- * 将 session 状态迁移到 CLOSED 并释放资源。
+ * v3.7 改动：本 handler 同时被 TIME_WAIT 和 FIN_WAIT_2 两种状态用作超时器。
+ *   - TIME_WAIT：等 UBMAD_WK_TIME_WAIT_MS（4000ms）。期间收到对端重传的
+ *     FIN 时由 process_wk_fin 重发 FIN_ACK；超时后正常释放。
+ *   - FIN_WAIT_2：等 UBMAD_WK_FIN_WAIT_2_MS（30000ms）。本端已收到对端的
+ *     FIN_ACK 但还没看到对端发自己的 FIN；如果对端永远不发，超时后放弃。
+ *     这个 keep-alive 同时也是 FIN_WAIT_2 期间唯一的 session 持有者。
+ *
+ * 两种状态的处理逻辑都是"迁到 CLOSED → put 哈希表持有的 ref"，所以本
+ * handler 不需要按状态分支，只在日志里区分原因即可。
  *
  * 为什么需要 TIME_WAIT？
  *   最后一个 FIN_ACK 可能因网络丢失导致对端重传 FIN。
  *   TIME_WAIT 确保我们还能响应这些迟到的 FIN（直接重发 FIN_ACK），
  *   避免对端因未收到 FIN_ACK 而一直重传。
+ *
+ * 为什么需要 FIN_WAIT_2 超时？
+ *   主动关闭方收到 FIN_ACK 后等对端发自己的 FIN。如果对端已经异常掉线
+ *   或对端的 close 路径出问题，主动方就会一直留在 FIN_WAIT_2，session
+ *   永远不释放。30 秒超时是借鉴 Linux tcp_fin_timeout 的折中。
  */
 static void ubmad_wk_time_wait_handler(struct work_struct *work)
 {
     struct delayed_work *dwork = to_delayed_work(work);
     struct ubmad_wk_session *session =
             container_of(dwork, struct ubmad_wk_session, tw_work);
-
-    pr_info("ubmad_wk: session=%u TIME_WAIT expired, releasing\n",
-            session->session_id);
+    enum ubmad_wk_session_state old_state;
 
     spin_lock(&session->lock);
-    if (session->state == UBMAD_WK_TIME_WAIT)
+    old_state = session->state;
+    if (old_state == UBMAD_WK_TIME_WAIT ||
+        old_state == UBMAD_WK_FIN_WAIT_2)
         session->state = UBMAD_WK_CLOSED;
     spin_unlock(&session->lock);
+
+    if (old_state == UBMAD_WK_FIN_WAIT_2)
+        pr_info("ubmad_wk: session=%u FIN_WAIT_2 timeout, peer never sent FIN; releasing\n",
+                session->session_id);
+    else
+        pr_info("ubmad_wk: session=%u TIME_WAIT expired, releasing\n",
+                session->session_id);
 
     /* 释放哈希表持有的引用（触发 ubmad_release_session） */
     ubmad_put_session(session);
@@ -2822,3 +2879,16 @@ _v3.6 修订（2026-05-14）相对 v3.5 的主要变化_：
 到 v3.6 为止，调用方 API 表面（`connect → session pointer; close consumes`）应当无歧义；ref-counting 在所有正常和异常路径上都成对；TCP 风格的重传幂等性（SYN_ACK 重传、FIN 重传）都有正确的状态分支处理。本文档的代码示例**应当能直接编译并照着写实现**。
 
 剩余的不确定性只在两个方面：(a) 没有人在真实内核上跑过这份代码；(b) §18 的开放设计问题（数据平面缺失、v1 消费者）需要 stakeholder 输入。这两类问题都不在 doc review 的能力范围内。
+
+_v3.7 修订（2026-05-14）相对 v3.6 的主要变化_：
+
+第六轮外部 reviewer 在 v3.6 上找出 2 项问题——一项又是 close-consume 引发的 lifetime bug（FIN_WAIT_2 状态没有 ref 持有），一项是 v3.6 自己引入的 isn 校验形同虚设。v3.7 全部修复：
+
+| # | 缺陷（v3.6 残留） | v3.7 修复 |
+|---|------|-----------|
+| 1 | **FIN_WAIT_2 期间 session 没有 ref 持有**（BLOCKER）：v3.6 让 close 立刻 consume caller ref。FIN_ACK 到达时 process_wk_fin_ack 走 FIN_WAIT_1→FIN_WAIT_2 分支，在解锁后做了 `cancel_delayed_work + put`（消费 timer ref），然后函数末尾的 `ubmad_put_session(session)`（消费 find ref）。此时 caller ref 早已被 close consume 了，**session 没有任何 ref 持有**——hash 表不计 ref，session 会被立即 free。但本端还在 FIN_WAIT_2 等对端的 FIN，session 必须存活。 | process_wk_fin_ack FIN_WAIT_1→FIN_WAIT_2 分支增加：`kref_get + queue_delayed_work(tw_work, FIN_WAIT_2_MS)`——同时充当 (a) FIN_WAIT_2 keep-alive ref 和 (b) "对端永远不发 FIN 时的 30s 超时"（借鉴 Linux tcp_fin_timeout）。process_wk_fin FIN_WAIT_2→TIME_WAIT 分支：先 cancel-then-put 这个 keep-alive，再启动真正的 TIME_WAIT 定时器。tw_work_handler 同时处理 TIME_WAIT 和 FIN_WAIT_2 两种到期场景（语义都是"迁到 CLOSED + put 哈希 ref"，只是日志不同）。新增 `UBMAD_WK_FIN_WAIT_2_MS = 30000` 常量。 |
+| 2 | **TIME_WAIT 的 FIN isn 校验自相矛盾**：v3.6 的"record remote_fin_seq"块包含 TIME_WAIT，意味着每次重传 FIN 进来都会先把 remote_fin_seq 覆盖成 wk_hdr->isn；下面的 isn 校验自然永远等于自己。验证形同虚设。 | record 块缩小到只在首次见到 FIN 的两个状态（ESTABLISHED 和 FIN_WAIT_2）记录；CLOSE_WAIT / TIME_WAIT 的重传路径只读取首次记录的值做校验。v3.6 同时把 CLOSE_WAIT 和 TIME_WAIT 合并到同一个 isn-validation 分支，v3.7 之后这套校验真正生效。 |
+
+到 v3.7 为止，session 生命周期在所有路径（ESTABLISHED 主动关闭、CLOSE_WAIT 被动关闭、FIN_WAIT_2 等待对端 FIN、TIME_WAIT 等待重传 FIN、所有失败回滚）都有明确的 ref 持有者，不会出现 use-after-free 或永久泄露；FIN 重传幂等性的 isn 校验真正生效。
+
+剩余风险维持在 v3.6 时的两类：实际编译运行验证 + §18 设计问题。
