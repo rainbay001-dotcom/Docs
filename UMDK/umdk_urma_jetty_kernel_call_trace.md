@@ -730,6 +730,157 @@ This mirrors `ib_uverbs` (char-dev ioctl, `/dev/infiniband/uverbs*`) vs. `rdma-n
 
 ---
 
+### 4.11 Bonding flow — `ubcore_connect_bonding.c` (closes §8 item #4)
+
+The "bonding device" referenced in `urma_perftest -d bonding_dev_0 …` is an aggregate device whose `dev_name` starts with `"bonding_dev"` (literal constant `UBAGG_DEV_PREFIX` at `ubcore_connect_bonding.h:18`). The aggregate device is registered into ubcore by the `ubagg` aux module; the underlying physical UDMA devices are registered separately. The bonding "fanout" is implemented as **pre-import udata exchange between the two aggregate devices over the live `net/ubcore_session` plane**, after which the aggregate driver's own `ops->import_jetty` (provided by `ubagg`, not `udma`) is called to materialize the aggregate-level handle. No vTP is created on the aggregate device itself — vTPs live one layer down, on the per-leg physical devices via the compat path described in §4.8 + `reference_umdk_link_setup.md`.
+
+**Caller-side trace — `ubcore_connect_exchange_udata_when_import_jetty` @ `ubcore_connect_bonding.c:497-570`.** Driven from `ubcore_import_jetty` at `ubcore_jetty.c:2491-2496`:
+
+```c
+/* ubcore_jetty.c:2488-2498 */
+if (ubcore_check_ctrlplane_compat(dev->ops->import_jetty))
+    return ubcore_import_jetty_compat(dev, cfg, udata);   /* perftest path — see §4.8 */
+if (ubcore_is_bonding_dev(dev)) {
+    if (ubcore_connect_exchange_udata_when_import_jetty(cfg, udata, false, dev) != 0)
+        return ERR_PTR(-ENOEXEC);
+}
+tjetty = dev->ops->import_jetty(dev, cfg, udata);          /* ubagg driver fills it in */
+```
+
+The non-bonding `ubcore_connect_vtp` call at `:2520` is **gated off** by an explicit `!ubcore_is_bonding_dev(dev)` check at `:2512`. So for an aggregate device, the import returns a tjetty with `vtpn=NULL, tp=NULL` — the driver's `ops->import_jetty` is expected to populate driver-private state (handed in via the just-exchanged udata) without spawning a vTP at the ubcore layer.
+
+Inside `ubcore_connect_exchange_udata_when_import_jetty`:
+
+```
+ubcore_connect_exchange_udata_when_import_jetty(cfg, udata, is_jfr=false, dev)
+  ├── ubcore_get_bonding_ue_idx_from_udata(udata, &ue_idx)         [bonding.c:52]
+  │     copy_from_user(ue_idx, udata->udrv_data->in_addr, 4)   /* picks the I/O-die leg */
+  │     bounds-check ue_idx < IODIE_NUM
+  │
+  ├── physical_dev = ubcore_find_physical_device(dev, ue_idx)     [bonding.c:181]
+  │     /* topo-map lookup, NOT the 117k-iter hot path */
+  │     get global topo_map / topo_info
+  │     spin_lock(&agg_dev->eid_table.lock); pick first valid eid; unlock
+  │     scan topo->agg_devs[0..DEV_NUM] for matching agg_eid       /* O(DEV_NUM) */
+  │     primary_eid = topo->agg_devs[dev_id].ues[ue_id].primary_eid
+  │     ubcore_find_device(primary_eid, UBCORE_TRANSPORT_UB)
+  │
+  ├── session = create_session_for_exchange_udata(physical_dev,
+  │                 &result, buf, sizeof(buf))                    [bonding.c:303]
+  │     /* ubcore_session_create — the SAME live session plane referenced
+  │        by §10.x and umdk_link_setup_timing.md as ubcore_session_wait */
+  │
+  ├── req = { is_jfr=false, jetty_id=cfg->id }
+  ├── send_jetty_info_req(physical_dev, session_id, &req, ue_idx) [bonding.c:376]
+  │     msg.type   = UBCORE_NET_BONDING_JETTY_INFO_REQ
+  │     dest_eid   = ubcore_get_primary_eid_by_agg_eid(req.jetty_id.eid,
+  │                                                    &dest_eid, ue_idx)   [topo_info.c:735]
+  │                  /* O(node_num × DEV_NUM) memcmp scan — small */
+  │     ubcore_net_send_to(physical_dev, &msg, dest_eid)
+  │
+  ├── ubcore_session_wait(session)              /* blocks here */
+  │
+  └── on response: copy_to_user(udata->udrv_data->out_addr, buf, out_len)
+      /* `[EXC_INFO]exchange_jetty_info consumes: %llu` log line if duration > UBCORE_EXC_THRESHOLD_MS */
+```
+
+The exchange-udata buffer is **1928 bytes max** (`BONDING_UDATA_BUF_LEN` @ `bonding.c:22`) and bounce-buffered on the kernel stack.
+
+**Peer-side trace — `handle_jetty_info_req` @ `bonding.c:604-634`.** Registered at module-init via `ubcore_connect_bonding_init` (`bonding.c:688-702`, called from `ubcore_main.c:40`):
+
+```c
+/* bonding.c:688-702 — four msg handlers registered into net/ubcore_session */
+UBCORE_NET_BONDING_SEG_INFO_REQ      → handle_seg_info_req
+UBCORE_NET_BONDING_SEG_INFO_RESP     → handle_seg_info_resp
+UBCORE_NET_BONDING_JETTY_INFO_REQ    → handle_jetty_info_req
+UBCORE_NET_BONDING_JETTY_INFO_RESP   → handle_jetty_info_resp
+```
+
+When a `BONDING_JETTY_INFO_REQ` arrives at the peer:
+
+```
+handle_jetty_info_req(dev /* the receiving physical leg */, msg, conn)
+  bonding_dev = ubcore_find_bonding_device(req->jetty_id.eid)    [bonding.c:244]
+    /* same topo-map → search agg_eid / primary_eid / port_eid */
+    /* O(DEV_NUM × IODIE_NUM × PORT_NUM) memcmp scan — bounded */
+  k_user_ctl = { .in.opcode = 6,
+                 .in.addr   = (uint64_t)req,        /* msg_jetty_info_req in */
+                 .out.addr  = (uint64_t)&resp.jetty_info }  /* up to 1928 B out */
+  ubcore_user_control(bonding_dev, &k_user_ctl)
+    /* drives the bonding (ubagg) provider's `user_ctl` op — fetches the
+       jetty's per-leg pinning info into resp.jetty_info */
+  send_jetty_info_resp(dev, conn, msg->session_id, &resp)
+    /* type = UBCORE_NET_BONDING_JETTY_INFO_RESP, mirrored back to caller */
+```
+
+`ubcore_user_control` with `opcode=5` is the seg-info counterpart (`handle_seg_info_req` at `bonding.c:572`). These are the only two opcodes the bonding flow drives into the provider; the rest of `user_ctl` is unused by ubcore itself.
+
+**Response demux on the caller — `handle_jetty_info_resp` @ `bonding.c:678-686` → `handle_exchange_udata_resp` @ `bonding.c:636-668`:**
+
+```
+handle_jetty_info_resp(dev, msg, conn)
+  → handle_exchange_udata_resp(dev, conn, msg->session_id,
+                                resp->result, &resp->jetty_info)
+      session = ubcore_session_find(session_id)                       /* live plane */
+      session_data = ubcore_session_get_data(session)
+      memcpy(session_data->udata_out, data, session_data->udata_out_size)
+      *session_data->result = 0
+      ubcore_session_complete(session)        /* wakes ubcore_session_wait */
+      ubcore_session_ref_release(session)
+```
+
+So the caller's `ubcore_session_wait` returns once `complete()` fires, and the udata buffer it passed in via `create_session_for_exchange_udata(&result, buf, sizeof(buf))` now holds the peer's `jetty_info`. The caller then `copy_to_user`s it back into the userspace `udata->udrv_data->out_addr` buffer — the bonding userspace library (`umdk/src/urma/lib/urma/bond/`) consumes it from there.
+
+**Seg path is the symmetric sibling.** `ubcore_connect_exchange_udata_when_import_seg` @ `bonding.c:422-495` is byte-for-byte the same flow with `msg_seg_info_req` carrying `(ubva, len, token_id)` instead of `(jetty_id, is_jfr)`. Same session machinery, same `[EXC_INFO]exchange_seg_info consumes: %llu` log, opcode 5 instead of 6.
+
+**One more bonding-only side channel — `ubcore_net_send_bonding_user_msg`.** A free-form (`UBCORE_NET_BONDING_USER_MSG`) lane registered at `bonding.c:113-133`. Lets a single in-kernel client install a handler via `ubcore_net_register_bonding_user_msg_handler` (`:135-168`, dispatched through `ubcore_handle_bonding_user_msg` `:92-111`). Nobody in ubcore itself calls it — both `register/unregister` and `send` are `EXPORT_SYMBOL` and the in-tree consumer is `ubagg` (not in the ubcore tree; live in the driver module).
+
+**Bonding ↔ §10.x topo-scan hot path: clarification.** Two helpers in `ubcore_topo_info.c`:
+
+| Helper | Location | Cost | Used by |
+|---|---|---|---|
+| `ubcore_get_main_primary_eid` → `find_primary_eid_in_ues` | `topo_info.c:452`, `:306` | ~117k memcmp/call (×8 calls = ~39 ms CPU per first-RPC per UMDK#2 §10.19) | `ubmad_post_send` at `ubcm/ubmad_datapath.c:817` — compat path, NOT bonding entry |
+| `ubcore_get_primary_eid_by_agg_eid` | `topo_info.c:735` | O(node_num × DEV_NUM) memcmp loop — bounded small | bonding `send_*_info_req` for dest_eid resolution |
+
+So the bonding path's own topo-scans are **bounded and cheap** — the 905 ms cost UMDK#1 chased lives in the `ubcore_import_jetty_compat` branch (taken when `dev->ops->import_jetty` registers as the compat variant), not the bonding branch. On a bonding device, the import path enters compat at line `:2488-2489` *before* reaching the bonding check at `:2491` and never executes the bonding udata exchange. Conversely, on a non-compat aggregate device, the bonding branch runs but the compat one doesn't. **The two are mutually exclusive at line `:2488`** — which means the bonding udata exchange and the `ubmad_post_send` topo-scan are not stacked on top of each other.
+
+**Why §10.x perftest traces still see `bonding_dev_0` though.** The userspace `urma_import_jfr` against `bonding_dev_0` enters the kernel via the uburma ioctl. Inside, `ubcore_import_jfr` checks `ubcore_check_ctrlplane_compat` against `dev->ops->import_jfr` of the aggregate device. Per `reference_umdk_link_setup.md` round-4 finding, "udma registers `import_jfr_ex` not `import_jfr`, so `ubcore_check_ctrlplane_compat` is true" → enters `ubcore_import_jfr_compat`, which **explicitly fans out to the underlying physical legs** via `ubcore_get_tp_list` / `ubcore_exchange_tp_info` / `ubcore_import_jfr_ex`. That fan-out is what carries the 905 ms cost — and it does its own MAD-on-UBMAD exchange with its own topo-scans, not via this `connect_bonding` path.
+
+**Net: this file is a parallel control plane for the aggregate-driver tier**, used when the aggregate driver registers a non-compat `ops->import_jetty/seg`. The perftest path doesn't hit it. A pure-`ubagg` consumer (without UDMA underneath, hypothetical) would. Bonding init runs unconditionally on every kernel with `CONFIG_UB_URMA`; the handlers and the user-msg lane are wired but cold-coded for live perftest runs.
+
+**Pinning table:**
+
+| Concept | File:line | Notes |
+|---|---|---|
+| Bonding device name predicate | `ubcore_connect_bonding.h:18-25` | `UBAGG_DEV_PREFIX="bonding_dev"`, `ubcore_is_bonding_dev` inline |
+| Bonding init (register 4 handlers) | `ubcore_connect_bonding.c:688-702` | called from `ubcore_main.c:40` |
+| Caller — import jetty | `ubcore_connect_bonding.c:497-570` | `ubcore_connect_exchange_udata_when_import_jetty` |
+| Caller — import seg (sibling) | `ubcore_connect_bonding.c:422-495` | `ubcore_connect_exchange_udata_when_import_seg` |
+| ue_idx parse from udata | `ubcore_connect_bonding.c:52-84` | `copy_from_user` ue_idx (I/O-die selector) |
+| Find physical leg from agg | `ubcore_connect_bonding.c:181-242` | `ubcore_find_physical_device` |
+| Find aggregate from any eid | `ubcore_connect_bonding.c:244-300` | `ubcore_find_bonding_device` (agg+primary+port match) |
+| Live session helper | `ubcore_connect_bonding.c:302-328` | `create_session_for_exchange_udata` → `ubcore_session_create` |
+| Send REQ + peer EID resolve | `ubcore_connect_bonding.c:376-400` | `send_jetty_info_req` + `ubcore_get_primary_eid_by_agg_eid` @ `topo_info.c:735` |
+| Peer handler (REQ side) | `ubcore_connect_bonding.c:604-634` | `handle_jetty_info_req` → `ubcore_user_control` opcode 6 |
+| Peer handler (RESP side) | `ubcore_connect_bonding.c:678-686` → `:636-668` | wakes `ubcore_session_wait` via `ubcore_session_complete` |
+| Free-form lane (`BONDING_USER_MSG`) | `ubcore_connect_bonding.c:86-179` | mutex-guarded single handler; consumer is `ubagg` |
+| Call sites in `ubcore_jetty.c` | `:1526-1530, :1546, :1650, :2491-2496, :2512, :2622` | bonding/non-bonding gate around vTP-create |
+| Call sites in `ubcore_segment.c` | `:120, :265` | symmetric for import_seg |
+
+**Msg-type identifiers (use these for ftrace anchors when tracing a bonding-only consumer):**
+
+```
+UBCORE_NET_BONDING_SEG_INFO_REQ
+UBCORE_NET_BONDING_SEG_INFO_RESP
+UBCORE_NET_BONDING_JETTY_INFO_REQ
+UBCORE_NET_BONDING_JETTY_INFO_RESP
+UBCORE_NET_BONDING_USER_MSG
+```
+
+The `[EXC_INFO]exchange_jetty_info consumes` / `exchange_seg_info consumes` log strings fire only when `duration > UBCORE_EXC_THRESHOLD_MS` — same threshold pattern as `[EXC_INFO]get_tp_list consumes` from the compat path. Searching dmesg for `EXC_INFO` will surface both planes; the `exchange_*_info` ones indicate this bonding path was taken.
+
+---
+
 ## 5. UBSE syssentry — well-known jetty 999 in production
 
 Path: `/Volumes/KernelDev/ubs-engine/src/adapter_plugins/syssentry/sys_sentry_module.cpp:244-281`.
@@ -805,11 +956,11 @@ These are gaps the trace explicitly **did not** resolve:
 1. ~~`ubcore_send_create_vtp_req` actual wire send.~~ **Resolved in §4.8.** That function is dead code; the live builder is `ubcore_create_async_connect_vtp_req` at `vtp.c:491`, sent via `ubcore_send_req` at `vtp.c:1526` → `dev->ops->send_req` (driver-provided, e.g. UDMA firmware ctrlq).
 2. ~~vTP response demux.~~ **Partially resolved in §4.8 with surprising finding:** `ubcore_wait_connect_vtp_resp_intime` (`vtp.c:332`) has **zero callers** in the entire kernel tree, and `ubcore_recv_resp`/`ubcore_recv_req` (`msg.c:299/305`) are EXPORT_SYMBOL'd no-op stubs. The msg-session response demux is dormant in OLK-6.6. Open follow-up: confirm whether the UDMA driver invokes `ubcore_handle_vtpn_wait_list` directly via a non-intime path on firmware completion.
 3. ~~UAPI ioctl boundary.~~ **Resolved in §4.10.** The original framing conflated two parallel UAPI planes: the URMA app path is char-dev ioctl on `/dev/ub_uburma*` via `uburma_ioctl` (`uburma_cmd.c:4991`) → `g_uburma_cmd_handlers[]` (`uburma_cmd.c:4886`), with `UBURMA_CMD_CREATE_JETTY` → `uburma_cmd_create_jetty` (`uburma_cmd.c:2368`) → `ubcore_create_jetty` (`ubcore_jetty.c:2118`) and `UBURMA_CMD_IMPORT_JFR` → `uburma_cmd_import_jfr` (`uburma_cmd.c:3174`) → `ubcore_import_jfr`. The UVS admin path is a separate **generic netlink** family `ubcore_genl_family` (`ubcore_genl.c:134/169`) consuming `UBCORE_CMD_*`. The `_IOWR('C',1,...)` macro in `ubcore_cmd.h:28` is unused (vestigial).
-4. **Bonding flow specifics.** `ubcore_connect_exchange_udata_when_import_jetty` (called at `ubcore_jetty.c:2491-2496`) implementation is in `ubcore_connect_bonding.c` and was not walked.
+4. ~~Bonding flow specifics.~~ **Resolved in §4.11.** `ubcore_connect_bonding.c` is a parallel control plane that runs only on aggregate devices (`dev_name` starts with `"bonding_dev"`) whose driver registers a **non-compat** `ops->import_jetty`. It exchanges per-leg pinning udata between two aggregate devices over the live `net/ubcore_session` plane (msg types `UBCORE_NET_BONDING_{SEG,JETTY}_INFO_{REQ,RESP}` + free-form `BONDING_USER_MSG`), then the aggregate driver's `ops->import_jetty` materializes the handle without a vTP. The non-bonding `ubcore_connect_vtp` is gated off by `!ubcore_is_bonding_dev(dev)` at `ubcore_jetty.c:2512`. Bonding-side topo lookups are O(node_num × DEV_NUM) (`ubcore_get_primary_eid_by_agg_eid` @ `topo_info.c:735`) — much smaller than the 117k-iter `find_primary_eid_in_ues` scan from UMDK#1, which lives in the **compat** path (mutually exclusive at `ubcore_jetty.c:2488-2489`). The perftest hot path enters compat, not bonding; this file is cold for live perftest runs.
 5. **UBMAD ID 2 use.** Only ID 1 is documented in the existing well-known-jetty doc as carrying link-setup; the role of ID 2 (`UBMAD_WK_JETTY_ID_1`) was not pinned to a specific handler in `ubcm/`. (Partial: the deep-dive doc notes ID 2 is selected for `UBMAD_AUTHN_DATA`; the dispatch code path is still unwalked.)
 6. ~~UDMA driver-side `udma_create_jetty` body.~~ **Resolved in §4.9.** Body walked at `udma_jetty.c:655-678`: `kzalloc → udma_active_jetty_detail → (alloc_jetty_sq → alloc_jetty_id + get_jetty_buf) + (add_xa_and_create_hw_ctx → init_jettyc → post_mailbox_update_ctx → udma_post_mbox sync mailbox)`. Doorbell page mapping is in the user-buffer alloc path (`udma_alloc_u_sq_buf`), not the create-jetty kernel call. **Bonus finding that closes the §4.8 follow-up:** UDMA does NOT register `dev->ops->send_req` at all (`udma_main.c:264-352` ops table). So the entire `ubcore_send_req → dev->ops->send_req` chain null-derefs on UDMA-managed devices; combined with the dormant `_intime` resp handler and no-op `ubcore_recv_resp` stubs, the `ubcore_msg_session` pipeline is structurally inert in OLK-6.6. The live VTP path must be the parallel `net/ubcore_session.c` + CM chain.
 
-Items #1, #2, #3, #6 resolved (2026-05-14). Items #4 (bonding flow) and #5 (UBMAD ID 2 dispatch) remain.
+Items #1, #2, #3, #4, #6 resolved (2026-05-14). Only #5 (UBMAD ID 2 dispatch handler for `UBMAD_AUTHN_DATA`) remains.
 
 ---
 
