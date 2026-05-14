@@ -174,6 +174,7 @@ So, for link setup: **UBCM create/destroy/single connection control messages use
 ### 4.2 Well-known jetty resource creation path
 
 The local well-known jettys are created per `ubcore_device` by UBMAD, not by `urma_perftest`.
+They are also not created by `ubcore_call_cm_send_ops()`: that function only checks whether `g_send` has been registered and then calls it. The actual local well-known jetty objects must already exist before `ubmad_post_send()` can use `dev_priv->jetty_rsrc[0]`.
 
 ```text
 ubcm_init()
@@ -186,6 +187,7 @@ ubcm_init()
 ```
 
 Relevant code:
+- `ubcore_call_cm_send_ops()` only calls registered `g_send`; it has no jetty creation logic, in `kernel/drivers/ub/urma/ubcore/net/ubcore_cm.c:63-72`.
 - `ubcm_init()` calls `ubmad_init()` and registers `ubmad_ubc_send` in `kernel/drivers/ub/urma/ubcore/ubcm/ub_cm.c:334-350`.
 - `ubmad_init()` registers the UBMAD client and EID ops in `kernel/drivers/ub/urma/ubcore/ubcm/ub_mad.c:1272-1287`.
 - `ubcm_add_device()` registers a UBMAD agent with `ubcm_send_handler` / `ubcm_recv_handler` in `kernel/drivers/ub/urma/ubcore/ubcm/ub_cm.c:171-202`.
@@ -212,14 +214,37 @@ ubcore client add callback
                  -> ubmad_post_recv() x UBMAD_JFR_DEPTH
 ```
 
+There are two possible creation timings:
+
+```text
+Case A: device already has EIDs when UBMAD opens it
+  -> ubmad_open_device()
+     -> ubmad_create_device_priv_resources()
+        -> ubcore_get_eid_list() succeeds
+        -> create WK jettys immediately
+
+Case B: device has no EID yet
+  -> ubmad_open_device()
+     -> ubmad_create_device_priv_resources()
+        -> ubcore_get_eid_list() returns none
+        -> no WK jetty resource is created yet
+  -> later UBCORE_MGMT_EVENT_EID_ADD
+     -> ubmad_ubc_eid_ops_inner()
+        -> copy eid_info into dev_priv
+        -> ubmad_create_device_priv_resources()
+        -> create WK jettys then
+```
+
 Important lines:
 - `ubmad_add_device()` -> `ubmad_open_device()` in `ub_mad.c:1237-1248`.
 - `ubmad_open_device()` registers the event handler and calls `ubmad_create_device_priv_resources()` in `ub_mad.c:1113-1132`.
+- `ubmad_create_device_priv_resources()` calls `ubcore_get_eid_list()` and skips creation if no EID exists yet in `ub_mad.c:1013-1035`.
 - If the device had no EID yet, the EID-add path later calls `ubmad_create_device_priv_resources()` from `ubmad_ubc_eid_ops_inner()` in `ub_mad.c:203-239`.
 - `ubmad_create_jetty()` sets `jetty_cfg.id = jetty_id`, `share_jfr = 1`, `trans_mode = UBCORE_TP_UM`, JFC/JFR bindings, and calls `ubcore_create_jetty()` in `ub_mad.c:394-420`.
 - `ubmad_init_jetty_rsrc_array()` assigns IDs 1 and 2, then initializes each resource in `ub_mad.c:947-963`.
 - `ubmad_init_jetty_rsrc()` creates JFC/JFR/jetty/segments and preposts receive WRs in `ub_mad.c:791-868`.
 - `ubmad_post_recv()` posts each receive WQE to the local well-known jetty with `ubcore_post_jetty_recv_wr()` in `ubmad_datapath.c:934-963`.
+- `ubmad_post_send()` fails before selecting `jetty_rsrc[0]` if `dev_priv->valid` is false, so a send through `ubcore_call_cm_send_ops()` depends on prior resource creation in `ubmad_datapath.c:782-793`.
 
 This means the UBCM well-known jetty is already listening before a remote link-setup request arrives.
 
