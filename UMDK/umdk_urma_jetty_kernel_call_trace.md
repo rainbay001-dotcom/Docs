@@ -930,6 +930,91 @@ The `[EXC_INFO]exchange_jetty_info consumes` / `exchange_seg_info consumes` log 
 
 ---
 
+### 4.12 UBMAD well-known jetty ID 2 dispatch — `UBMAD_AUTHN_DATA` is dead-coded in OLK-6.6 (closes §8 item #5)
+
+§4.6 and `umdk_ubmad_wk_jetty_deep_dive.md` both note that UBMAD allocates **two** well-known jetties per device — IDs 1 and 2 (`UBMAD_WK_JETTY_ID_0 = 1U`, `UBMAD_WK_JETTY_ID_1 = 2U` at `ub_mad_priv.h:20-21`; `UBMAD_WK_JETTY_NUM = 2` at `:19`). The init in `ubmad_init_jetty_rsrc_array` (`ub_mad.c:947-960`) walks both slots:
+
+```c
+for (i = 0; i < UBMAD_WK_JETTY_NUM; i++) {
+    rsrc_array[i].jetty_id = g_ubmad_wk_jetty_id[i];   /* 1, then 2 */
+    ret = ubmad_init_jetty_rsrc(&rsrc_array[i], dev_priv);
+}
+```
+
+Both jetties + their JFC/JFR/send_seg/recv_seg/bitmaps physically exist on every UBMAD-enabled device. §8 #5 asked: what dispatches to `jetty_rsrc[1]` (jetty ID 2), and what consumes it on the recv side?
+
+**Send side has exactly one routing entry** — `ubmad_post_send` switch at `ubmad_datapath.c:795-813`:
+
+```c
+switch (send_buf->msg_type) {
+case UBMAD_UBC_CONN_REQ:    rsrc = &dev_priv->jetty_rsrc[0]; break;   /* ID 1 */
+case UBMAD_UBC_CONN_RESP:   rsrc = &dev_priv->jetty_rsrc[0]; break;   /* ID 1 */
+case UBMAD_UBC_SINGLE_REQ:  rsrc = &dev_priv->jetty_rsrc[0]; break;   /* ID 1 */
+case UBMAD_AUTHN_DATA:      rsrc = &dev_priv->jetty_rsrc[1]; break;   /* ID 2 -- ONLY routing */
+default: ret = -EINVAL;
+}
+```
+
+Jetty ID 2 is reserved exclusively for `UBMAD_AUTHN_DATA = 0x10` (`ub_mad.h:26`). All the CM/UBC traffic §4.6 traced through ID 1 is sidestepped here.
+
+**But the live producer rejects `UBMAD_AUTHN_DATA`.** The CM's `g_send` is `ubmad_ubc_send` (registered in `ubcm_init` per §4.8 + the deep-dive doc), defined at `ubmad_datapath.c:1155-1195`:
+
+```c
+if (send_buf->msg_type != UBMAD_UBC_CONN_REQ &&
+    send_buf->msg_type != UBMAD_UBC_CONN_RESP &&
+    send_buf->msg_type != UBMAD_UBC_SINGLE_REQ &&
+    send_buf->msg_type != UBMAD_CLOSE_REQ) {
+    ubcore_log_err("Invalid message type: %u.\n", send_buf->msg_type);
+    return -EINVAL;            /* :1166-1172 -- AUTHN_DATA blocked here */
+}
+```
+
+`UBMAD_AUTHN_DATA` cannot enter `ubmad_post_send` through the CM path. A caller wanting to send AUTHN_DATA would have to invoke `ubmad_post_send` directly with a hand-built `ubmad_send_buf` — and **no such caller exists in the tree**. `grep -rn "UBMAD_AUTHN_DATA" drivers/ub/urma/` returns only the enum at `ub_mad.h:26`, the case label at `ubmad_datapath.c:805`, and the comment at `:733`.
+
+**Recv side has no dispatch.** When a peer's wire packet would arrive on jetty ID 2's JFR, the flow is shaped like ID 1's: `ubmad_jfce_handler_r` (`ubmad_datapath.c:1429`) → `ubmad_jfce_handler(jfc, UBMAD_RECV_WORK)` → `ubmad_jfce_work_handler` → `ubmad_recv_work_handler` (`:1266-1326`). `ubmad_get_jetty_rsrc_by_jfc_r` (`ub_mad.c:1003-1007`) walks `dev_priv->jetty_rsrc[i]` for the matching `jfc_r`, returning the jetty-2 rsrc. The poll runs and the cr is handed to `ubmad_process_msg` at `:1295` — and **that switch is the dead end**:
+
+```c
+/* ubmad_datapath.c:1132-1148 */
+switch (msg->msg_type) {
+case UBMAD_UBC_CONN_REQ:   ret = ubmad_process_conn_data(...); break;
+case UBMAD_UBC_CONN_RESP:  ret = ubmad_process_conn_resp(...); break;
+case UBMAD_UBC_SINGLE_REQ: ret = ubmad_process_conn_single(...); break;
+case UBMAD_CLOSE_REQ:      ubmad_process_close_req(...);        break;
+default:
+    ubcore_log_err("Invalid msg_type: %u.\n", msg->msg_type);
+    ret = -EINVAL;
+}
+```
+
+**No `case UBMAD_AUTHN_DATA`.** An incoming AUTHN_DATA message would fall through to `default` and be dropped with `Invalid msg_type`. `UBMAD_AUTHN_ACK` (`ub_mad.h:27`, the natural reply) has **zero references** anywhere in the kernel tree — not even an enum-case label.
+
+**Conclusion: jetty ID 2 is currently scaffolding without endpoints.** Init creates the resource. The send-side switch has a slot. The CM-level send function explicitly blocks the only msg-type that would route there. The recv-side dispatcher has no case for it. No caller produces AUTHN_DATA. The wiring is consistent with future authentication plumbing (likely tied to UB Base Spec §11 security / token rotation — see `umdk_spec_deep_dive.md` §11.4.4), but in OLK-6.6 it is structurally identical to the dormant `ubcore_msg_session` pipeline §4.8 documented: physically allocated, syntactically reachable, semantically inert.
+
+**This explains the deep-dive doc's hedge.** `umdk_ubmad_wk_jetty_deep_dive.md` noted "ID 2 is selected for `UBMAD_AUTHN_DATA`" without naming a handler. The handler doesn't exist. The selection happens in one place (`:805`) and goes nowhere because no producer reaches that switch label.
+
+**Pinning table:**
+
+| Concept | File:line | Notes |
+|---|---|---|
+| WK jetty count | `ub_mad_priv.h:19` | `UBMAD_WK_JETTY_NUM = 2` |
+| WK jetty IDs (1, 2) | `ub_mad_priv.h:20-21` | `UBMAD_WK_JETTY_ID_0=1U`, `UBMAD_WK_JETTY_ID_1=2U` |
+| ID array | `ub_mad.c:23-28` | `g_ubmad_wk_jetty_id[2] = {1, 2}` |
+| Resource init loop | `ub_mad.c:947-960` | `ubmad_init_jetty_rsrc_array` |
+| Per-rsrc init | `ub_mad.c:792-880` | `ubmad_init_jetty_rsrc` (prepost `UBMAD_JFR_DEPTH` WQEs) |
+| Send-side routing | `ubmad_datapath.c:795-813` | `UBMAD_AUTHN_DATA → jetty_rsrc[1]` (only ref to ID 2 anywhere) |
+| AUTHN_DATA enum | `ub_mad.h:26` | `UBMAD_AUTHN_DATA = 0x10` |
+| AUTHN_ACK enum (unused) | `ub_mad.h:27` | `UBMAD_AUTHN_ACK` — no other refs in tree |
+| CM-level producer (rejects AUTHN) | `ubmad_datapath.c:1155-1195` | `ubmad_ubc_send`, type-check at `:1166-1172` |
+| Recv-side dispatcher (no AUTHN case) | `ubmad_datapath.c:1110-1151` | `ubmad_process_msg`, default = `-EINVAL` |
+| Recv flow entry | `ubmad_datapath.c:1429-1432` | `ubmad_jfce_handler_r` |
+| Recv work handler | `ubmad_datapath.c:1266-1326` | `ubmad_recv_work_handler` |
+| JFC → rsrc mapping (recv) | `ub_mad.c:1003-1007` | `ubmad_get_jetty_rsrc_by_jfc_r` |
+| Comment "for UBMAD_CONN_DATA, UBMAD_AUTHN_DATA" | `ubmad_datapath.c:733` | misleading — only the conn-side actually fires |
+
+The case-label-without-dispatcher pattern is now the third "dormant scaffolding" example in the kernel tree, alongside §4.8 (`ubcore_msg_session` resp-intime path + no-op `recv_resp` stubs) and §4.9 (UDMA `dev->ops->send_req` not registered). Pattern: ubcore is shipping the *shape* of a future capability ahead of producer/consumer wiring. When reading the tree: don't infer activity from the presence of a case label or function symbol.
+
+---
+
 ## 5. UBSE syssentry — well-known jetty 999 in production
 
 Path: `/Volumes/KernelDev/ubs-engine/src/adapter_plugins/syssentry/sys_sentry_module.cpp:244-281`.
@@ -1006,10 +1091,10 @@ These are gaps the trace explicitly **did not** resolve:
 2. ~~vTP response demux.~~ **Partially resolved in §4.8 with surprising finding:** `ubcore_wait_connect_vtp_resp_intime` (`vtp.c:332`) has **zero callers** in the entire kernel tree, and `ubcore_recv_resp`/`ubcore_recv_req` (`msg.c:299/305`) are EXPORT_SYMBOL'd no-op stubs. The msg-session response demux is dormant in OLK-6.6. Open follow-up: confirm whether the UDMA driver invokes `ubcore_handle_vtpn_wait_list` directly via a non-intime path on firmware completion.
 3. ~~UAPI ioctl boundary.~~ **Resolved in §4.10.** The original framing conflated two parallel UAPI planes: the URMA app path is char-dev ioctl on `/dev/ub_uburma*` via `uburma_ioctl` (`uburma_cmd.c:4991`) → `g_uburma_cmd_handlers[]` (`uburma_cmd.c:4886`), with `UBURMA_CMD_CREATE_JETTY` → `uburma_cmd_create_jetty` (`uburma_cmd.c:2368`) → `ubcore_create_jetty` (`ubcore_jetty.c:2118`) and `UBURMA_CMD_IMPORT_JFR` → `uburma_cmd_import_jfr` (`uburma_cmd.c:3174`) → `ubcore_import_jfr`. The UVS admin path is a separate **generic netlink** family `ubcore_genl_family` (`ubcore_genl.c:134/169`) consuming `UBCORE_CMD_*`. The `_IOWR('C',1,...)` macro in `ubcore_cmd.h:28` is unused (vestigial).
 4. ~~Bonding flow specifics.~~ **Resolved in §4.11.** `ubcore_connect_bonding.c` is a parallel control plane that runs only on aggregate devices (`dev_name` starts with `"bonding_dev"`) whose driver registers a **non-compat** `ops->import_jetty`. It exchanges per-leg pinning udata between two aggregate devices over the live `net/ubcore_session` plane (msg types `UBCORE_NET_BONDING_{SEG,JETTY}_INFO_{REQ,RESP}` + free-form `BONDING_USER_MSG`), then the aggregate driver's `ops->import_jetty` materializes the handle without a vTP. The non-bonding `ubcore_connect_vtp` is gated off by `!ubcore_is_bonding_dev(dev)` at `ubcore_jetty.c:2512`. Bonding-side topo lookups are O(node_num × DEV_NUM) (`ubcore_get_primary_eid_by_agg_eid` @ `topo_info.c:735`) — much smaller than the 117k-iter `find_primary_eid_in_ues` scan from UMDK#1, which lives in the **compat** path (mutually exclusive at `ubcore_jetty.c:2488-2489`). The perftest hot path enters compat, not bonding; this file is cold for live perftest runs.
-5. **UBMAD ID 2 use.** Only ID 1 is documented in the existing well-known-jetty doc as carrying link-setup; the role of ID 2 (`UBMAD_WK_JETTY_ID_1`) was not pinned to a specific handler in `ubcm/`. (Partial: the deep-dive doc notes ID 2 is selected for `UBMAD_AUTHN_DATA`; the dispatch code path is still unwalked.)
+5. ~~UBMAD ID 2 use.~~ **Resolved in §4.12.** Jetty ID 2 (`jetty_rsrc[1]`) is currently dead-coded in OLK-6.6. Only routing: `case UBMAD_AUTHN_DATA → jetty_rsrc[1]` in `ubmad_post_send` at `ubmad_datapath.c:805`. But the CM's `ubmad_ubc_send` (`:1166-1172`) rejects `UBMAD_AUTHN_DATA` — so no caller reaches that switch label. The recv-side `ubmad_process_msg` (`:1132-1148`) has no `case UBMAD_AUTHN_DATA` — incoming traffic would be dropped as `Invalid msg_type`. `UBMAD_AUTHN_ACK` has zero references in the tree. Same dormant-scaffolding pattern as §4.8 and §4.9. Plumbing without endpoints — likely future authentication wiring tied to UB Base Spec §11 security.
 6. ~~UDMA driver-side `udma_create_jetty` body.~~ **Resolved in §4.9.** Body walked at `udma_jetty.c:655-678`: `kzalloc → udma_active_jetty_detail → (alloc_jetty_sq → alloc_jetty_id + get_jetty_buf) + (add_xa_and_create_hw_ctx → init_jettyc → post_mailbox_update_ctx → udma_post_mbox sync mailbox)`. Doorbell page mapping is in the user-buffer alloc path (`udma_alloc_u_sq_buf`), not the create-jetty kernel call. **Bonus finding that closes the §4.8 follow-up:** UDMA does NOT register `dev->ops->send_req` at all (`udma_main.c:264-352` ops table). So the entire `ubcore_send_req → dev->ops->send_req` chain null-derefs on UDMA-managed devices; combined with the dormant `_intime` resp handler and no-op `ubcore_recv_resp` stubs, the `ubcore_msg_session` pipeline is structurally inert in OLK-6.6. The live VTP path must be the parallel `net/ubcore_session.c` + CM chain.
 
-Items #1, #2, #3, #4, #6 resolved (2026-05-14). Only #5 (UBMAD ID 2 dispatch handler for `UBMAD_AUTHN_DATA`) remains.
+All six items resolved (2026-05-14).
 
 ---
 
