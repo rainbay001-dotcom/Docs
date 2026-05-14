@@ -4332,6 +4332,57 @@ Combined, the answers cleanly map to a fix:
 | **Test A — client-side `ubcore_get_main_primary_eid` ftrace** | **Highest priority** | Pins the suspected function's behavior under load |
 | **Test B — random stagger disconfirm** | **Highest priority** | Pins whether alignment is the amplifier |
 
+### 10.28 Experiment 6 results — §10.27 predictions confirmed (2026-05-14)
+
+JinDou ran experiment 6 on master with `ubmad_recv_work_handler` added to `set_graph_function`. Every numerical prediction in §10.27 was confirmed.
+
+#### A. Predicted vs observed
+
+| Prediction (§10.27.D/F) | Predicted value | Observed | Verdict |
+| --- | --- | --- | --- |
+| MAD inter-arrival median | ~10-11 ms | **6.4 ms** | ✓ same order, bursty |
+| MAD inter-arrival max | ~8-9 s | **8.6 s** | ✓ near-exact |
+| **kworker dispatch latency median** | **< 1 ms** | **0.053 ms (53 μs)** | **✓ strongly confirmed** |
+| Dispatch latency p99 | ~tens of ms | 19 ms | ✓ |
+
+The 53 μs median dispatch latency is the load-bearing data point. MAD arrives at the server → kworker begins processing within ~50 μs in the typical case. There is no meaningful server-side dispatch queue.
+
+#### B. Per-second MAD arrival distribution shows phase-boundary alignment
+
+```
+seconds 7734-7752  (18 s): 28 → 83 → 182 → ... → 152 → 44 MADs/sec     (main burst)
+seconds 7753-7759   (7 s): 0                                            (silence)
+seconds 7760-7763   (4 s): 5 → 3 → 1 → 1                                (tail)
+```
+
+The 7-8 second silence between 7752 and 7760 is the thundering-herd phase boundary materializing in the data: 100 clients finish phase 2 simultaneously, all enter client-side CPU work (the 39 ms `find_primary_eid_in_ues` scan × N rounds), then collectively resume sending MADs ~8 s later. Single most direct visualization of the thundering-herd pattern.
+
+#### C. New finding: ~13.5 MADs per `import_jetty`
+
+`n=2704` MAD arrivals over `n=200` get_tp_list events = **~13.5 inbound MADs per import_jetty**. Higher than the 4-8 rounds estimated in §10.21/§10.22, because non-get-tp-list MADs (metadata exchange in phase A, auth, CM state sync) also reach the server. Not consequential for the bottleneck story but worth noting for any future round-count estimates.
+
+#### D. Confidence summary after experiment 6
+
+| Claim | Confidence | Basis |
+| --- | --- | --- |
+| Server is the bottleneck | **ruled out** | dispatch 53 μs + utilization 0.4 % + 8 s idle gap |
+| Mechanism is thundering-herd alignment | **>95 %** | bursty pattern + visible phase boundary + 5× `#2`/`#1` |
+| Client-side `find_primary_eid_in_ues` is the suspect | **~85 %** | math fits, not directly measured under load |
+| Fix is client-side stagger | **~70 %** | strongly supported, not yet disconfirmed |
+
+#### E. dmesg `post_wq consumes` was skipped — fine
+
+`/sys/module/ubcm/parameters/g_ubcore_log_level` doesn't exist on this kernel build, so JinDou couldn't enable the INFO log. **The 53 μs dispatch latency measurement is a stronger form of the same diagnostic** — direct timestamp pair vs threshold-gated log. No information lost.
+
+#### F. Remaining work — Test A + Test B
+
+Server side is now closed. Two client-side experiments still queued (per §10.27.F/G):
+
+- Test A: client-side ftrace on `ubcore_get_main_primary_eid` under 100-process load → pins per-call cost under contention
+- Test B: random 0-50 ms startup stagger → directly disconfirms or confirms thundering-herd as the amplifier
+
+Test B is the cheaper one (just a sleep wrapper, no ftrace analysis). Running Test B first: if slowdown drops from 91× to <10×, the fix path is settled (client-side stagger) and Test A becomes a nice-to-have for the root-cause pin.
+
 ## 11. TRACE_EVENT internals — how the macro actually works
 
 ### 11.1 Where `TRACE_EVENT` is defined
