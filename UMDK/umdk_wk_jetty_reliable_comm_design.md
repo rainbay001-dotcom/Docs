@@ -1,7 +1,7 @@
 # 公知Jetty可靠通信设计文档（三次握手 / 四次挥手）
 
 _面向读者：对 UMDK/URMA/UBMAD 代码零基础的新开发者。_
-_文档版本：v3.9（修正 v3.7-3.8 残留：release_session 内 cancel-sync 自死锁；find_by_* 用 kref_get_unless_zero 防复活）_
+_文档版本：v3.10（同步散落在 prose/§16 表里的 v3.9 描述：release 不再 cancel；tw_handler put 的是 timer ref；find_by_id 用 kref_get_unless_zero）_
 _最后更新：2026-05-14_
 
 ---
@@ -896,9 +896,12 @@ struct ubmad_wk_session *ubmad_session_find_by_peer(
  * 此函数由 kref_put() 在引用计数降为 0 时自动调用。
  * 不要直接调用！
  *
- * 释放流程：
+ * 释放流程（v3.9 起）：
  *   1. 从哈希表移除（防止再被查到）
- *   2. 取消仍在排队的重传 / TIME_WAIT 定时器
+ *   2. **不再** cancel_delayed_work_sync 任何定时器——v3.4 加进去的"保险措施"
+ *      在 handler 末尾的最后那次 put 触发本函数时会自死锁（详见步骤 2 注释）。
+ *      Invariant 保证此处没有 pending 的 work（每个 queue 有配对 kref_get；
+ *      kref==0 即没有 timer 持有 ref）。
  *   3. 释放对 remote_tjetty 的引用
  *   4. 归还 session_id 到 IDA
  *   5. kfree session 对象
@@ -2155,8 +2158,10 @@ static void ubmad_wk_syn_rt_work_handler(struct work_struct *work)
  *     FIN_ACK 但还没看到对端发自己的 FIN；如果对端永远不发，超时后放弃。
  *     这个 keep-alive 同时也是 FIN_WAIT_2 期间唯一的 session 持有者。
  *
- * 两种状态的处理逻辑都是"迁到 CLOSED → put 哈希表持有的 ref"，所以本
- * handler 不需要按状态分支，只在日志里区分原因即可。
+ * 两种状态的处理逻辑都是"迁到 CLOSED → 释放本 timer 入队前 kref_get
+ * 拿的那一份 ref"（哈希表本身不计 ref，§7.4），所以本 handler 不需要
+ * 按状态分支，只在日志里区分原因即可。这一 put 通常是最后一份 ref，
+ * 会触发 ubmad_release_session。
  *
  * 为什么需要 TIME_WAIT？
  *   最后一个 FIN_ACK 可能因网络丢失导致对端重传 FIN。
@@ -2630,7 +2635,7 @@ nm drivers/ub/urma/ubcore/ubcore.ko | grep ubmad_wk_  # 期望：列出所有握
 | 1 | `ubmad_wk_connect()` | `ubmad_datapath.c` | 客户端发起三次握手，阻塞等待连接完成（最多 5 秒）|
 | 2 | `ubmad_wk_listen()` | `ubmad_datapath.c` | 服务端注册监听，接受握手请求 |
 | 3 | `ubmad_alloc_session()` | `ubmad_session.c` | 分配会话对象，初始化字段，插入全局哈希表 |
-| 4 | `ubmad_release_session()` | `ubmad_session.c` | kref 归零时的最终释放：撤销定时器、释放 tjetty、归还 ID、kfree |
+| 4 | `ubmad_release_session()` | `ubmad_session.c` | kref 归零时的最终释放：hash_del → 释放 tjetty → 归还 session_id → kfree。**v3.9 起不再 cancel_delayed_work_sync**（会自死锁；invariant 保证此时无 pending work） |
 | 5 | `ubmad_gen_isn()` | `ubmad_session.c` | 用 `get_random_u32()` 生成非零 ISN，防会话劫持 |
 | 6 | `ubmad_post_send_wk()` | `ubmad_datapath.c` | 底层握手消息发送：分配 SGE、填头、构造 WR、投递硬件 |
 | 7 | `ubmad_process_wk_syn()` | `ubmad_datapath.c` | 服务端收到 SYN：幂等创建 session → 发 SYN_ACK → 启重传定时器 |
@@ -2640,8 +2645,8 @@ nm drivers/ub/urma/ubcore/ubcore.ko | grep ubmad_wk_  # 期望：列出所有握
 | 11 | `ubmad_process_wk_fin()` | `ubmad_datapath.c` | 收到 FIN：发 FIN_ACK → 迁移状态 → 回调上层 |
 | 12 | `ubmad_process_wk_fin_ack()` | `ubmad_datapath.c` | 收到 FIN_ACK：推进关闭状态机（FIN_WAIT_1→2 或 LAST_ACK→CLOSED）|
 | 13 | `ubmad_wk_syn_rt_work_handler()` | `ubmad_datapath.c` | SYN/SYN_ACK 重传工作：指数退避，超限则通知失败 |
-| 14 | `ubmad_wk_time_wait_handler()` | `ubmad_datapath.c` | **TIME_WAIT / FIN_WAIT_2** 共用的超时 handler（v3.7 起复用）：到期把 session 置 CLOSED 并 put 哈希 ref。两种触发原因日志区分：TIME_WAIT 是正常清理；FIN_WAIT_2 是对端没在 30s 内发 FIN，强制关闭 |
-| 15 | `ubmad_session_find_by_id()` | `ubmad_session.c` | 哈希表查找 session：持锁、kref_get 后返回，调用者负责 put |
+| 14 | `ubmad_wk_time_wait_handler()` | `ubmad_datapath.c` | **TIME_WAIT / FIN_WAIT_2** 共用的超时 handler（v3.7 起复用）：到期把 session 置 CLOSED 并 put 自己（timer ref，§7.4 哈希表不计 ref）；通常是最后一份 ref，会触发 release_session。两种触发原因日志区分：TIME_WAIT 是正常清理；FIN_WAIT_2 是对端没在 30s 内发 FIN，强制关闭 |
+| 15 | `ubmad_session_find_by_id()` | `ubmad_session.c` | 哈希表查找 session：持锁、**`kref_get_unless_zero`** 后返回（v3.9 起防复活 ref==0 的将释放对象），调用者负责 put |
 | 16 | `ubmad_session_init_global()` | `ubmad_session.c` | 初始化全局哈希表和 IDA，在 ubmad_init() 中调用 |
 
 ---
@@ -2973,3 +2978,13 @@ _v3.9 修订（2026-05-14）相对 v3.8 的主要变化_：
 到 v3.9 为止，所有已知的 ref-counting / timer / state 交互问题都被显式处理：close-consume 语义清晰；FW2 keep-alive 与 TIME_WAIT 复用但 race 已关；find_by_* 防复活；release 不会自死锁。代码示例应当能在生产质量的标准下编译并跑通完整生命周期。
 
 剩余风险维持：实际编译运行验证 + §18 设计问题。
+
+_v3.10 修订（2026-05-14）相对 v3.9 的纯 prose 同步_：
+
+第九轮 reviewer 没找出任何代码问题——v3.9 已经 production-ready。但 v3.9 的代码改动没有完整传播到几处 prose 描述：
+
+- §3.9 `ubmad_release_session()` 函数注释里"释放流程"小节还说"步骤 2：取消仍在排队的重传 / TIME_WAIT 定时器"——v3.9 已经删除了这步。改写成 v3.9 的 invariant 解释。
+- §7.3 `ubmad_wk_time_wait_handler()` 函数注释里"两种状态的处理逻辑都是「迁到 CLOSED → put 哈希表持有的 ref」"——错的，put 的是 timer ref（哈希表本身不计 ref，§7.4）。
+- §16 函数表三项过期：第 4（release）的 "撤销定时器"、第 14（tw_handler）的 "put 哈希 ref"、第 15（find_by_id）的 "kref_get"。全部更新到 v3.9 的实际行为。
+
+无代码改动；纯文档同步。
