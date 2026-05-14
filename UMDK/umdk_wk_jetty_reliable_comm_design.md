@@ -1,7 +1,7 @@
 # 公知Jetty可靠通信设计文档（三次握手 / 四次挥手）
 
 _面向读者：对 UMDK/URMA/UBMAD 代码零基础的新开发者。_
-_文档版本：v3.1（设计说明 + 开发步骤；多实体可靠通道动机澄清）_
+_文档版本：v3.2（修正 7 项实现 bug：会话 ID 协议、listen NULL 解引用、kref 配对、JFS WR 字段、FIN 重传、tjetty 缓存、构建路径）_
 _最后更新：2026-05-14_
 
 ---
@@ -145,7 +145,7 @@ URMA 内核已有一个名为 `ubcore_session` 的抽象，定义在 `kernel/dri
 |------|------|------|
 | 握手消息底层发送 | `ubcore_post_jetty_send_wr` 直接投递，不走 MSN | §0.2 |
 | 握手消息复用的 jetty | `jetty_rsrc[0]`（WK Jetty ID 1） | 与 UBCM CONN_REQ 共用，已有完整收发设施 |
-| 会话标识 | `session_id`（32 位，IDA 分配），放入 `ubmad_wk_hdr` | 不依赖消息序到达顺序，不依赖 MSN |
+| 会话标识 | 双向 `(local_session_id, peer_session_id)`，每端独立从 IDA 分配 16 位 ID（v3.2 修订）| 类比 TCP `(src_port, dst_port)`：发送方填本端 ID 到 local，对端 ID 到 peer；接收方按 peer_session_id（即收方自己的 ID）查找 session。原 v3 单字段设计有协议缺陷（详见 §18.0 之上的 v3.2 修订说明）|
 | 重传策略 | 指数退避 `2 << rt_cnt` ms，上限 1000ms，最多 11 次 | 与 UBMAD MSN 上限对齐 |
 | TIME_WAIT 时长 | 4000ms | §0.3：与 MSN 最大重传窗口对齐，**不是** TCP 2×MSL |
 | listen 数量 | 每设备一个（`dev_priv->listen_session`） | v1 限制；v2 改链表，见 [§18](#18-未决设计问题) |
@@ -418,13 +418,26 @@ enum ubmad_wk_session_state {
 /* ============================================================
  * 握手消息头
  * 内嵌在 ubmad_msg.payload[] 最开始处
+ *
+ * v3.2 修订：原 single session_id 设计有协议缺陷——服务端处理 SYN 时会
+ * 分配新的 session_id 并放入 SYN_ACK，但客户端会按自己分配的 ID 查找
+ * session 对象，对不上，握手永远完不成。
+ *
+ * v3.2 改用 (local_session_id, peer_session_id) 双 ID 携带——类比 TCP
+ * 报文头中的 (source_port, dest_port)：
+ *   - 发送方填 local_session_id = 自己的 session_id
+ *   - 发送方填 peer_session_id = 已知的对端 session_id（初始 SYN 时为 0）
+ *   - 接收方按 peer_session_id（即收方自己的 session_id）查找 session
+ * 详细推导见 §0.5「会话 ID 协议」。
  * ============================================================ */
 struct ubmad_wk_hdr {
-    uint32_t  isn;        /* Initial Sequence Number（本端） */
-    uint32_t  ack;        /* 对端 ISN + 1（三次握手 ACK / 挥手 FIN_ACK 中使用） */
-    uint16_t  session_id; /* 会话 ID，用于在接收方查找 session 对象 */
-    uint8_t   flags;      /* 预留扩展标志位 */
-    uint8_t   reserved;
+    uint32_t  isn;               /* Initial Sequence Number（本端） */
+    uint32_t  ack;               /* 对端 ISN + 1（ACK / FIN_ACK 中使用） */
+    uint16_t  local_session_id;  /* 发送方自己的 session_id */
+    uint16_t  peer_session_id;   /* 发送方已知的接收方 session_id；
+                                    初始 SYN 时为 0（尚不知道对方 ID） */
+    uint8_t   flags;             /* 预留扩展标志位 */
+    uint8_t   reserved[3];
 } __packed;
 
 /* session_id 的哈希表桶数（2 的幂） */
@@ -453,8 +466,14 @@ struct ubmad_wk_session {
     /* 生命周期引用计数 */
     struct kref             kref;
 
-    /* 本次连接唯一标识（分配时从 ida 取得） */
+    /* 本次连接本端的唯一标识（分配时从 ida 取得） */
     uint16_t                session_id;
+
+    /* 对端的 session_id（v3.2 新增）。
+     * 客户端：在 SYN_ACK 处理中从 wk_hdr->local_session_id 学到。
+     * 服务端：在 SYN 处理中从 wk_hdr->local_session_id 学到。
+     * 0 表示尚未学到（仅 SYN_SENT 早期状态）。 */
+    uint16_t                remote_session_id;
 
     /* 当前状态机状态 */
     enum ubmad_wk_session_state state;
@@ -735,9 +754,16 @@ struct ubmad_wk_session *ubmad_alloc_session(
 
     /* 步骤 3：初始化字段 */
     session->session_id  = (uint16_t)id;
+    session->remote_session_id = 0;     /* 握手中再学习；v3.2 新增 */
     session->state       = UBMAD_WK_CLOSED;
     session->dev_priv    = dev_priv;
-    session->remote_eid  = *remote_eid;
+    /* v3.2 修订：LISTEN session 不绑定特定对端，remote_eid 允许 NULL。
+     * 原 v3 写法 session->remote_eid = *remote_eid 在 ubmad_wk_listen()
+     * 调用 ubmad_alloc_session(dev_priv, NULL) 时会 NULL 解引用。 */
+    if (remote_eid)
+        session->remote_eid = *remote_eid;
+    else
+        memset(&session->remote_eid, 0, sizeof(session->remote_eid));
     session->rt_wq       = dev_priv->rt_wq;   /* 复用设备级重传队列 */
 
     kref_init(&session->kref);                /* 引用计数初始化为 1 */
@@ -872,19 +898,32 @@ pr_debug("ubmad: alloc session id=%u remote_eid=%pI6\n",
  * ubmad_post_send_wk - 发送一条公知 Jetty 握手消息
  *
  * @dev_priv:    设备私有对象
- * @session:     当前会话（提供 remote_eid、session_id 等信息）
+ * @session:     当前会话（提供 remote_eid、session_id、remote_session_id 等）
  * @msg_type:    要发送的握手消息类型（SYN / SYN_ACK / ACK / FIN / FIN_ACK）
- * @isn:         本端 ISN（SYN 和 SYN_ACK 中填入；ACK/FIN_ACK 中填 0）
+ * @isn:         本端 ISN（SYN 和 SYN_ACK 中填入；ACK/FIN/FIN_ACK 中填 0）
  * @ack:         确认号（SYN_ACK 填 remote_isn+1；ACK 填 remote_isn+1；SYN 填 0）
  *
- * 实现原理：
- *   1. 从 send_seg_bitmap 分配一个 SGE 槽位
- *   2. 在 SGE 指向的内存中写入 ubmad_msg 头 + ubmad_wk_hdr
- *   3. 构造 ubcore_jfs_wr，opcode=UBCORE_OPC_SEND，tjetty=对端 WK tjetty
- *   4. 调用 ubcore_post_jetty_send_wr() 投递到硬件发送队列
- *   5. 如果是 SYN 或 SYN_ACK，调用者负责启动重传定时器（Step 7）
+ * 关键实现要点（v3.2 修订）：
+ *   - 不复用 ubmad_post_send()。后者走 MSN+重传，握手层有自己的会话级
+ *     重传，叠加 MSN 会冲突（详见 §0.2）。
+ *   - 直接以 ubmad_datapath.c:680-720 的方式手工构造 jfs_wr：使用栈上
+ *     struct ubcore_sge sge，jfs_wr.send.src.sge = &sge，并用
+ *     jfs_wr.flag.bs.complete_enable（位域，不是 wr.complete_enable）。
+ *   - SGE 内存来自 rsrc->send_seg；调用 ubmad_alloc_send_sge() 取到 addr
+ *     和 idx（注意：实际 UBMAD 现有 ubmad_post_send() 用的是 ubmad_alloc_sge
+ *     + ubmad_prepare_msg；本设计可以直接复用同一组辅助函数，避免引入
+ *     ubmad_get_send_sge_addr() 这种不存在的 API）。
  *
- * 返回 0 表示成功，负数表示错误码。
+ * tjetty 处理（v3.2 修订）：
+ *   ubmad_get_tjetty() 是纯缓存查找（ub_mad.c:441），不会触发异步导入。
+ *   导入是在 ubmad_post_send() → ubmad_jetty_work_handler() →
+ *   ubmad_import_jetty_compat()（ub_mad.c:575）这条路径中通过
+ *   dev_priv->conn_wq 异步完成的。本设计在 cache miss 时返回 -EAGAIN
+ *   让上层用会话级 rt_work 重试；首次重试前应主动触发一次
+ *   ubmad_queue_import_work(dev_priv, &session->remote_eid, rsrc)。
+ *
+ * 返回 0 表示成功，-EAGAIN 表示 tjetty 尚未就绪（应稍后重试），
+ * 其他负数表示永久错误。
  */
 static int ubmad_post_send_wk(struct ubmad_device_priv *dev_priv,
                                struct ubmad_wk_session *session,
@@ -895,55 +934,61 @@ static int ubmad_post_send_wk(struct ubmad_device_priv *dev_priv,
     struct ubmad_tjetty *tjetty;
     struct ubmad_msg *msg;
     struct ubmad_wk_hdr *wk_hdr;
-    struct ubcore_jfs_wr wr = {};
+    struct ubcore_jfs_wr jfs_wr = {};
     struct ubcore_jfs_wr *bad_wr;
+    struct ubcore_sge sge;
+    void *sge_addr;
     int sge_idx, ret;
 
-    /* 步骤 1：获取对端 WK tjetty（先从缓存取，缓存未命中时触发导入） */
+    /* 步骤 1：纯缓存查 tjetty（v3.2：不再期待 cache miss 触发导入） */
     tjetty = ubmad_get_tjetty(&session->remote_eid, rsrc);
     if (!tjetty) {
-        /* 触发异步导入，调用者需重试（或等待 conn_wq 完成后再调用） */
-        pr_warn("ubmad_wk: tjetty not ready for eid=%pI6\n",
-                session->remote_eid.raw);
+        /* 触发异步导入；本次直接返回 -EAGAIN 由会话层重试 */
+        ubmad_queue_import_work(dev_priv, &session->remote_eid, rsrc);
+        pr_debug("ubmad_wk: tjetty not cached, queued import for eid=%pI6\n",
+                 session->remote_eid.raw);
         return -EAGAIN;
     }
 
-    /* 步骤 2：从 send_seg_bitmap 分配 SGE 槽位 */
-    sge_idx = ubmad_bitmap_get_id(rsrc->send_seg_bitmap);
+    /* 步骤 2：从 send_seg_bitmap 分配 SGE 槽位（复用 UBMAD 现有 API） */
+    sge_idx = ubmad_alloc_sge(rsrc, &sge_addr);
     if (sge_idx < 0) {
         ubmad_put_tjetty(tjetty);
-        return -EBUSY;
+        return sge_idx;
     }
 
     /* 步骤 3：构造 ubmad_msg 头 + ubmad_wk_hdr */
-    msg = (struct ubmad_msg *)ubmad_get_send_sge_addr(rsrc, sge_idx);
+    msg = (struct ubmad_msg *)sge_addr;
     msg->version     = UBMAD_MSG_VERSION_0;
     msg->msg_type    = msg_type;
-    msg->msn         = session->session_id;   /* 复用 msn 字段传递 session_id */
+    msg->msn         = session->session_id;   /* msn 字段同时承载 session_id 用于日志 */
     msg->payload_len = sizeof(struct ubmad_wk_hdr);
     msg->reserved    = 0;
 
     wk_hdr = (struct ubmad_wk_hdr *)msg->payload;
-    wk_hdr->isn        = isn;
-    wk_hdr->ack        = ack;
-    wk_hdr->session_id = session->session_id;
-    wk_hdr->flags      = 0;
-    wk_hdr->reserved   = 0;
+    wk_hdr->isn               = isn;
+    wk_hdr->ack               = ack;
+    wk_hdr->local_session_id  = session->session_id;
+    wk_hdr->peer_session_id   = session->remote_session_id; /* 0 if SYN before peer learned */
+    wk_hdr->flags             = 0;
+    memset(wk_hdr->reserved, 0, sizeof(wk_hdr->reserved));
 
-    /* 步骤 4：构造发送 WR */
-    wr.opcode          = UBCORE_OPC_SEND;
-    wr.tjetty          = tjetty->tjetty;
-    wr.complete_enable = 1;
-    wr.user_ctx        = (uintptr_t)ubmad_get_send_sge_addr(rsrc, sge_idx);
-    wr.src.sge[0].addr = (uintptr_t)msg;
-    wr.src.sge[0].len  = sizeof(*msg) + msg->payload_len;
-    wr.src.sge[0].key  = rsrc->send_seg->token_id;
-    wr.src.num_sge     = 1;
+    /* 步骤 4：构造发送 WR（v3.2 修订：与 ubmad_datapath.c:680-720 对齐） */
+    jfs_wr.opcode               = UBCORE_OPC_SEND;
+    jfs_wr.tjetty               = tjetty->tjetty;
+    jfs_wr.user_ctx             = (uintptr_t)sge_addr;
+    jfs_wr.flag.bs.complete_enable = 1;             /* 位域，不是 wr.complete_enable */
+
+    sge.addr  = (uintptr_t)sge_addr;
+    sge.len   = sizeof(*msg) + msg->payload_len;
+    sge.tseg  = rsrc->send_seg;
+    jfs_wr.send.src.sge     = &sge;                 /* 指针赋值，不是数组 */
+    jfs_wr.send.src.num_sge = 1;
 
     /* 步骤 5：投递到硬件发送队列 */
-    ret = ubcore_post_jetty_send_wr(rsrc->jetty, &wr, &bad_wr);
+    ret = ubcore_post_jetty_send_wr(rsrc->jetty, &jfs_wr, &bad_wr);
     if (ret) {
-        ubmad_bitmap_put_id(rsrc->send_seg_bitmap, sge_idx);
+        ubmad_free_sge(rsrc, sge_idx);
         pr_err("ubmad_wk: post send failed type=%d ret=%d\n", msg_type, ret);
     }
 
@@ -1021,8 +1066,10 @@ int ubmad_wk_connect(struct ubmad_device_priv *dev_priv,
         return ret;
     }
 
-    /* 步骤 6：启动 SYN 重传定时器（2ms，指数退避，详见 Step 7） */
+    /* 步骤 6：启动 SYN 重传定时器（2ms，指数退避，详见 Step 7）
+     * v3.2：必须先 kref_get（见 §7.4），定时器路径才能在末尾 put 释放。 */
     session->rt_cnt = 0;
+    kref_get(&session->kref);
     queue_delayed_work(session->rt_wq, &session->rt_work,
                        msecs_to_jiffies(2));
 
@@ -1195,12 +1242,13 @@ case UBMAD_WK_FIN_ACK:
 /**
  * ubmad_process_wk_syn - 服务端处理 SYN，发送 SYN_ACK
  *
- * 状态迁移：LISTEN → SYN_RCVD
+ * v3.2 修订要点：
+ *   - 不再用 wk_hdr->session_id（已无此字段）。
+ *   - 初始 SYN 的 wk_hdr->peer_session_id == 0（客户端不知道服务端 ID）。
+ *   - 幂等检查不能按 ID 查（服务端没分配过 ID 给这个 connection），改按
+ *     (remote_eid, wk_hdr->local_session_id) 二元组查找。
  *
- * 幂等处理（防止重传 SYN 导致重复创建 session）：
- *   1. 先查找是否已有 session_id 对应的 session
- *   2. 如果已存在且状态为 SYN_RCVD，直接重发 SYN_ACK（不重新分配）
- *   3. 如果不存在，从 listen_session 模板创建新 session
+ * 状态迁移：LISTEN → SYN_RCVD
  */
 static void ubmad_process_wk_syn(struct ubmad_msg *msg,
                                   struct ubcore_cr *cr,
@@ -1214,13 +1262,18 @@ static void ubmad_process_wk_syn(struct ubmad_msg *msg,
     /* 获取客户端 EID（从接收完成记录中读取） */
     client_eid = cr->remote_id.eid;
 
-    /* 步骤 1：幂等检查——查找已有 session */
-    session = ubmad_session_find_by_id(dev_priv, wk_hdr->session_id);
+    /* 步骤 1：幂等检查——按 (client_eid, client_session_id) 查找。
+     * v3.2：不能按 wk_hdr->local_session_id 直接查本地哈希——那是
+     * 客户端的 ID，落到本地表大概率不命中（即使命中也是别的连接）。
+     * 用专用辅助函数 ubmad_session_find_by_peer() 在哈希表中
+     * 按 (remote_eid, remote_session_id) 二元组匹配。 */
+    session = ubmad_session_find_by_peer(dev_priv, &client_eid,
+                                          wk_hdr->local_session_id);
     if (session) {
-        /* 如果已在 SYN_RCVD 状态，重发 SYN_ACK */
+        /* 已在 SYN_RCVD 状态，重发 SYN_ACK */
         if (session->state == UBMAD_WK_SYN_RCVD) {
-            pr_debug("ubmad_wk: retransmit SYN_ACK for session=%u\n",
-                     session->session_id);
+            pr_debug("ubmad_wk: retransmit SYN_ACK for session=%u (peer=%u)\n",
+                     session->session_id, session->remote_session_id);
             ubmad_post_send_wk(dev_priv, session,
                                 UBMAD_WK_SYN_ACK,
                                 session->local_isn,
@@ -1249,9 +1302,10 @@ static void ubmad_process_wk_syn(struct ubmad_msg *msg,
     session->on_closed      = dev_priv->listen_session->on_closed;
     session->cb_ctx         = dev_priv->listen_session->cb_ctx;
 
-    /* 步骤 4：记录对端信息 */
-    session->remote_isn = wk_hdr->isn;
-    session->local_isn  = ubmad_gen_isn();
+    /* 步骤 4：记录对端信息（v3.2：包括对端的 session_id） */
+    session->remote_isn         = wk_hdr->isn;
+    session->local_isn          = ubmad_gen_isn();
+    session->remote_session_id  = wk_hdr->local_session_id; /* ★ 学到对端 ID */
 
     /* 步骤 5：状态迁移到 SYN_RCVD */
     spin_lock(&session->lock);
@@ -1260,7 +1314,9 @@ static void ubmad_process_wk_syn(struct ubmad_msg *msg,
 
     /* 步骤 6：发送 SYN_ACK
      *   isn = local_isn（本端 ISN）
-     *   ack = remote_isn + 1（确认对端的 ISN） */
+     *   ack = remote_isn + 1（确认对端的 ISN）
+     *   v3.2：post_send_wk 自动从 session->remote_session_id 填 wk_hdr 的
+     *   peer_session_id 字段，让客户端能按自己的 ID 查找 session。 */
     ret = ubmad_post_send_wk(dev_priv, session,
                               UBMAD_WK_SYN_ACK,
                               session->local_isn,
@@ -1271,8 +1327,10 @@ static void ubmad_process_wk_syn(struct ubmad_msg *msg,
         return;
     }
 
-    /* 步骤 7：启动 SYN_ACK 重传定时器（2ms，指数退避） */
+    /* 步骤 7：启动 SYN_ACK 重传定时器（2ms，指数退避）
+     * v3.2：必须先 kref_get（见 §7.4）；否则 work 执行 put 时会跌破 0。 */
     session->rt_cnt = 0;
+    kref_get(&session->kref);
     queue_delayed_work(session->rt_wq, &session->rt_work,
                        msecs_to_jiffies(2));
 
@@ -1288,14 +1346,14 @@ static void ubmad_process_wk_syn(struct ubmad_msg *msg,
 /**
  * ubmad_process_wk_syn_ack - 客户端处理 SYN_ACK，发送 ACK
  *
- * 状态迁移：SYN_SENT → ESTABLISHED
+ * v3.2 修订要点：
+ *   - 按 wk_hdr->peer_session_id（即客户端自己的 session_id）查找 session。
+ *     这与 v3 的 wk_hdr->session_id 不同——v3 那里查的是服务端的 ID，
+ *     落到客户端的哈希表必然不命中。
+ *   - 顺便从 wk_hdr->local_session_id 学到服务端的 session_id，存入
+ *     session->remote_session_id 供后续 ACK/FIN/FIN_ACK 使用。
  *
- * 关键操作：
- *   1. 找到对应 session（通过 wk_hdr->session_id）
- *   2. 验证状态为 SYN_SENT 且 ack 字段正确（ack == local_isn + 1）
- *   3. 取消 SYN 重传定时器
- *   4. 发送 ACK（第三次握手）
- *   5. 迁移到 ESTABLISHED 并唤醒 ubmad_wk_connect() 调用者
+ * 状态迁移：SYN_SENT → ESTABLISHED
  */
 static void ubmad_process_wk_syn_ack(struct ubmad_msg *msg,
                                       struct ubcore_cr *cr,
@@ -1304,11 +1362,11 @@ static void ubmad_process_wk_syn_ack(struct ubmad_msg *msg,
     struct ubmad_wk_hdr *wk_hdr = (struct ubmad_wk_hdr *)msg->payload;
     struct ubmad_wk_session *session;
 
-    /* 步骤 1：查找 session */
-    session = ubmad_session_find_by_id(dev_priv, wk_hdr->session_id);
+    /* 步骤 1：按 peer_session_id 查找 session（v3.2：peer 即"接收方自己"） */
+    session = ubmad_session_find_by_id(dev_priv, wk_hdr->peer_session_id);
     if (!session) {
-        pr_warn("ubmad_wk: SYN_ACK for unknown session=%u\n",
-                wk_hdr->session_id);
+        pr_warn("ubmad_wk: SYN_ACK for unknown local session=%u (peer says %u)\n",
+                wk_hdr->peer_session_id, wk_hdr->local_session_id);
         return;
     }
 
@@ -1331,8 +1389,9 @@ static void ubmad_process_wk_syn_ack(struct ubmad_msg *msg,
         return;
     }
 
-    /* 步骤 3：记录对端 ISN */
-    session->remote_isn = wk_hdr->isn;
+    /* 步骤 3：记录对端 ISN 和对端 session_id（v3.2：必须学到对端 ID） */
+    session->remote_isn         = wk_hdr->isn;
+    session->remote_session_id  = wk_hdr->local_session_id;  /* ★ */
 
     /* 步骤 4：取消 SYN 重传定时器 */
     cancel_delayed_work(&session->rt_work);   /* 非 sync，避免死锁 */
@@ -1377,7 +1436,8 @@ static void ubmad_process_wk_ack(struct ubmad_msg *msg,
     struct ubmad_wk_hdr *wk_hdr = (struct ubmad_wk_hdr *)msg->payload;
     struct ubmad_wk_session *session;
 
-    session = ubmad_session_find_by_id(dev_priv, wk_hdr->session_id);
+    /* v3.2：按 peer_session_id 查找（即服务端自己的 ID） */
+    session = ubmad_session_find_by_id(dev_priv, wk_hdr->peer_session_id);
     if (!session)
         return;
 
@@ -1470,11 +1530,15 @@ int ubmad_wk_close(struct ubmad_wk_session *session)
     int ret;
 
     spin_lock(&session->lock);
-    if (session->state != UBMAD_WK_ESTABLISHED) {
+    /* v3.2：被动方在 CLOSE_WAIT 状态也可调用 close 发起自己的 FIN（→ LAST_ACK） */
+    if (session->state == UBMAD_WK_ESTABLISHED) {
+        session->state = UBMAD_WK_FIN_WAIT_1;
+    } else if (session->state == UBMAD_WK_CLOSE_WAIT) {
+        session->state = UBMAD_WK_LAST_ACK;
+    } else {
         spin_unlock(&session->lock);
         return -EINVAL;
     }
-    session->state = UBMAD_WK_FIN_WAIT_1;
     spin_unlock(&session->lock);
 
     ret = ubmad_post_send_wk(dev_priv, session,
@@ -1483,8 +1547,18 @@ int ubmad_wk_close(struct ubmad_wk_session *session)
         spin_lock(&session->lock);
         session->state = UBMAD_WK_ESTABLISHED;   /* 发送失败，回滚状态 */
         spin_unlock(&session->lock);
+        return ret;
     }
-    return ret;
+
+    /* v3.2 新增：启动 FIN 重传定时器。
+     * 复用 rt_work（握手已完成，rt_work 此刻空闲）。
+     * rt_work_handler 会按 session->state 分派到 SYN/SYN_ACK/FIN 重传。
+     * 必须先 kref_get（见 §7.4）。 */
+    session->rt_cnt = 0;
+    kref_get(&session->kref);
+    queue_delayed_work(session->rt_wq, &session->rt_work,
+                       msecs_to_jiffies(2));
+    return 0;
 }
 EXPORT_SYMBOL_GPL(ubmad_wk_close);
 ```
@@ -1511,7 +1585,8 @@ static void ubmad_process_wk_fin(struct ubmad_msg *msg,
     struct ubmad_wk_session *session;
     enum ubmad_wk_session_state old_state;
 
-    session = ubmad_session_find_by_id(dev_priv, wk_hdr->session_id);
+    /* v3.2：按 peer_session_id 查找（即接收方自己的 ID） */
+    session = ubmad_session_find_by_id(dev_priv, wk_hdr->peer_session_id);
     if (!session)
         return;
 
@@ -1526,7 +1601,9 @@ static void ubmad_process_wk_fin(struct ubmad_msg *msg,
         /* 发送 FIN_ACK */
         ubmad_post_send_wk(dev_priv, session, UBMAD_WK_FIN_ACK, 0, 0);
 
-        /* 启动 TIME_WAIT 定时器（UBMAD_WK_TIME_WAIT_MS = 4000ms） */
+        /* 启动 TIME_WAIT 定时器（UBMAD_WK_TIME_WAIT_MS = 4000ms）
+         * v3.2：必须先 kref_get，否则 tw_work_handler 的 put 会跌破 0。 */
+        kref_get(&session->kref);
         queue_delayed_work(session->rt_wq, &session->tw_work,
                            msecs_to_jiffies(UBMAD_WK_TIME_WAIT_MS));
 
@@ -1541,6 +1618,17 @@ static void ubmad_process_wk_fin(struct ubmad_msg *msg,
         /* 通知上层"对端已关闭，你可以继续发数据，但最终也需要调用 close()" */
         if (session->on_closed)
             session->on_closed(session, 0 /* 正常关闭 */, session->cb_ctx);
+
+    } else if (old_state == UBMAD_WK_TIME_WAIT) {
+        /* v3.2 新增：场景三 — 处于 TIME_WAIT 时收到对端重传的 FIN
+         * （我们的 FIN_ACK 之前可能丢了）。重发 FIN_ACK 让对端能完成关闭。
+         * 注意：不重启 TIME_WAIT 定时器；如果 4 秒内还有重传 FIN，
+         * 同样能从此分支再 ACK 一次。 */
+        spin_unlock(&session->lock);
+        pr_debug("ubmad_wk: re-ACK FIN in TIME_WAIT for session=%u\n",
+                 session->session_id);
+        ubmad_post_send_wk(dev_priv, session, UBMAD_WK_FIN_ACK, 0, 0);
+
     } else {
         spin_unlock(&session->lock);
         pr_warn("ubmad_wk: FIN in unexpected state=%d\n", old_state);
@@ -1572,7 +1660,8 @@ static void ubmad_process_wk_fin_ack(struct ubmad_msg *msg,
     struct ubmad_wk_session *session;
     enum ubmad_wk_session_state old_state;
 
-    session = ubmad_session_find_by_id(dev_priv, wk_hdr->session_id);
+    /* v3.2：按 peer_session_id 查找（即接收方自己的 ID） */
+    session = ubmad_session_find_by_id(dev_priv, wk_hdr->peer_session_id);
     if (!session)
         return;
 
@@ -1582,11 +1671,15 @@ static void ubmad_process_wk_fin_ack(struct ubmad_msg *msg,
     if (old_state == UBMAD_WK_FIN_WAIT_1) {
         session->state = UBMAD_WK_FIN_WAIT_2;
         spin_unlock(&session->lock);
+        /* v3.2：取消 FIN 重传定时器（FIN_ACK 已收到） */
+        cancel_delayed_work(&session->rt_work);
         /* 等待对端的 FIN（ubmad_process_wk_fin 处理） */
 
     } else if (old_state == UBMAD_WK_LAST_ACK) {
         session->state = UBMAD_WK_CLOSED;
         spin_unlock(&session->lock);
+        /* v3.2：取消 FIN 重传定时器 */
+        cancel_delayed_work(&session->rt_work);
 
         /* 被动方四次挥手完成，释放 session */
         pr_info("ubmad_wk: session=%u closed (passive side)\n",
@@ -1696,17 +1789,18 @@ static void ubmad_wk_syn_rt_work_handler(struct work_struct *work)
     state = session->state;
     spin_unlock(&session->lock);
 
-    /* 检查是否仍需重传 */
-    if (state != UBMAD_WK_SYN_SENT && state != UBMAD_WK_SYN_RCVD) {
-        /* 握手已完成或已失败，不再重传 */
+    /* 检查是否仍需重传（v3.2：除握手状态外，FIN_WAIT_1/LAST_ACK 也走此路径） */
+    if (state != UBMAD_WK_SYN_SENT && state != UBMAD_WK_SYN_RCVD &&
+        state != UBMAD_WK_FIN_WAIT_1 && state != UBMAD_WK_LAST_ACK) {
+        /* 握手 / 挥手已完成或已失败，不再重传 */
         ubmad_put_session(session);
         return;
     }
 
     /* 检查重传次数 */
     if (session->rt_cnt >= UBMAD_WK_MAX_RETRY) {
-        pr_warn("ubmad_wk: session=%u SYN retransmit limit reached\n",
-                session->session_id);
+        pr_warn("ubmad_wk: session=%u retransmit limit reached in state=%d\n",
+                session->session_id, state);
 
         spin_lock(&session->lock);
         session->state  = UBMAD_WK_CLOSED;
@@ -1723,18 +1817,30 @@ static void ubmad_wk_syn_rt_work_handler(struct work_struct *work)
         return;
     }
 
-    /* 重传对应消息 */
+    /* 重传对应消息（v3.2：扩展为支持 FIN/SYN/SYN_ACK） */
     session->rt_cnt++;
-    if (state == UBMAD_WK_SYN_SENT) {
+    switch (state) {
+    case UBMAD_WK_SYN_SENT:
         /* 客户端重传 SYN */
         ret = ubmad_post_send_wk(dev_priv, session,
                                   UBMAD_WK_SYN, session->local_isn, 0);
-    } else {
+        break;
+    case UBMAD_WK_SYN_RCVD:
         /* 服务端重传 SYN_ACK */
         ret = ubmad_post_send_wk(dev_priv, session,
                                   UBMAD_WK_SYN_ACK,
                                   session->local_isn,
                                   session->remote_isn + 1);
+        break;
+    case UBMAD_WK_FIN_WAIT_1:
+    case UBMAD_WK_LAST_ACK:
+        /* v3.2 新增：主动方/被动方重传自己发的 FIN */
+        ret = ubmad_post_send_wk(dev_priv, session,
+                                  UBMAD_WK_FIN, 0, 0);
+        break;
+    default:
+        ret = 0;  /* 不应到达 */
+        break;
     }
 
     if (ret) {
@@ -1888,27 +1994,30 @@ dmesg | tail -20   # 应无内存泄漏警告
 
 ---
 
-## Step 9：更新 Kconfig 与 Makefile
+## Step 9：更新 Makefile
+
+> **v3.2 修订**：原 Step 9 还提到了"更新 Kconfig"，但实际内核树没有
+> `ubcore/Kconfig`（只有顶层 `drivers/ub/Kconfig`，定义 `CONFIG_UB_URMA`）。
+> Kconfig 改动归 [Step 11](#step-11kconfig-特性开关) 处理；本步只改
+> Makefile。原文中错误指向 `ubcore/ubcm/Makefile`（也不存在）的部分已修正。
 
 ### 9.1 修改 Makefile
 
-文件：`kernel/drivers/ub/urma/ubcore/ubcm/Makefile`
+文件：`kernel/drivers/ub/urma/ubcore/Makefile`（**这是真实存在的文件**；不存在 `ubcm/Makefile`，所有 ubcm 下的 .o 直接列在 ubcore Makefile 里，参见现有 `ubcm/ub_mad.o` `ubcm/ubmad_datapath.o` 的写法）。
 
-在现有的 `ubmad_datapath.o` 行后面追加：
-
-```makefile
-# 原有条目（示例）
-obj-$(CONFIG_UB_URMA) += ub_mad.o ubmad_datapath.o ub_cm.o
-
-# 新增
-obj-$(CONFIG_UB_URMA) += ubmad_session.o
-```
-
-如果使用了模块聚合（`ubcore-objs`）格式，则：
+在 `ubcore-objs := \` 块中追加一行（按字母序或紧贴现有的 `ubcm/` 行）：
 
 ```makefile
-ubcore-objs += ubcm/ubmad_session.o
+ubcore-objs := \
+    ...
+    ubcm/ub_mad.o \
+    ubcm/ubmad_datapath.o \
+    ubcm/ub_cm.o \
+    ubcm/ubmad_session.o \    # ← 新增
+    ...
 ```
+
+> 注意：Step 11 会把这一行包成 `ubcore-$(CONFIG_UBMAD_WK_SESSION) += ubcm/ubmad_session.o` 以做条件编译。本步先无条件加入便于调试；Step 11 再补上 Kconfig 守护。
 
 ### 9.2 验证方法
 
@@ -2056,11 +2165,19 @@ Client: 3-way handshake complete!
 
 ### 11.2 修改文件
 
-`drivers/ub/urma/ubcore/Kconfig` 和 `drivers/ub/urma/ubcore/Makefile`。
+**v3.2 修订**：内核树中 **没有** `drivers/ub/urma/ubcore/Kconfig`——所有 UB 子系统的 Kconfig 都汇总在顶层 `drivers/ub/Kconfig`，通过 `source` 引入各子目录的 Kconfig（如 `source "drivers/ub/urma/hw/udma/Kconfig"`）。`CONFIG_UB_URMA` 也定义在此文件。
+
+两种实现方式：
+
+**方式 A（推荐，最小侵入）**：直接把新 config 加到 `drivers/ub/Kconfig` 中 `config UB_URMA` 块的下方。
+
+**方式 B（更整洁）**：新建 `drivers/ub/urma/ubcore/Kconfig`，里面只放 `UBMAD_WK_SESSION` 这一项；然后在 `drivers/ub/Kconfig` 中加一行 `source "drivers/ub/urma/ubcore/Kconfig"`。后续如果有更多 ubcore 级别的 config 选项可以集中放在这里。
+
+Makefile 改动文件：`drivers/ub/urma/ubcore/Makefile`（这个文件**确实存在**）。
 
 ### 11.3 Kconfig 新增项
 
-在 `Kconfig` 末尾追加：
+在 `drivers/ub/Kconfig` 中 `config UB_URMA` 块的下方（方式 A），或新建的 `drivers/ub/urma/ubcore/Kconfig` 中（方式 B），追加：
 
 ```
 config UBMAD_WK_SESSION
@@ -2405,3 +2522,19 @@ _v3.1 修订（2026-05-14）相对 v3 的主要变化_：
 - §0.1 增补「当前不在范围内」小节，明确 v1 不含数据平面、流控、多 service_id
 - 新增 §18.0 [CRITICAL]「数据平面缺失」：v1 只有 connect/listen/close，没有 `ubmad_wk_send/recv`；列出"v2 再加" vs "v1 直接加"两条路径供选择
 - 重写 §18.1：原"具体的上层消费者是谁"已被 §0.1 部分回答；剩余问题聚焦在「v1 合入时哪个具体上层模块同步迁移过来」
+
+_v3.2 修订（2026-05-14）相对 v3.1 的主要变化_：
+
+外部 reviewer 在 v3 → v3.1 之后做了一轮源码对照，指出 7 项**实现层面**的具体缺陷（与 v3.1 的设计说明无关）。v3.2 全部修复：
+
+| # | 缺陷 | v3.2 修复 |
+|---|-----|-----------|
+| 1 | **握手永远完不成**：`wk_hdr` 只有单个 `session_id`，但客户端和服务端各自分配本地 ID，对端按错的 ID 查找 → SYN_ACK 永远找不到目标 session | wire 头改为 `(local_session_id, peer_session_id)` 双 ID 对，类比 TCP 端口（§Step 2 §2.5、§0.5、所有 process_wk_* 函数） |
+| 2 | **`ubmad_wk_listen()` NULL 解引用**：listen 调用 `ubmad_alloc_session(dev_priv, NULL)`，但 alloc 内部 `session->remote_eid = *remote_eid` | alloc 增加 NULL 判断，LISTEN session 的 remote_eid 置零（§Step 3 §3.7） |
+| 3 | **kref 失配**：示例代码在 4 处 `queue_delayed_work` 之前没有 `kref_get`，但 handler 末尾有 `ubmad_put_session`，会跌破 0 触发 use-after-free | 4 处 `queue_delayed_work` 之前都加 `kref_get(&session->kref)`，注释指向 §7.4 规则（§Step 4 connect、§Step 5 process_wk_syn、§Step 6 wk_close、§Step 6 process_wk_fin TIME_WAIT 分支） |
+| 4 | **JFS WR 结构体不对**：示例 `wr.complete_enable / wr.src.sge[0]` 对不上真实内核 API；`ubmad_get_send_sge_addr()` 不存在 | 重写 `ubmad_post_send_wk()` 与 `ubmad_datapath.c:680-720` 对齐：栈上 `struct ubcore_sge sge`、`jfs_wr.flag.bs.complete_enable`、`jfs_wr.send.src.sge = &sge`；用现有 `ubmad_alloc_sge()`/`ubmad_free_sge()` 替代不存在的 helper（§Step 4 §4.3） |
+| 5 | **tjetty 导入描述错误**：v3 说 `ubmad_get_tjetty()` cache miss 触发异步导入；实际只查缓存 | 注释修正：cache miss 时显式调用 `ubmad_queue_import_work()` 触发异步导入，本次返回 `-EAGAIN` 让会话级 rt_work 重试（§Step 4 §4.3） |
+| 6 | **FIN 不可靠**：v3 没有 FIN 重传、没有 FIN_ACK 校验、TIME_WAIT 声称会重发 FIN_ACK 但实现里没有 | `ubmad_wk_close()` 启动 FIN 重传定时器；`rt_work_handler` switch 扩展支持 FIN_WAIT_1/LAST_ACK；`process_wk_fin()` 在 TIME_WAIT 状态收到重传 FIN 时重发 FIN_ACK；`process_wk_fin_ack()` 显式 cancel rt_work（§Step 6、§Step 7） |
+| 7 | **构建路径错误**：Step 9 引用不存在的 `ubcore/ubcm/Makefile`；Step 11 引用不存在的 `ubcore/Kconfig` | Step 9 改为 `drivers/ub/urma/ubcore/Makefile` 中 `ubcore-objs` 块加 `ubcm/ubmad_session.o`；Step 11 说明 Kconfig 应放在 `drivers/ub/Kconfig`（方式 A）或新建 `drivers/ub/urma/ubcore/Kconfig` 并 `source` 引入（方式 B） |
+
+外部 reviewer 链接：上述 7 项中的 #1（双 ID 协议）和 #3（kref 配对）属于"如照 v3 实现就跑不起来"的阻塞性 bug；其余 5 项严重性递减但都是必须修。修复后这份文档才真正达到「可照着写代码」的实现指南级别。
