@@ -1,7 +1,7 @@
 # 公知Jetty可靠通信设计文档（三次握手 / 四次挥手）
 
 _面向读者：对 UMDK/URMA/UBMAD 代码零基础的新开发者。_
-_文档版本：v3.7（修正 v3.6 残留：FIN_WAIT_2 keep-alive ref + 30s 超时；FIN isn 校验 record 块缩小到首次状态）_
+_文档版本：v3.8（修正 v3.7 残留：FIN_WAIT_2 → TIME_WAIT 与 FW2 timer 的 race；统一 tw_work 双用途描述）_
 _最后更新：2026-05-14_
 
 ---
@@ -799,7 +799,7 @@ struct ubmad_wk_session *ubmad_alloc_session(
 }
 ```
 
-**注意**：`ubmad_wk_syn_rt_work_handler` 和 `ubmad_wk_time_wait_handler` 在 Step 7 中实现；这里先做前向声明（在文件顶部 `static void ubmad_wk_syn_rt_work_handler(struct work_struct *work);`）。
+**注意**：`ubmad_wk_syn_rt_work_handler` 和 `ubmad_wk_time_wait_handler` 在 Step 7 中实现；这里先做前向声明（在文件顶部 `static void ubmad_wk_syn_rt_work_handler(struct work_struct *work);`）。`ubmad_wk_time_wait_handler` 自 v3.7 起被 TIME_WAIT 和 FIN_WAIT_2 两种状态共用——既是 TIME_WAIT 4s 清理定时器，也是 FIN_WAIT_2 30s "对端永远不发 FIN" 兜底定时器。
 
 ### 3.8 函数五：`ubmad_session_find_by_id()`
 
@@ -1782,19 +1782,45 @@ static void ubmad_process_wk_fin(struct ubmad_msg *msg,
     }
 
     if (old_state == UBMAD_WK_FIN_WAIT_2) {
-        /* 场景一：主动方收到对端 FIN */
+        /* 场景一：主动方收到对端 FIN。
+         *
+         * v3.8 修订：FIN_WAIT_2 → TIME_WAIT 这一步存在与 FW2 keep-alive
+         * 定时器的 race：tw_work 被两种用途共用，handler 进来时只看 state。
+         * 如果我们先把 state 改成 TIME_WAIT 再 cancel，万一 handler 此时
+         * 已经在 spinlock 上等候，它解锁后会看到 state==TIME_WAIT 并误以为
+         * 是 TIME_WAIT 期满，提前把 session 关掉（漏发 FIN_ACK，对端会重传
+         * 直到 MSN 上限）。
+         *
+         * 正确顺序：先解锁释放 FW2 timer（不改 state），cancel 或 flush 让
+         * handler 跑完；然后重新加锁、检查 state 是否仍是 FIN_WAIT_2；
+         * 是则改成 TIME_WAIT 继续，否则 handler 已经把 state 推到 CLOSED
+         * 了——FW2 期满和我们收 FIN 同时发生，handler 赢；本端只需 bail，
+         * 对端会因为没收到 FIN_ACK 而由 MSN 重传一会儿，但不影响清理正确性。 */
+        spin_unlock(&session->lock);
+
+        if (cancel_delayed_work(&session->tw_work)) {
+            /* FW2 timer 还在队列里，没跑——补 put */
+            ubmad_put_session(session);
+        } else {
+            /* 已经在跑或刚跑完——等它结束（不能持锁，会死锁） */
+            flush_delayed_work(&session->tw_work);
+        }
+
+        spin_lock(&session->lock);
+        if (session->state != UBMAD_WK_FIN_WAIT_2) {
+            /* FW2 handler 在我们之前赢得了竞争，session 已被标为 CLOSED
+             * 并 put 了哈希 ref。我们这里只需 put 自己的 find ref，让对端
+             * 重传的 FIN 自行超时即可——session 可能马上释放。 */
+            spin_unlock(&session->lock);
+            ubmad_put_session(session);
+            return;
+        }
         session->state = UBMAD_WK_TIME_WAIT;
         spin_unlock(&session->lock);
 
         /* 发送 FIN_ACK（v3.3：ack = remote_fin_seq + 1） */
         ubmad_post_send_wk(dev_priv, session, UBMAD_WK_FIN_ACK,
                             0, session->remote_fin_seq + 1);
-
-        /* v3.7：先取消 FIN_WAIT_2 keep-alive 定时器（process_wk_fin_ack
-         * FIN_WAIT_1→FIN_WAIT_2 那里挂的）。cancel 成功要补 put。
-         * 然后才能 reuse tw_work 走 TIME_WAIT 路径。 */
-        if (cancel_delayed_work(&session->tw_work))
-            ubmad_put_session(session);
 
         /* 启动 TIME_WAIT 定时器（UBMAD_WK_TIME_WAIT_MS = 4000ms）
          * v3.2：必须先 kref_get，否则 tw_work_handler 的 put 会跌破 0。 */
@@ -2584,7 +2610,7 @@ nm drivers/ub/urma/ubcore/ubcore.ko | grep ubmad_wk_  # 期望：列出所有握
 | 11 | `ubmad_process_wk_fin()` | `ubmad_datapath.c` | 收到 FIN：发 FIN_ACK → 迁移状态 → 回调上层 |
 | 12 | `ubmad_process_wk_fin_ack()` | `ubmad_datapath.c` | 收到 FIN_ACK：推进关闭状态机（FIN_WAIT_1→2 或 LAST_ACK→CLOSED）|
 | 13 | `ubmad_wk_syn_rt_work_handler()` | `ubmad_datapath.c` | SYN/SYN_ACK 重传工作：指数退避，超限则通知失败 |
-| 14 | `ubmad_wk_time_wait_handler()` | `ubmad_datapath.c` | TIME_WAIT 超时：将 session 置 CLOSED 并释放 |
+| 14 | `ubmad_wk_time_wait_handler()` | `ubmad_datapath.c` | **TIME_WAIT / FIN_WAIT_2** 共用的超时 handler（v3.7 起复用）：到期把 session 置 CLOSED 并 put 哈希 ref。两种触发原因日志区分：TIME_WAIT 是正常清理；FIN_WAIT_2 是对端没在 30s 内发 FIN，强制关闭 |
 | 15 | `ubmad_session_find_by_id()` | `ubmad_session.c` | 哈希表查找 session：持锁、kref_get 后返回，调用者负责 put |
 | 16 | `ubmad_session_init_global()` | `ubmad_session.c` | 初始化全局哈希表和 IDA，在 ubmad_init() 中调用 |
 
@@ -2892,3 +2918,14 @@ _v3.7 修订（2026-05-14）相对 v3.6 的主要变化_：
 到 v3.7 为止，session 生命周期在所有路径（ESTABLISHED 主动关闭、CLOSE_WAIT 被动关闭、FIN_WAIT_2 等待对端 FIN、TIME_WAIT 等待重传 FIN、所有失败回滚）都有明确的 ref 持有者，不会出现 use-after-free 或永久泄露；FIN 重传幂等性的 isn 校验真正生效。
 
 剩余风险维持在 v3.6 时的两类：实际编译运行验证 + §18 设计问题。
+
+_v3.8 修订（2026-05-14）相对 v3.7 的主要变化_：
+
+第七轮外部 reviewer 在 v3.7 上找出 2 项问题——一项是 v3.7 reuse tw_work 引入的 state-vs-handler race（MEDIUM），一项是函数表里的描述还停留在 v3.7 之前的"TIME_WAIT-only"。
+
+| # | 缺陷（v3.7 残留） | v3.8 修复 |
+|---|------|-----------|
+| 1 | **FIN_WAIT_2 → TIME_WAIT 与 tw_work handler 的 race**：v3.7 让 tw_work 同时承担 FIN_WAIT_2 keep-alive 和 TIME_WAIT 清理两种角色。process_wk_fin 进 FIN_WAIT_2 分支时按 `set state=TIME_WAIT → cancel → queue` 顺序操作；如果 cancel 失败（FW2 handler 已经在 spinlock 上等候），handler 解锁后会看到 state==TIME_WAIT 并误以为是 TIME_WAIT 期满，把 session 提前 CLOSED 并 put 哈希 ref——本端漏发 FIN_ACK，对端会一直重传到 MSN 上限。 | 重排顺序：先解锁释放 FW2 timer（**不改 state**）→ cancel-then-put（成功）或 flush_delayed_work（失败时等 handler 跑完）→ 重新加锁、检查 state 是否仍是 FIN_WAIT_2 → 是则改成 TIME_WAIT 继续，否则直接 bail。这样 FW2 handler 看到的 state 永远是 FIN_WAIT_2（合法的"FW2 期满"语义）；如果它先把 session 推到 CLOSED，process_wk_fin 在 recheck 时识别并 bail，不再做 FIN_ACK 投递或 timer 排队。 |
+| 2 | **§16 函数表对 ubmad_wk_time_wait_handler 的描述未跟上 v3.7**：v3.7 让该 handler 同时处理 TIME_WAIT 和 FIN_WAIT_2 两种状态的到期，但 §16 表里仍写"TIME_WAIT 超时：将 session 置 CLOSED"。 | §16 第 14 项更新为 "TIME_WAIT / FIN_WAIT_2 共用的超时 handler"，并说明两种触发原因的日志差异。Step 3 §3.7 alloc_session 里关于 tw_work 的注释也补一句双用途说明。 |
+
+到 v3.8 为止，没有再发现明显的"按设计就跑不起来"或"有 race 引发 UAF"的实现层 bug；所有 ref 计数路径成对，所有 timer / state 转换的 race 窗口都被显式 cancel 或 flush 关掉。剩余风险还是 (a) 实际编译运行验证 + (b) §18 设计问题。
