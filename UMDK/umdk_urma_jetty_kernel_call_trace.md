@@ -636,6 +636,100 @@ The only callers of `ubcore_handle_vtpn_wait_list` are inside `ubcore_vtp.c` its
 
 ---
 
+### 4.10 UAPI ioctl boundary — `/dev/ub_uburma*` (uburma) vs. UVS netlink (ubcore)
+
+§8 open item #3 was framed as "find the IOCTL dispatch for `UBCORE_CMD_CREATE_JETTY` in `ubcore_cdev_file.c` or `ubcore_uvs_cmd.c`". The framing is wrong on two counts; the actual layout is two parallel UAPI planes:
+
+**A. URMA application path — char-device ioctl (the live one perftest et al. use).**
+
+```
+userspace app
+  |
+  v  open("/dev/uburma/<dev_name>")           -- char dev, magic 'U' cmd 1
+  v  ioctl(fd, UBURMA_CMD, &hdr)              -- struct uburma_cmd_hdr {command, args_len, args_addr, ...}
+  v
+  uburma_main.c:71-80   g_uburma_fops = { .unlocked_ioctl = uburma_ioctl, .compat_ioctl = uburma_ioctl, .open = uburma_open, .mmap = uburma_mmap }
+  uburma_main.c:155-159 cdev_init(&ubu_dev->cdev, NULL); cdev->ops = &g_uburma_fops  (registered per ubcore device, class `uburma`, devnode `uburma/<name>` at uburma_main.c:56-64)
+  |
+  v  uburma_cmd.c:4991  uburma_ioctl(filp, cmd, arg)
+  v                      copy hdr from user, srcu_read_lock(&ubu_dev->ubc_dev_srcu), get file->ucontext (unless cmd is CREATE_CTX/GET_EID_LIST/QUERY_DEV_ATTR per :4984-4988)
+  v  uburma_cmd.c:4971  uburma_cmd_parse(ubc_dev, file, &hdr)
+  v                      bounds-check hdr->command in [CREATE_CTX, UBURMA_CMD_MAX), dispatch
+  |
+  v  uburma_cmd.c:4886  g_uburma_cmd_handlers[hdr->command]
+  |                     74 entries (UBURMA_CMD_CREATE_CTX..UBURMA_CMD_GET_JFCE_CNT)
+  v
+  [per-cmd handler]
+```
+
+The dispatch table is dense — every URMA verb that the userspace `liburma` issues has an entry. Two concrete handlers, both pinned:
+
+- **`uburma_cmd_create_jetty`** @ `uburma_cmd.c:2368-2470` — parses TLV args (`uburma_tlv_parse`), allocates `uburma_jetty_uobj` via `uobj_alloc(UOBJ_CLASS_JETTY, file)`, fetches send/recv JFC + (optional) JFR + jetty_grp uobjs by handle, fills `ubcore_jetty_cfg cfg`, invokes the core API:
+  ```c
+  jetty = ubcore_create_jetty(ubc_dev, &cfg, uburma_jetty_event_cb, &udata);   // :2439
+  ```
+  then sets `jetty_uobj->uobj.object = jetty`, grabs the async-event fd ref, packs the out-handle into TLV. The kernel object returned by `ubcore_create_jetty` is the same one walked in §4.1. So **UBURMA_CMD_CREATE_JETTY (uburma) → `uburma_cmd_create_jetty` (uburma_cmd.c:2368) → `ubcore_create_jetty` (ubcore_jetty.c:2118)** is the full pin.
+
+- **`uburma_cmd_import_jfr`** @ `uburma_cmd.c:3174-3227` — the **first-RPC trigger** per `reference_umdk_link_setup.md` and the path that perftest's `urma_import_jfr` lands on. Allocates `UOBJ_CLASS_TARGET_JFR` uobj, fills `ubcore_tjetty_cfg cfg` from `arg.in` (eid, id, flag, token, trans_mode, tp_type, eid_index), calls:
+  ```c
+  tjfr = ubcore_import_jfr(ubc_dev, &cfg, &udata);    // :3204
+  ```
+  then unpacks `tjfr->vtpn->vtpn` or `tjfr->tp->tpn` (the connect-time vTP allocation flow walked in §4.3) into the out-TLV. So **UBURMA_CMD_IMPORT_JFR (uburma) → `uburma_cmd_import_jfr` (uburma_cmd.c:3174) → `ubcore_import_jfr` (ubcore_jetty.c)** is what generates the visible 900 ms cost on a cold setup. (`UBURMA_CMD_IMPORT_JFR_EX` at :3229 is the bonding-aware variant routed via `ubcore_import_jfr_ex`.)
+
+**B. UVS daemon control plane — generic netlink (NOT ioctl).**
+
+```
+UVS daemon (userspace)
+  |
+  v  socket(AF_NETLINK, SOCK_RAW, NETLINK_GENERIC) ; resolve family "ubcore_genl_family"
+  v  nlmsg{cmd = UBCORE_CMD_*,  attrs = {UBCORE_HDR_COMMAND, UBCORE_HDR_ARGS_ADDR, ...}}
+  v
+  ubcore_genl.c:47-130  static const struct genl_ops ubcore_genl_ops[] = {
+                          { .cmd = UBCORE_CMD_QUERY_STATS,    .doit = ubcore_query_stats_ops },
+                          { .cmd = UBCORE_CMD_QUERY_RES,      .start/.dumpit/.done = ubcore_query_res_* },
+                          { .cmd = UBCORE_CMD_ADD_EID,        .start/.dumpit/.done = ubcore_add_eid_* },
+                          ... (~13 cmd entries)
+                        };
+  ubcore_genl.c:134     struct genl_family ubcore_genl_family __ro_after_init = { .ops = ubcore_genl_ops, ... };
+  ubcore_genl.c:169     genl_register_family(&ubcore_genl_family);
+  |
+  v  net/genetlink dispatch → ubcore_genl_admin.c handlers
+  |
+  v  bodies in ubcore_uvs_cmd.c (eid table helpers like ubcore_eidtbl_add_entry at uvs_cmd.c:32), ubcore_genl_admin.c (ubcore_set_sl_ops, ubcore_get_topo_info_ops, etc.)
+```
+
+The `UBCORE_CMD_*` enum in `ubcore_cmd.h:33-60` (`UBCORE_CMD_QUERY_STATS=1 .. UBCORE_CMD_GET_TOPO_BONDING_DEV`) is used as the **netlink command id** field, not as a `_IOWR` cmd. The `UBCORE_CMD _IOWR(UBCORE_CMD_MAGIC, 1, struct ubcore_cmd_hdr)` macro at `ubcore_cmd.h:28` is defined but I find no `.unlocked_ioctl` registration anywhere in ubcore that consumes it — `ubcore_cdev_file.c` is sysfs-attribute-only as the doc already noted. So `UBCORE_CMD` (the ioctl number) appears to be a vestigial header-level definition; the live UVS UAPI is netlink. (Grep `UBCORE_CMD_MAGIC` returns only its definition and the IOWR macro line; no callers.)
+
+**Why the two planes exist.** The split is the standard "control-plane vs. data-plane" partition seen in InfiniBand too:
+
+| Plane | UAPI mechanism | File ops | Owner process |
+|---|---|---|---|
+| URMA app verbs (CREATE_JETTY, IMPORT_JFR, POST_*, POLL_*, ...) | char-dev ioctl on `/dev/ub_uburma/<dev>` | `uburma_main.c` + `uburma_cmd.c` | every URMA app (perftest, ubturbo, …) |
+| UVS admin (EID add/del, SIP add/del, TP query/restore, topo, ns mode, set SL) | generic netlink family `ubcore_genl_family` | `ubcore_genl.c` + `ubcore_genl_admin.c` | UVS daemon (one per host) |
+
+This mirrors `ib_uverbs` (char-dev ioctl, `/dev/infiniband/uverbs*`) vs. `rdma-netlink` (generic netlink, `RDMA_NL_*` family) in mainline RDMA.
+
+**Pinning table:**
+
+| Concept | File:line | Notes |
+|---|---|---|
+| `/dev/uburma/*` fops | `uburma_main.c:71-80` | `g_uburma_fops` |
+| cdev registration | `uburma_main.c:155-159` (+ device class :66-69, devnode `uburma/<dev_name>` :56-64) | one cdev per ubcore device |
+| ioctl entry | `uburma_cmd.c:4991` | `uburma_ioctl` |
+| Cmd parse + bounds check | `uburma_cmd.c:4971-4982` | `uburma_cmd_parse` |
+| Dispatch table | `uburma_cmd.c:4886-4969` | `g_uburma_cmd_handlers[]`, ~74 entries |
+| `UBURMA_CMD_CREATE_JETTY` handler | `uburma_cmd.c:2368-2470` | calls `ubcore_create_jetty` @ :2439 |
+| `UBURMA_CMD_IMPORT_JFR` handler | `uburma_cmd.c:3174-3227` | calls `ubcore_import_jfr` @ :3204 — first-RPC trigger |
+| `UBURMA_CMD_IMPORT_JFR_EX` handler | `uburma_cmd.c:3229+` | bonding/EX path |
+| UVS netlink ops table | `ubcore_genl.c:47-130` | `ubcore_genl_ops[]` for `UBCORE_CMD_QUERY_STATS..GET_TOPO_BONDING_DEV` |
+| UVS netlink family | `ubcore_genl.c:134-180` | `ubcore_genl_family`, `genl_register_family` @ :169 |
+| `UBURMA_CMD_*` enum (74 cmds) | `uburma_cmd.h:38-100` | magic `'U'`, `UBURMA_CMD _IOWR('U', 1, struct uburma_cmd_hdr)` |
+| `UBCORE_CMD_*` enum (~13 cmds, **netlink**) | `ubcore_cmd.h:33-60` | the `_IOWR('C',1,...)` at line 28 is unused (vestigial) |
+
+**Why the "ADVISE_JFR has no handler" footnote in `reference_umdk_link_setup.md` is correct:** the table at `uburma_cmd.c:4886-4969` literally has no `[UBURMA_CMD_ADVISE_JFR]` row — the cmd-id space jumps over those slots. `uburma_cmd_parse` rejects unmapped ids with `-EINVAL`, so a userspace `urma_advise_jfr()` call returns success only because the userspace lib never bridges into the kernel for that op.
+
+---
+
 ## 5. UBSE syssentry — well-known jetty 999 in production
 
 Path: `/Volumes/KernelDev/ubs-engine/src/adapter_plugins/syssentry/sys_sentry_module.cpp:244-281`.
@@ -710,12 +804,12 @@ These are gaps the trace explicitly **did not** resolve:
 
 1. ~~`ubcore_send_create_vtp_req` actual wire send.~~ **Resolved in §4.8.** That function is dead code; the live builder is `ubcore_create_async_connect_vtp_req` at `vtp.c:491`, sent via `ubcore_send_req` at `vtp.c:1526` → `dev->ops->send_req` (driver-provided, e.g. UDMA firmware ctrlq).
 2. ~~vTP response demux.~~ **Partially resolved in §4.8 with surprising finding:** `ubcore_wait_connect_vtp_resp_intime` (`vtp.c:332`) has **zero callers** in the entire kernel tree, and `ubcore_recv_resp`/`ubcore_recv_req` (`msg.c:299/305`) are EXPORT_SYMBOL'd no-op stubs. The msg-session response demux is dormant in OLK-6.6. Open follow-up: confirm whether the UDMA driver invokes `ubcore_handle_vtpn_wait_list` directly via a non-intime path on firmware completion.
-3. **UAPI ioctl boundary.** `ubcore_cdev_file.c` snippets shown were sysfs attribute handlers; the IOCTL dispatch (`UBCORE_CMD_CREATE_JETTY` etc.) lives further in the file or in `ubcore_uvs_cmd.c` — not pinned to a `case` line yet.
+3. ~~UAPI ioctl boundary.~~ **Resolved in §4.10.** The original framing conflated two parallel UAPI planes: the URMA app path is char-dev ioctl on `/dev/ub_uburma*` via `uburma_ioctl` (`uburma_cmd.c:4991`) → `g_uburma_cmd_handlers[]` (`uburma_cmd.c:4886`), with `UBURMA_CMD_CREATE_JETTY` → `uburma_cmd_create_jetty` (`uburma_cmd.c:2368`) → `ubcore_create_jetty` (`ubcore_jetty.c:2118`) and `UBURMA_CMD_IMPORT_JFR` → `uburma_cmd_import_jfr` (`uburma_cmd.c:3174`) → `ubcore_import_jfr`. The UVS admin path is a separate **generic netlink** family `ubcore_genl_family` (`ubcore_genl.c:134/169`) consuming `UBCORE_CMD_*`. The `_IOWR('C',1,...)` macro in `ubcore_cmd.h:28` is unused (vestigial).
 4. **Bonding flow specifics.** `ubcore_connect_exchange_udata_when_import_jetty` (called at `ubcore_jetty.c:2491-2496`) implementation is in `ubcore_connect_bonding.c` and was not walked.
 5. **UBMAD ID 2 use.** Only ID 1 is documented in the existing well-known-jetty doc as carrying link-setup; the role of ID 2 (`UBMAD_WK_JETTY_ID_1`) was not pinned to a specific handler in `ubcm/`. (Partial: the deep-dive doc notes ID 2 is selected for `UBMAD_AUTHN_DATA`; the dispatch code path is still unwalked.)
 6. ~~UDMA driver-side `udma_create_jetty` body.~~ **Resolved in §4.9.** Body walked at `udma_jetty.c:655-678`: `kzalloc → udma_active_jetty_detail → (alloc_jetty_sq → alloc_jetty_id + get_jetty_buf) + (add_xa_and_create_hw_ctx → init_jettyc → post_mailbox_update_ctx → udma_post_mbox sync mailbox)`. Doorbell page mapping is in the user-buffer alloc path (`udma_alloc_u_sq_buf`), not the create-jetty kernel call. **Bonus finding that closes the §4.8 follow-up:** UDMA does NOT register `dev->ops->send_req` at all (`udma_main.c:264-352` ops table). So the entire `ubcore_send_req → dev->ops->send_req` chain null-derefs on UDMA-managed devices; combined with the dormant `_intime` resp handler and no-op `ubcore_recv_resp` stubs, the `ubcore_msg_session` pipeline is structurally inert in OLK-6.6. The live VTP path must be the parallel `net/ubcore_session.c` + CM chain.
 
-Items #1, #2, #6 resolved today (2026-05-14). Items #3–#5 remain as one-file follow-ups; flag if any is needed in detail.
+Items #1, #2, #3, #6 resolved (2026-05-14). Items #4 (bonding flow) and #5 (UBMAD ID 2 dispatch) remain.
 
 ---
 
