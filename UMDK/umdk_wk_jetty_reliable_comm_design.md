@@ -1,7 +1,7 @@
 # 公知Jetty可靠通信设计文档（三次握手 / 四次挥手）
 
 _面向读者：对 UMDK/URMA/UBMAD 代码零基础的新开发者。_
-_文档版本：v3.17（清理 §2 字段表和 §7.2 函数名仍说 "SYN/SYN_ACK only" 的描述——v3.2 起 rt_work 已兼任 FIN 重传）_
+_文档版本：v3.18（§0.2 顶部插入 "MSN 是什么" 背景：8 字节 wire 字段、msn_node 去重、rt_wq 重传、4s 累计窗口；以及"MSN 是 UBMAD 私有"这一关键事实——之前文档反复引用 MSN 但从未自包含解释过）_
 _最后更新：2026-05-14_
 
 ---
@@ -76,6 +76,32 @@ URMA 的 WK Jetty（参见 [`umdk_urma_well_known_jetty.md`](umdk_urma_well_know
 - **多端口（service_id）**：v1 每设备一个 listen，相当于"只有一个端口"。上层只能用 `(local_eid, remote_eid)` 作为隐式 service 标识。多 service 见 [§18.2](#182-high-多-listen-支持的迁移路径)。
 
 ### 0.2 与 UBMAD MSN+重传的层叠关系
+
+> **背景：MSN 是什么？**（v3.18 起补入文档；本设计反复引用 MSN 但此前没有自包含说明）
+>
+> MSN = **Message Sequence Number**，是 UBMAD 内部的**单消息可靠性原语**——介于 WK Jetty 的 UM/UTP 不可靠传输和本设计的 session-level 可靠通道之间。
+>
+> - **wire 字段**：`struct ubmad_msg` 里有一个 8 字节 `msn` 字段（`ub_mad_priv.h:167-182`）。发送方对每条发往同一对端的消息分配单调递增的 MSN。
+> - **接收侧去重**：每个 peer 的 `msn_node` 哈希条目记录已见过的最大 MSN；同 MSN 重复出现的消息被静默丢弃。这是 UBMAD 让 UM 风格的不可靠投递"安全可重传"的方式。
+> - **发送侧重传**：`dev_priv->rt_wq` 工作队列里跑的 `ubmad_rt_work_handler`（`ubmad_datapath.c:413` 附近）以指数退避对未确认消息重试。模块参数 `ubcore_max_retry_cnt = 11`（`ubmad_datapath.c:21`），第 n 次延迟 `1 << n` ms，**最大累计重传窗口 ≈ 4s**（=`2^12 - 1`）。这就是本设计 `UBMAD_WK_TIME_WAIT_MS = 4000` 的由来（§0.3）——与 MSN 窗口对齐，**不是** TCP 2×MSL。
+> - **公开度**：MSN 是 UBMAD **内部实现细节**，不是公开 API。其他内核模块**无法**直接复用 MSN 的可靠性来发自己的消息——这正是本设计要在 UBMAD 之上提供 `ubmad_wk_session` 作为公开可靠通道的原因之一（§0.1）。
+>
+> 三层关系：
+>
+> ```
+> ┌─────────────────────────────────────────────┐
+> │ ubmad_wk_session（本设计）                  │  TCP 风格会话；多并发；
+> │ session_id-keyed，跨多消息                   │  公开 API
+> ├─────────────────────────────────────────────┤
+> │ UBMAD MSN + 重传                             │  单消息去重 + 重试；
+> │ msn-keyed，单消息                            │  仅 UBMAD 内部用
+> ├─────────────────────────────────────────────┤
+> │ WK Jetty（UM trans_mode + UTP tp_type）     │  共享物理 jetty 上的
+> │                                              │  不可靠数据报
+> └─────────────────────────────────────────────┘
+> ```
+>
+> 详细的 MSN 实现路径在 `umdk_ubmad_wk_jetty_deep_dive.md` §13。
 
 **关键决定：握手消息绕过 MSN，直接调用 `ubcore_post_jetty_send_wr()`。**
 
@@ -3151,3 +3177,16 @@ _v3.17 修订（2026-05-14）相对 v3.16 的纯 prose 同步_：
 - **§7.2 函数注释 header**：函数名 `ubmad_wk_syn_rt_work_handler` 历史遗留含 "syn"，但实际 handler 按 state 分派到 SYN/SYN_ACK/FIN。注释明确历史命名 + 当前 dispatch 范围。
 
 无代码改动；同 v3.16 的同类残留扫尾。
+
+_v3.18 修订（2026-05-14）_：
+
+补一段 MSN 背景到 §0.2 顶部。本文档前 17 个版本都直接拿 MSN 当已知概念用（§0.2 § 0.3 §13 全都引用），但从来没有自包含的"MSN 是什么"说明。新读者必须去 `umdk_ubmad_wk_jetty_deep_dive.md` §13 或读源码才知道 MSN 指 Message Sequence Number、是 UBMAD 内部去重 + 重传机制。
+
+新增背景 callout 包含：
+- MSN 全称（Message Sequence Number）和 wire 位置（`struct ubmad_msg.msn`，8 字节）
+- 接收侧 `msn_node` 哈希去重
+- 发送侧 `rt_wq` + 指数退避 + 4s 累计窗口（解释了 `UBMAD_WK_TIME_WAIT_MS` 的来源）
+- **关键事实**：MSN 是 UBMAD 私有实现细节，**不是公开 API**——这是为什么本设计要在 UBMAD 之上提供 `ubmad_wk_session` 作为公开可靠通道的根本原因之一。
+- 三层 ASCII 层次图：WK Jetty (UM/UTP) / UBMAD MSN / wk_session
+
+无代码改动。文档自洽性提升。
