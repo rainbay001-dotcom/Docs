@@ -1,7 +1,7 @@
 # 公知Jetty可靠通信设计文档（三次握手 / 四次挥手）
 
 _面向读者：对 UMDK/URMA/UBMAD 代码零基础的新开发者。_
-_文档版本：v3.8（修正 v3.7 残留：FIN_WAIT_2 → TIME_WAIT 与 FW2 timer 的 race；统一 tw_work 双用途描述）_
+_文档版本：v3.9（修正 v3.7-3.8 残留：release_session 内 cancel-sync 自死锁；find_by_* 用 kref_get_unless_zero 防复活）_
 _最后更新：2026-05-14_
 
 ---
@@ -808,9 +808,16 @@ struct ubmad_wk_session *ubmad_alloc_session(
  * ubmad_session_find_by_id - 通过 session_id 查找 session
  *
  * 在接收路径中调用（中断上下文之外的工作队列中），
- * 持锁期间对找到的 session 做 kref_get，然后释放锁后安全使用。
+ * 持锁期间对找到的 session 做 kref_get_unless_zero，然后释放锁后安全使用。
  *
- * 返回值：找到返回 session（引用计数已 +1），未找到返回 NULL。
+ * v3.9 修订：用 kref_get_unless_zero 而不是裸 kref_get。原因是哈希表本身
+ * 不持有 ref（§7.4 invariant），所以可能出现的竞争是：另一线程持有最后一份
+ * ref 并 kref_put → kref 归零 → release_session 排队等本函数释放哈希锁；
+ * 而本函数刚好在锁内查到这个 session 并 kref_get——把 0 拉回 1，等于"复活"
+ * 了一个正在被释放的对象，最终导致 double-free 或 UAF。
+ * kref_get_unless_zero 在 ref==0 时返回 false，本函数据此跳过即可。
+ *
+ * 返回值：找到且 ref 不为 0 时返回 session（引用计数已 +1），否则返回 NULL。
  */
 struct ubmad_wk_session *ubmad_session_find_by_id(
         struct ubmad_device_priv *dev_priv,
@@ -822,7 +829,8 @@ struct ubmad_wk_session *ubmad_session_find_by_id(
     hash_for_each_possible(g_session_hash, session, hash_node, session_id) {
         if (session->session_id == session_id &&
             session->dev_priv   == dev_priv) {
-            kref_get(&session->kref);
+            if (!kref_get_unless_zero(&session->kref))
+                continue;       /* session 正在释放，当作未找到 */
             spin_unlock(&g_session_hash_lock);
             return session;
         }
@@ -868,7 +876,9 @@ struct ubmad_wk_session *ubmad_session_find_by_peer(
         if (memcmp(&session->remote_eid, remote_eid,
                    sizeof(*remote_eid)) != 0)
             continue;
-        kref_get(&session->kref);
+        /* v3.9: 同 find_by_id，避免复活正在释放的 session */
+        if (!kref_get_unless_zero(&session->kref))
+            continue;
         spin_unlock(&g_session_hash_lock);
         return session;
     }
@@ -903,14 +913,28 @@ void ubmad_release_session(struct kref *kref)
     hash_del(&session->hash_node);
     spin_unlock(&g_session_hash_lock);
 
-    /* 步骤 2：取消定时器（保险措施）。
-     * v3.4 说明：本函数只在 kref 归零时被调用，意味着 timer 不可能再持有
-     * 引用（否则 kref 不会归零）。所以此处的 cancel_delayed_work_sync 应当
-     * 永远是 no-op。保留它是为了在 cancel/get 路径有 bug 时能尽早暴露
-     * （work pending 时同步等其完成至少不会泄露——而是会触发 kref 下溢
-     * 的 WARN）。 */
-    cancel_delayed_work_sync(&session->rt_work);
-    cancel_delayed_work_sync(&session->tw_work);
+    /* 步骤 2：v3.9——绝不在此处 cancel_delayed_work_sync。
+     *
+     * 原因：本函数可能由 work handler（rt_work 或 tw_work）的最后那次 put
+     * 触发——即 handler 的最终 ubmad_put_session 让 kref 归零并直接调到
+     * release_session。在 work handler 上下文里 sync-cancel 当前正在执行的
+     * 自身 work，会自死锁（cancel_delayed_work_sync 等 handler 完成 → 而
+     * handler 正在等本函数返回 → 永久阻塞或触发内核 WARN）。
+     *
+     * 我们依赖的 invariant：
+     *   - 每次 queue_delayed_work 之前都有 kref_get（§7.4）。
+     *   - 每个被 cancel 成功（cancel_delayed_work 返回 true）的路径都
+     *     立刻补 ubmad_put_session（§7.4 v3.3 补充）。
+     *   - 每个 handler 在末尾 ubmad_put_session。
+     * 这个 invariant 成立时，kref 归零意味着没有任何 timer 还持有 ref，
+     * 也就没有 pending 的 work——cancel_*  调用本来就是无操作。所以
+     * 删除掉它，避免在异常路径上被误用为"我是 handler 但忘了"的安全网。
+     *
+     * 如果担心 invariant 被未来改动破坏，调试期可以用 WARN_ON：
+     *   WARN_ON(delayed_work_pending(&session->rt_work));
+     *   WARN_ON(delayed_work_pending(&session->tw_work));
+     * 而不是用 cancel_*_sync 兜底（兜底会变成上面描述的死锁）。
+     */
 
     /* 步骤 3：释放对端 tjetty 引用（如果已获取） */
     if (session->remote_tjetty)
@@ -2165,7 +2189,9 @@ static void ubmad_wk_time_wait_handler(struct work_struct *work)
         pr_info("ubmad_wk: session=%u TIME_WAIT expired, releasing\n",
                 session->session_id);
 
-    /* 释放哈希表持有的引用（触发 ubmad_release_session） */
+    /* v3.9 修订：释放本 timer 入队前 kref_get 拿的那一份 ref。
+     * （§7.4 规则：哈希表本身不计 ref；此处放掉的是 timer ref。
+     *  这一 put 通常会让 kref 归零并触发 ubmad_release_session。） */
     ubmad_put_session(session);
 }
 ```
@@ -2175,12 +2201,16 @@ static void ubmad_wk_time_wait_handler(struct work_struct *work)
 | 场景 | get 时机 | put 时机 |
 |------|---------|---------|
 | 分配 session | `kref_init`（=1） | — |
-| 哈希表插入 | 无额外 get（哈希表不加引用） | `ubmad_release_session` 中移除 |
+| 哈希表插入 | 无额外 get（哈希表不加引用） | `ubmad_release_session` 中 hash_del |
 | `ubmad_alloc_session` 返回给调用者 | 已有的 1 个 | 调用者用完后 `ubmad_put_session` |
-| `find_by_id` / `find_by_peer` | `kref_get` | 调用者用完后 `ubmad_put_session` |
+| `find_by_id` / `find_by_peer` | **`kref_get_unless_zero`**（v3.9） | 调用者用完后 `ubmad_put_session` |
 | rt_work 入队前 | `kref_get` | `rt_work_handler` 末尾 `put`（或 cancel 路径补 put） |
 | tw_work 入队前 | `kref_get` | `tw_work_handler` 末尾 `put`（或 cancel 路径补 put） |
 | `ubmad_wk_connect` 返回给上层调用方 | 把 alloc 的那 1 个 ref 转给调用方 | **调用方调 `ubmad_wk_close(session)` 时被 consume**（v3.6） |
+
+> **v3.9 关键 invariant**：哈希表本身**不持有 ref**——这意味着 `find_by_*` 在锁内做 ref 增长时，session 可能正处于 ref==0 → 即将释放的窗口。如果用裸 `kref_get` 把 0 拉回 1，等于复活一个正在被释放的对象，最终触发 double-free 或 UAF。`kref_get_unless_zero` 是标准做法：返回 false 时把这个 session 当作"未找到"跳过即可。
+>
+> 同样这个 invariant 决定了 `ubmad_release_session()` 不能 `cancel_delayed_work_sync` 自己——release 可能由 work handler 的最终 put 触发；handler 同步 cancel 自己会死锁。详见 §3.9 函数注释。
 
 > **重要**：每次 `queue_delayed_work` 之前必须先 `kref_get`，并在 handler 最后 `kref_put`。否则 session 对象可能在 handler 执行中途被释放。
 >
@@ -2929,3 +2959,17 @@ _v3.8 修订（2026-05-14）相对 v3.7 的主要变化_：
 | 2 | **§16 函数表对 ubmad_wk_time_wait_handler 的描述未跟上 v3.7**：v3.7 让该 handler 同时处理 TIME_WAIT 和 FIN_WAIT_2 两种状态的到期，但 §16 表里仍写"TIME_WAIT 超时：将 session 置 CLOSED"。 | §16 第 14 项更新为 "TIME_WAIT / FIN_WAIT_2 共用的超时 handler"，并说明两种触发原因的日志差异。Step 3 §3.7 alloc_session 里关于 tw_work 的注释也补一句双用途说明。 |
 
 到 v3.8 为止，没有再发现明显的"按设计就跑不起来"或"有 race 引发 UAF"的实现层 bug；所有 ref 计数路径成对，所有 timer / state 转换的 race 窗口都被显式 cancel 或 flush 关掉。剩余风险还是 (a) 实际编译运行验证 + (b) §18 设计问题。
+
+_v3.9 修订（2026-05-14）相对 v3.8 的主要变化_：
+
+第八轮外部 reviewer 在 v3.8 上找出 1 项 BLOCKER（release_session 自死锁），其相关的 kref/find race 我顺手修了。
+
+| # | 缺陷（v3.7-3.8 残留） | v3.9 修复 |
+|---|------|-----------|
+| 1 | **`ubmad_release_session()` 自死锁**（BLOCKER）：v3.4 加进去的"保险措施" `cancel_delayed_work_sync(&session->{rt,tw}_work)` 在常规 TIME_WAIT / FIN_WAIT_2 路径里会死锁——handler 末尾的 `ubmad_put_session(session)` 是 timer ref 的最后一份 put，触发 release_session；release_session 在 handler 上下文里反过来 sync-cancel 自己等着的那个 work，等于"自己等自己跑完"。 | 删除 release_session 里两个 `cancel_delayed_work_sync` 调用。改用注释明确 invariant：每个 queue_delayed_work 都有配对的 kref_get；每个成功的 cancel 都补 put；handler 末尾 put——这套约束成立时 kref 归零等价于"没有 pending 的 work"，sync-cancel 是无操作但风险是死锁，索性删掉。如果担心未来代码破坏 invariant，可以加 `WARN_ON(delayed_work_pending(...))` 调试，而不是 cancel-sync 兜底。 |
+| 2 | （顺手修）**`find_by_id` / `find_by_peer` 可能复活 ref==0 的 session**：哈希表不计 ref。如果某线程持最后一份 ref 做 kref_put、kref 归零、release_session 排队等本函数的 spin_lock，本函数刚好在锁内查到这个 session 用 `kref_get` 把 0 拉回 1。release_session 拿到锁后 hash_del + 释放；本函数已经把"复活的"指针返回出去，调用方再 kref_put 时 double-free。 | 改用 `kref_get_unless_zero(&session->kref)`：ref==0 时返回 false，本函数把这条记录当作"未找到"跳过。这是 Linux 内核里"哈希表不计 ref"模式的标准做法。同时更新 §7.4 把 invariant 写得更明显。 |
+| 3 | （顺手修）**tw_work_handler 末尾注释错把 timer ref 说成 hash ref**：reviewer 顺手指出。 | 注释改为"释放本 timer 入队前 kref_get 拿的那一份 ref"，并解释这一 put 通常会触发 release_session。 |
+
+到 v3.9 为止，所有已知的 ref-counting / timer / state 交互问题都被显式处理：close-consume 语义清晰；FW2 keep-alive 与 TIME_WAIT 复用但 race 已关；find_by_* 防复活；release 不会自死锁。代码示例应当能在生产质量的标准下编译并跑通完整生命周期。
+
+剩余风险维持：实际编译运行验证 + §18 设计问题。
