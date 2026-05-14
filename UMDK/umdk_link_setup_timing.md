@@ -4383,6 +4383,97 @@ Server side is now closed. Two client-side experiments still queued (per §10.27
 
 Test B is the cheaper one (just a sleep wrapper, no ftrace analysis). Running Test B first: if slowdown drops from 91× to <10×, the fix path is settled (client-side stagger) and Test A becomes a nice-to-have for the root-cause pin.
 
+### 10.29 Correction: §10.27 "server is not the bottleneck" was too absolute (2026-05-14)
+
+JinDou challenged §10.27 by pointing back to bot comment [#4436759654](https://github.com/rainbay001-dotcom/UMDK/issues/2#issuecomment-4436759654) (from round 4 of the original UMDK#2 thread), where a depth-3 trace on **one observed urma_perftest process** showed:
+
+- `import_seg` `ubcore_session_wait` = **610 ms** (vs ~0.87 ms single-process baseline, 700×)
+- `import_jetty #1` `ubcore_session_wait` = **3,364 ms** (vs ~0.45 ms baseline, ~7500×)
+- `import_jetty #2` `ubcore_exchange_tp_info` (contains session_wait) = **3,363 ms** (~3700×)
+- `send_seg_info_req` / `send_jetty_info_req` (contains `ubcore_get_main_primary_eid` ~4.9 ms scan) = **unchanged** at ~5 ms
+
+This data point was already on the table before §10.27 was written. §10.27 didn't reconcile with it.
+
+#### A. What §10.27 got wrong
+
+§10.27.C concluded "server is not the bottleneck" because §10.26 server-side ftrace showed kworker utilization 0.4 % and dispatch latency 53 μs. **This was too absolute.** The correct conclusion is:
+
+> The server's **ubcore/ubcm software layer (kworker dispatch)** is not the bottleneck. But the depth-3 trace shows clients waiting 3.36 s in `ubcore_session_wait`, which **cannot** be inside kworker dispatch (53 μs). Whatever serializes the work, it lives **downstream of kworker**: firmware ctrlq, hardware DMA queue, network stack, or NIC packet processing.
+
+So §10.27's `server is bottleneck = ruled out` confidence statement in the summary is wrong. The right statement is **`server's kworker software dispatch` is ruled out, but `server's firmware/hardware/NIC stack` is untested and remains a candidate**.
+
+#### B. What the bot in #4436759654 got partially wrong too
+
+The bot extrapolated from one traced process at 3.36 s and concluded "T_server ≈ 33.6 ms/request, server's ubcm control plane is single-threaded." The numerical extrapolation has issues:
+
+- The 3.36 s figure is **one specific observed process**, not a population mean
+- The benchmark `import_jetty #2` **median** is 554 ms across 100 processes (much less than 3.36 s)
+- If 100 procs uniformly queued behind a single-threaded server at T = 33.6 ms each, the median wait should be ~1.65 s (50×T), not 554 ms
+- The actual distribution is **clustered** with a long tail — most processes fast (~100-554 ms), some stragglers slow (~3.36 s)
+- That's the **thundering-herd** signature, not uniform serialization. §10.27.C's per-signal mapping is still correct.
+
+So: bot's direction (server-side serialization somewhere) was right; bot's specific claim (ubcm control plane single-threaded) was an over-extrapolation. The actual location is one layer deeper.
+
+#### C. Reconciled model
+
+| Layer | Status | Source |
+| --- | --- | --- |
+| Client `find_primary_eid_in_ues` (EID scan) | **Not dilating** under load (4.84 ms vs 4.83 ms single-process) | Bot #4436759654 direct measurement |
+| Client `ubcore_session_wait` | **Large tail, 3.36 s outlier** | Bot #4436759654 direct measurement |
+| Server kworker software dispatch | **53 μs median, no queueing** | §10.26 experiment 6 |
+| Server `ubcore_get_tp_list` (kworker context) | Mostly ~200 μs, 2-7 % outliers at ~10 ms | §10.26 experiment 5 |
+| **Firmware ctrlq / hardware DMA / NIC** | **Untested** | Missing link in coordination |
+
+Most likely bottleneck (revised, ranked):
+
+1. **Server-side firmware ctrlq depth-1 serialization.** Kworker `udma_get_tp_list` typically returns in ~200 μs after submitting cmd, then waits for firmware async ACK. Under 100-process burst, firmware processes serially → tail clients wait for their slot.
+2. **Network stack / NIC congestion** under 100 simultaneous MAD send + receive.
+3. **`find_primary_eid_in_ues` is NOT the suspect** — already directly measured stable at ~5 ms.
+
+#### D. Revised experiment plan
+
+**Withdrawn: Test A (client-side `ubcore_get_main_primary_eid` ftrace).** Already measured by bot #4436759654 with the result: stable at ~5 ms under 100-process load. Re-measuring is duplicate work. §10.27.F shouldn't have proposed it.
+
+**Kept: Test B (random startup stagger disconfirm).** Still high-information. If staggering drops 91× to <10×, alignment is the amplifier regardless of which layer queues. Cheapest possible experiment (one `sleep $RANDOM` wrapper).
+
+**New: Test C — server-side firmware ctrlq trace.**
+
+```bash
+# On master server
+cat > set_graph_function << 'EOF'
+udma_ctrlq_send
+udma_ctrlq_complete
+udma_get_tp_list
+ubcore_get_tp_list
+EOF
+echo 4 > max_graph_depth          # depth 4 to see udma_ctrlq_* inside udma_get_tp_list
+echo 1 > options/funcgraph-abstime
+echo 1 > options/funcgraph-proc
+echo 65536 > buffer_size_kb
+echo function_graph > current_tracer
+```
+
+Predictions:
+- Single-process: `udma_ctrlq_send` → completion interval ~100-200 μs (firmware idle, cmd dispatched immediately).
+- 100-concurrent: completion interval dilates to ms-tens-of-ms (firmware queueing). This would directly **confirm** the firmware-ctrlq-serialization hypothesis as the source of the 3.36 s client wait.
+
+If Test C shows uniform fast ctrlq completion (no dilation), the bottleneck is one layer further out (network adapter / fabric).
+
+#### E. Confidence summary (revised)
+
+| Claim | §10.27 | §10.29 (corrected) |
+| --- | --- | --- |
+| Server kworker is the bottleneck | ~0 % | ~0 % (unchanged) |
+| Server firmware ctrlq is the bottleneck | not considered | **~70 %** (new leading) |
+| Network stack / NIC is the bottleneck | not considered | ~15 % |
+| Client `find_primary_eid_in_ues` is the bottleneck | ~85 % | **~5 %** (directly disproven by #4436759654) |
+| Mechanism is thundering-herd alignment | >95 % | >95 % (unchanged, signals still match) |
+| Fix is client-side stagger | ~70 % | ~60 % (still high if alignment is the amplifier, regardless of which layer queues) |
+
+#### F. Lesson for the doc
+
+§10.27 should have explicitly checked against bot comment #4436759654's data before drawing the "server excluded" conclusion. The pattern is the same one §10.18 → §10.19 corrected: each layer of evidence eliminates a different framing of the problem, but **only if you keep all prior data in view**. Doc-wide cross-check of "does this conclusion explain ALL the data we have?" is the missing discipline.
+
 ## 11. TRACE_EVENT internals — how the macro actually works
 
 ### 11.1 Where `TRACE_EVENT` is defined
