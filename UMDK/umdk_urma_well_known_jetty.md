@@ -243,7 +243,7 @@ Important lines:
 - `ubmad_create_jetty()` sets `jetty_cfg.id = jetty_id`, `share_jfr = 1`, `trans_mode = UBCORE_TP_UM`, JFC/JFR bindings, and calls `ubcore_create_jetty()` in `ub_mad.c:394-420`.
 - `ubmad_init_jetty_rsrc_array()` assigns IDs 1 and 2, then initializes each resource in `ub_mad.c:947-963`.
 - `ubmad_init_jetty_rsrc()` creates JFC/JFR/jetty/segments and preposts receive WRs in `ub_mad.c:791-868`.
-- `ubmad_post_recv()` posts each receive WQE to the local well-known jetty with `ubcore_post_jetty_recv_wr()` in `ubmad_datapath.c:934-963`.
+- `ubmad_post_recv()` posts a single receive WQE to the local well-known jetty via `ubcore_post_jetty_recv_wr()` in `ubmad_datapath.c:934-963`. The init-time prepost loop runs `UBMAD_JFR_DEPTH` iterations of this helper inside `ubmad_init_jetty_rsrc()` at `ub_mad.c:853-860`.
 - `ubmad_post_send()` fails before selecting `jetty_rsrc[0]` if `dev_priv->valid` is false, so a send through `ubcore_call_cm_send_ops()` depends on prior resource creation in `ubmad_datapath.c:782-793`.
 
 This means the UBCM well-known jetty is already listening before a remote link-setup request arrives.
