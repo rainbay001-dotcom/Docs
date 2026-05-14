@@ -1,7 +1,7 @@
 # 公知Jetty可靠通信设计文档（三次握手 / 四次挥手）
 
 _面向读者：对 UMDK/URMA/UBMAD 代码零基础的新开发者。_
-_文档版本：v3.20（修复 tjetty cache miss 在三个 send 路径上的恢复——server SYN_ACK / close 前 FIN / rt_work retry 都补充 import；术语澄清"握手消息"覆盖 FIN/FIN_ACK 的歧义）_
+_文档版本：v3.21（v3.20 漏 ACK / FIN_ACK 反应式 send 路径——补 ubmad_post_send_wk_with_import 集中 helper；同步修过期 prose 关于 "rt_work 不主动 import" 和 "CONN_DATA 占位"模型）_
 _最后更新：2026-05-14_
 
 ---
@@ -1031,11 +1031,17 @@ pr_debug("ubmad: alloc session id=%u remote_eid=%pI6\n",
  *     atomic_fetch_add(&rsrc->tx_in_queue) 计数（同文件 :276-278,361-363 等）。
  *   - 增加 tx_in_queue 累加/回退（v3.2 漏掉这个；ubmad_datapath.c:1230 的
  *     完成处理会无条件做 atomic_fetch_sub，缺增反减会让计数变负）。
- *   - tjetty cache miss 处理：直接返回 -EAGAIN，**调用方** ubmad_wk_connect()
- *     等先调用现有 ubmad_post_send（任意一条 CONN_DATA 占位）触发导入，再用
- *     会话级 rt_work 重试。这条 v3.3 选择不引入新 helper，把触发导入的责任
- *     上移到调用方；后续如确实需要专用入口可在 ub_mad.c 新增
- *     ubmad_kick_import(dev_priv, eid)，但本文档不再假设它已存在。
+ *   - tjetty cache miss 处理：直接返回 -EAGAIN。**v3.20-v3.21 起**，调用
+ *     方负责把这变成可恢复的失败，有两种模式：
+ *       (a) 主动 send 路径（connect / process_wk_syn / wk_close）在第一次
+ *           send 之前**同步 pre-import**——保证首发命中。
+ *       (b) 反应式 send 路径（process_wk_syn_ack 的 ACK / process_wk_fin
+ *           的 FIN_ACK 等）改用 `ubmad_post_send_wk_with_import()`——
+ *           直接 send，撞到 -EAGAIN 就同步 import + retry once。
+ *       (c) rt_work_handler 在 retry 前看到 -EAGAIN 也会同步 import 一次，
+ *           作为 cache 中途被驱逐场景下的最终兜底。
+ *     v3.3 文档原本设想"调用方先发一条 CONN_DATA 占位触发导入"——那个
+ *     hack 模型已被上述三种 explicit import 替代。
  *
  * 不复用 ubmad_post_send()：握手层有自己的会话级重传，叠加 MSN 重传会冲突
  * （详见 §0.2）。但具体的 SGE 取用、tx 计数、WR 构造完全 mirror
@@ -1125,6 +1131,49 @@ static int ubmad_post_send_wk(struct ubmad_device_priv *dev_priv,
 
     ubmad_put_tjetty(tjetty);
     return ret;
+}
+
+/**
+ * ubmad_post_send_wk_with_import - send + auto-recover on tjetty cache miss
+ *
+ * v3.21 新增。包装 ubmad_post_send_wk()：如果首发返回 -EAGAIN（cache miss），
+ * 同步触发 ubmad_import_jetty 然后重试一次。失败把错误码透传给调用方。
+ *
+ * 用途：那些"无法/不便先 pre-import 再 send"的反应式发送路径，主要是
+ * 接收 handler 内部触发的回应消息——
+ *   - process_wk_syn_ack() 中的 ESTABLISHED 重传 ACK 应答 + 第三次握手 ACK
+ *   - process_wk_fin() 三个分支里的 FIN_ACK 反应式回发
+ * 这些上下文与 v3.20 给 process_wk_syn / wk_close / rt_work 加 pre-import
+ * 是同一类型（jfce_wq_r 接收工作队列，sleepable）；用一个集中 helper
+ * 比每处 inline pre-import 更整洁。
+ *
+ * 注意：本 helper 只 retry 一次。如果 import 后第二次 post 仍失败（罕见），
+ * 错误返回给调用方——一般日志告警即可，反正本设计的 SYN_ACK / ACK / FIN_ACK
+ * 失败都不致命：对端按 retry 节奏会重新触发本路径。
+ */
+static int ubmad_post_send_wk_with_import(struct ubmad_device_priv *dev_priv,
+                                           struct ubmad_wk_session *session,
+                                           enum ubmad_msg_type msg_type,
+                                           uint32_t isn, uint32_t ack)
+{
+    struct ubmad_jetty_resource *rsrc = &dev_priv->jetty_rsrc[0];
+    struct ubmad_tjetty *tjetty;
+    int ret;
+
+    ret = ubmad_post_send_wk(dev_priv, session, msg_type, isn, ack);
+    if (ret != -EAGAIN)
+        return ret;
+
+    /* tjetty cache miss — import then retry once */
+    tjetty = ubmad_import_jetty(dev_priv->device, rsrc, &session->remote_eid);
+    if (IS_ERR_OR_NULL(tjetty)) {
+        pr_warn("ubmad_wk: with_import: import failed for eid=%pI6, type=%d\n",
+                session->remote_eid.raw, msg_type);
+        return tjetty ? PTR_ERR(tjetty) : -EHOSTUNREACH;
+    }
+    ubmad_put_tjetty(tjetty);
+
+    return ubmad_post_send_wk(dev_priv, session, msg_type, isn, ack);
 }
 ```
 
@@ -1444,11 +1493,12 @@ static void ubmad_process_wk_syn(struct ubmad_msg *msg,
     session = ubmad_session_find_by_peer(dev_priv, &client_eid,
                                           wk_hdr->local_session_id);
     if (session) {
-        /* 已在 SYN_RCVD 状态，重发 SYN_ACK */
+        /* 已在 SYN_RCVD 状态，重发 SYN_ACK
+         * v3.21：用 with_import 自愈 cache miss */
         if (session->state == UBMAD_WK_SYN_RCVD) {
             pr_debug("ubmad_wk: retransmit SYN_ACK for session=%u (peer=%u)\n",
                      session->session_id, session->remote_session_id);
-            ubmad_post_send_wk(dev_priv, session,
+            ubmad_post_send_wk_with_import(dev_priv, session,
                                 UBMAD_WK_SYN_ACK,
                                 session->local_isn,
                                 session->remote_isn + 1);
@@ -1489,8 +1539,9 @@ static void ubmad_process_wk_syn(struct ubmad_msg *msg,
     /* 步骤 5b（v3.20 新增）：在发 SYN_ACK 前**同步导入** client 的 tjetty。
      * 服务端在收到 SYN 时，本端 tjetty 缓存对该 client EID 通常**未填充**
      * （tjetty 是发送侧的对端缓存；接收一条消息不会填它）。如果直接调
-     * post_send_wk 发 SYN_ACK，会拿到 -EAGAIN，rt_work 退化成空转
-     * （v3.x 的 rt_work_handler 不主动 import）。在此处同步 import 与
+     * post_send_wk 发 SYN_ACK，会拿到 -EAGAIN，rt_work 不得不进入
+     * import-then-retry 模式（v3.20 起 rt_work 也会 import-on-EAGAIN，但
+     * 不如 caller 端 pre-import 干净）。在此处同步 import 与
      * §4.4 connect 的 v3.4 对称，保证后续 SYN_ACK 必命中缓存。
      * 工作队列（dev_priv->jfce_wq_r）上下文是 sleepable，安全。 */
     {
@@ -1588,7 +1639,8 @@ static void ubmad_process_wk_syn_ack(struct ubmad_msg *msg,
         spin_unlock(&session->lock);
         pr_debug("ubmad_wk: re-ACK duplicate SYN_ACK for session=%u\n",
                  session->session_id);
-        ubmad_post_send_wk(dev_priv, session, UBMAD_WK_ACK,
+        /* v3.21：用 with_import 自愈 cache miss */
+        ubmad_post_send_wk_with_import(dev_priv, session, UBMAD_WK_ACK,
                             0, session->remote_isn + 1);
         ubmad_put_session(session);
         return;
@@ -1627,8 +1679,10 @@ static void ubmad_process_wk_syn_ack(struct ubmad_msg *msg,
 
     /* 步骤 6：发送 ACK（第三次握手）
      *   isn = 0（ACK 消息无需携带 ISN）
-     *   ack = remote_isn + 1 */
-    ubmad_post_send_wk(dev_priv, session,
+     *   ack = remote_isn + 1
+     *   v3.21：用 with_import 自愈 cache miss——客户端在 SYN_SENT 期间
+     *   tjetty 已 pre-import 过，但中间可能被驱逐；安全起见统一走 helper。 */
+    ubmad_post_send_wk_with_import(dev_priv, session,
                         UBMAD_WK_ACK,
                         0, session->remote_isn + 1);
 
@@ -1793,7 +1847,9 @@ int ubmad_wk_close(struct ubmad_wk_session *session)
     /* v3.20 新增：在发 FIN 前**同步重新导入** tjetty。
      * 长时间 ESTABLISHED 之后，session 的对端 tjetty 在缓存中可能已被
      * 驱逐（缓存有 UBMAD_MAX_TJETTY_NUM 上限）。直接 post FIN 拿到 -EAGAIN
-     * 会让 rt_work 退化成空转——v3.x 的 rt_work_handler 不主动 import。
+     * 会让 rt_work 走 import-then-retry 路径（v3.20 起 rt_work 也支持
+     * import-on-EAGAIN，但 caller 端 pre-import 失败可以早回错给上层，
+     * 比 timer 端的"重试到上限再失败"反馈更直接）。
      * 此处与 §4.4 connect、§5.4 process_wk_syn 的 pre-import 模式对称。
      * 调用方上下文（用户线程或 on_closed 回调）通常是 sleepable。 */
     {
@@ -1925,8 +1981,9 @@ static void ubmad_process_wk_fin(struct ubmad_msg *msg,
         session->state = UBMAD_WK_TIME_WAIT;
         spin_unlock(&session->lock);
 
-        /* 发送 FIN_ACK（v3.3：ack = remote_fin_seq + 1） */
-        ubmad_post_send_wk(dev_priv, session, UBMAD_WK_FIN_ACK,
+        /* 发送 FIN_ACK（v3.3：ack = remote_fin_seq + 1）
+         * v3.21：用 with_import 自愈 cache miss */
+        ubmad_post_send_wk_with_import(dev_priv, session, UBMAD_WK_FIN_ACK,
                             0, session->remote_fin_seq + 1);
 
         /* 启动 TIME_WAIT 定时器（UBMAD_WK_TIME_WAIT_MS = 4000ms）
@@ -1940,8 +1997,9 @@ static void ubmad_process_wk_fin(struct ubmad_msg *msg,
         session->state = UBMAD_WK_CLOSE_WAIT;
         spin_unlock(&session->lock);
 
-        /* 发送 FIN_ACK（v3.3：ack = remote_fin_seq + 1） */
-        ubmad_post_send_wk(dev_priv, session, UBMAD_WK_FIN_ACK,
+        /* 发送 FIN_ACK（v3.3：ack = remote_fin_seq + 1）
+         * v3.21：用 with_import 自愈 cache miss */
+        ubmad_post_send_wk_with_import(dev_priv, session, UBMAD_WK_FIN_ACK,
                             0, session->remote_fin_seq + 1);
 
         /* 通知上层"对端已关闭，你可以继续发数据，但最终也需要调用 close()" */
@@ -1969,7 +2027,8 @@ static void ubmad_process_wk_fin(struct ubmad_msg *msg,
         spin_unlock(&session->lock);
         pr_debug("ubmad_wk: re-ACK FIN in state=%d for session=%u\n",
                  old_state, session->session_id);
-        ubmad_post_send_wk(dev_priv, session, UBMAD_WK_FIN_ACK,
+        /* v3.21：用 with_import 自愈 cache miss */
+        ubmad_post_send_wk_with_import(dev_priv, session, UBMAD_WK_FIN_ACK,
                             0, session->remote_fin_seq + 1);
         /* 不重启 TIME_WAIT；不重新触发 on_closed（已在首次 FIN 时回调）。 */
 
@@ -3280,3 +3339,15 @@ _v3.20 修订（2026-05-14）相对 v3.19 的主要变化_：
 | 2 | **"握手消息"涵盖 FIN/FIN_ACK 时不准确**（LOW）：FIN/FIN_ACK 是挥手/teardown，不是 handshake。文档反复用"握手消息"统称所有 5 种 WK 控制消息有歧义。 | 在 §0.2 关键决定句和 §2.1 新增枚举句两处把"握手消息"明确替换/补注成"WK 会话控制消息（三次握手 + 四次挥手）"。其余 prose 因为太多处不做大规模重命名（rt_work_handler 函数名也保留 "syn" 前缀，前面已注明历史命名）；但读者看到§0.2 句末的提醒后能理解后文的统称只是简称。 |
 
 到 v3.20 为止，每个 send 路径要么有 caller 端的 pre-import，要么有 timer 端的 import-on-EAGAIN 兜底。Cache 驱逐场景下整个生命周期都能 self-heal。
+
+_v3.21 修订（2026-05-14）相对 v3.20 的主要变化_：
+
+第十九轮 reviewer 指出 v3.20 的"每个 send 路径都 self-heals"声明过强——五处反应式 send（在 receive handler 内部触发的回应消息）仍然忽略 `ubmad_post_send_wk` 的返回值，撞上 cache miss 就静默丢消息：
+
+| # | 缺陷 | v3.21 修复 |
+|---|------|-----------|
+| 1 | **5 处反应式 send 忽略 -EAGAIN**（HIGH）：<br>(a) `process_wk_syn_ack` ESTABLISHED 分支重发 ACK 应答<br>(b) `process_wk_syn_ack` 第三次握手 ACK<br>(c) `process_wk_fin` FIN_WAIT_2 → TIME_WAIT 的 FIN_ACK<br>(d) `process_wk_fin` ESTABLISHED → CLOSE_WAIT 的 FIN_ACK<br>(e) `process_wk_fin` CLOSE_WAIT/TIME_WAIT 重传时 re-ACK FIN_ACK<br>这些都没检 ret，cache miss 静默丢；典型表现是客户端进 ESTABLISHED 但服务端永远卡 SYN_RCVD（最终 timeout）。 | 新增 `ubmad_post_send_wk_with_import()` helper：包装 `ubmad_post_send_wk`，第一次 -EAGAIN 时同步 `ubmad_import_jetty` + 重试一次。所有 5 处反应式 send 改用 helper。每处 sleepable 上下文（jfce_wq_r 接收工作队列）安全。 |
+| 2 | **§4.3 docstring 还描述"调用方先发一条 CONN_DATA 占位触发导入"的旧 hack 模型**（LOW）：v3.20-v3.21 引入 explicit pre-import / with_import 之后这段已经过时。 | docstring 改写：列三种 import 模式（caller 端 pre-import / 反应式 with_import / rt_work import-on-EAGAIN 兜底），CONN_DATA hack 标为已被替代。 |
+| 3 | **process_wk_syn 和 wk_close 注释还说 "rt_work 不主动 import"**（LOW）：v3.20 给 rt_work 加了 import-on-EAGAIN，这两处注释里"会让 rt_work 退化成空转"的措辞已不准确。 | 两处注释更新成 "rt_work 也支持 import-then-retry，但 caller 端 pre-import 仍是首选——失败可以早回错给上层，反馈更直接"。 |
+
+到 v3.21 为止，每一个 `ubmad_post_send_wk()` 调用点都被 import 路径覆盖：caller pre-import / with_import 包装 / rt_work 兜底——三层同时保证 cache miss 不会变成静默丢消息。
