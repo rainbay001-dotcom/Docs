@@ -1,7 +1,7 @@
 # 公知Jetty可靠通信设计文档（三次握手 / 四次挥手）
 
 _面向读者：对 UMDK/URMA/UBMAD 代码零基础的新开发者。_
-_文档版本：v3.21（v3.20 漏 ACK / FIN_ACK 反应式 send 路径——补 ubmad_post_send_wk_with_import 集中 helper；同步修过期 prose 关于 "rt_work 不主动 import" 和 "CONN_DATA 占位"模型）_
+_文档版本：v3.22（清理 v3.21 引入的三处内部不一致：modes 计数 2→3；helper return 与调用方实际行为对齐；CONN_DATA prewarm 与 §4.3 hack-replaced 措辞不打架）_
 _最后更新：2026-05-14_
 
 ---
@@ -1032,7 +1032,7 @@ pr_debug("ubmad: alloc session id=%u remote_eid=%pI6\n",
  *   - 增加 tx_in_queue 累加/回退（v3.2 漏掉这个；ubmad_datapath.c:1230 的
  *     完成处理会无条件做 atomic_fetch_sub，缺增反减会让计数变负）。
  *   - tjetty cache miss 处理：直接返回 -EAGAIN。**v3.20-v3.21 起**，调用
- *     方负责把这变成可恢复的失败，有两种模式：
+ *     方负责把这变成可恢复的失败，有三种模式：
  *       (a) 主动 send 路径（connect / process_wk_syn / wk_close）在第一次
  *           send 之前**同步 pre-import**——保证首发命中。
  *       (b) 反应式 send 路径（process_wk_syn_ack 的 ACK / process_wk_fin
@@ -1148,8 +1148,13 @@ static int ubmad_post_send_wk(struct ubmad_device_priv *dev_priv,
  * 比每处 inline pre-import 更整洁。
  *
  * 注意：本 helper 只 retry 一次。如果 import 后第二次 post 仍失败（罕见），
- * 错误返回给调用方——一般日志告警即可，反正本设计的 SYN_ACK / ACK / FIN_ACK
- * 失败都不致命：对端按 retry 节奏会重新触发本路径。
+ * 错误返回给调用方。**v3.22 修订**：所有当前调用点（process_wk_syn_ack
+ * 的两条 ACK 应答 + process_wk_fin 的三条 FIN_ACK 应答）都**有意忽略**
+ * 这个返回值——本设计的 SYN_ACK / ACK / FIN_ACK 失败不致命：对端会按
+ * retry 节奏重新触发本路径，下次会再 import + retry，所以不需要 caller
+ * 端的额外处理。但本 helper 在内部已经 `pr_warn` 报告失败，不依赖调用方
+ * 加日志（见上面 import 失败分支 + post 失败由底层 ubmad_post_send_wk
+ * 自带的 pr_err 提示）。
  */
 static int ubmad_post_send_wk_with_import(struct ubmad_device_priv *dev_priv,
                                            struct ubmad_wk_session *session,
@@ -1200,8 +1205,13 @@ static int ubmad_post_send_wk_with_import(struct ubmad_device_priv *dev_priv,
  *   - 同步模式（on_established == NULL）：还会再阻塞最多 5 秒等待握手 ACK。
  *   - 异步模式（on_established != NULL）：tjetty 导入后立即返回 session 指针；
  *     握手完成时调 on_established，失败时调 on_closed。
- *   - 如果调用方完全不能接受 import 阻塞，应在 connect 之前用其他方式预热
- *     tjetty 缓存（例如发一条 CONN_DATA），此处不再涉及。
+ *   - 如果调用方完全不能接受 import 阻塞：可以在调 connect 前提前以业务消息
+ *     触发 tjetty 导入（任何一条 ubmad_post_send 风格的发送都会进入慢路径
+ *     queue_work(conn_wq, ubmad_jetty_work_handler) 完成异步 import）。
+ *     **注意 v3.21 §4.3 docstring 说"CONN_DATA hack 模型已被替代"指的是
+ *     底层 ubmad_post_send_wk 实现不再依赖这个 hack——但作为业务侧的可选
+ *     prewarm 手段它依然合法**。如果将来需要专用入口，可在 ub_mad.c 加
+ *     ubmad_kick_import(dev_priv, eid)。
  *
  * 三次握手流程：
  *   1. 分配 session（状态: CLOSED）
@@ -3351,3 +3361,13 @@ _v3.21 修订（2026-05-14）相对 v3.20 的主要变化_：
 | 3 | **process_wk_syn 和 wk_close 注释还说 "rt_work 不主动 import"**（LOW）：v3.20 给 rt_work 加了 import-on-EAGAIN，这两处注释里"会让 rt_work 退化成空转"的措辞已不准确。 | 两处注释更新成 "rt_work 也支持 import-then-retry，但 caller 端 pre-import 仍是首选——失败可以早回错给上层，反馈更直接"。 |
 
 到 v3.21 为止，每一个 `ubmad_post_send_wk()` 调用点都被 import 路径覆盖：caller pre-import / with_import 包装 / rt_work 兜底——三层同时保证 cache miss 不会变成静默丢消息。
+
+_v3.22 修订（2026-05-14）相对 v3.21 的纯 prose 修正_：
+
+第二十轮 reviewer 没找代码问题，但发现 v3.21 的描述里有三处内部不一致：
+
+- **§4.3 docstring "两种模式"但列了 (a) (b) (c) 三种**：v3.21 写"调用方负责把这变成可恢复的失败，有两种模式"然后 enumerate 了三个。简单计数 bug，改成"三种模式"。
+- **§4.3 with_import helper 注释说返回错误"一般日志告警即可"，但所有调用点都忽略返回**：自相矛盾。两种修法：让 helper 内部 log，或者承认调用方有意忽略。helper 已经在 import 失败分支自带 `pr_warn`，post 失败由底层 ubmad_post_send_wk 的 `pr_err` 报告——所以选后者：明确说明调用方**有意**忽略返回值，原因是对端按 retry 节奏会重新触发本路径，下次会再 import + retry，调用方加日志反而冗余。
+- **§4.4 connect docstring 还说"如果完全不能接受 import 阻塞，应在 connect 之前用其他方式预热（例如发一条 CONN_DATA）"，但 §4.3 docstring 又说"CONN_DATA hack 模型已被替代"**：两段措辞打架。澄清：§4.3 说的是"底层 ubmad_post_send_wk 实现不再依赖 CONN_DATA hack"；§4.4 说的是"业务侧的可选 prewarm 手段"——后者依然合法。给 §4.4 注释补一段对应解释，避免读者以为两段冲突。
+
+无代码改动；纯 prose 一致性扫尾。
