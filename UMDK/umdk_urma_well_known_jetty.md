@@ -86,6 +86,15 @@ udma_dev->caps.public_jetty.max_cnt   = cmd->well_known_jetty_num;
 attr->reserved_jetty_id_max = udma_dev->caps.public_jetty.max_cnt - 1;
 ```
 
+`udma_jetty.c:232-245` (allocation fallback includes the public-jetty pool):
+```c
+ret = udma_alloc_jetty_id(udma_dev, idx, &udma_dev->caps.jetty);
+...
+ret = udma_alloc_jetty_id(udma_dev, idx, &udma_dev->caps.user_ctrl_normal_jetty);
+...
+ret = udma_alloc_jetty_id(udma_dev, idx, &udma_dev->caps.public_jetty);
+```
+
 `udma_jetty.c:298+` (validation at create time, function `udma_verify_jetty_type_urma_normal`):
 ```c
 if (!(CFGID_CHECK(cfg_id, udma_dev->caps.public_jetty) ||
@@ -508,6 +517,7 @@ Ramifications: the HW page mappings may not behave correctly with a non-4KB host
 - `kernel/drivers/ub/urma/hw/udma/udma_cmd.h:199-200` — `well_known_jetty_start`, `well_known_jetty_num` HW cmd fields.
 - `kernel/drivers/ub/urma/hw/udma/udma_main.c:172` — `reserved_jetty_id_max` exposed to userspace.
 - `kernel/drivers/ub/urma/hw/udma/udma_main.c:543, 561-562` — driver wires HW cap into `caps.public_jetty`.
+- `kernel/drivers/ub/urma/hw/udma/udma_jetty.c:232-245` — normal jetty ID allocation can fall back into `caps.public_jetty`.
 - `kernel/drivers/ub/urma/hw/udma/udma_jetty.c:298+` — `udma_verify_jetty_type_urma_normal`, `udma_verify_jetty_type_urma_ex`.
 - `kernel/drivers/ub/urma/hw/udma/udma_jetty.c:316, 341` — page-size constraint enforcement.
 - `kernel/drivers/ub/urma/hw/udma/udma_jetty.c:1864-1865` — `well_known_jetty_pgsz_check` module param.
