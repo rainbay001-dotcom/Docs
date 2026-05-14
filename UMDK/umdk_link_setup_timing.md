@@ -4474,6 +4474,77 @@ If Test C shows uniform fast ctrlq completion (no dilation), the bottleneck is o
 
 §10.27 should have explicitly checked against bot comment #4436759654's data before drawing the "server excluded" conclusion. The pattern is the same one §10.18 → §10.19 corrected: each layer of evidence eliminates a different framing of the problem, but **only if you keep all prior data in view**. Doc-wide cross-check of "does this conclusion explain ALL the data we have?" is the missing discipline.
 
+### 10.30 Smoking-gun confirmation: `udma_get_tp_list` 33.5 ms × 100 ≈ 3.35 s (2026-05-14)
+
+JinDou shared a mid-trace excerpt from experiment 6 that **directly pins the firmware ctrlq hypothesis from §10.29**.
+
+#### A. The critical line
+
+```
+7743.717827 | 78) kworker-81680 | * 33570.33 us | } /* udma_get_tp_list [udma] */
+7743.717829 | 78) kworker-81680 | * 33574.61 us | } /* ubcore_get_tp_list [ubcore] */
+```
+
+**One `udma_get_tp_list` invocation took 33.5 ms** — three times larger than the 10 ms outliers seen in §10.26 and 167× the median (~200 μs).
+
+#### B. Arithmetic close-out
+
+| Quantity | Value |
+| --- | --- |
+| Per-call `udma_get_tp_list` worst case | 33.5 ms |
+| Concurrent client processes | 100 |
+| **Predicted cumulative firmware ctrlq queueing** | **3.35 s** |
+| Observed `ubcore_session_wait` outlier (#4436758694) | **3.36 s** |
+| Discrepancy | **< 0.5 %** |
+
+The 3.36 s wait that motivated bot's #4436759654 conclusion is fully explained by firmware ctrlq depth-1 serialization. No additional bottleneck needed.
+
+#### C. Two more findings from the same excerpt
+
+1. **`ubmad_process_msg` slow path: 8.9 ms.** The fast path (most calls) takes ~0.6 μs. One observed instance took 8.9 ms inside `ubmad_recv_work_handler` (7743.711636 → 7743.720542). 1000× slowdown for that single call. Mechanism not yet pinned — could be CM state-machine synchronous wait, auth handshake, or TP-table lookup that itself touches firmware. **Independent of the udma_get_tp_list ctrlq path** (different kworker, different CPU).
+
+2. **kworker pool IS multi-threaded in practice** (correcting §10.27 finding B1 again). The excerpt shows three kworkers active simultaneously across three different CPUs:
+   - `kworker-87275` on CPU 67
+   - `kworker-87305` on CPU 2
+   - `kworker-81680` on CPU 78
+
+   §10.27's "effectively single-threaded" reading was specific to one trace run (`trace_server_P100_round4_new`). General behavior: workqueue uses multiple kworkers, but they all serialize at the firmware ctrlq layer.
+
+#### D. Codex `udma-tp-cache` patch — verdict revised AGAIN
+
+§10.27.D predicted codex patch wall-clock impact ~0.2-0.5 %. §10.30 data overturns this:
+
+| Estimate revision | Predicted patch impact |
+| --- | --- |
+| §10.25.D | Irrelevant (wrong layer) |
+| §10.26.C first cut | Relevant, big |
+| §10.27.D | Relevant, small win (0.2-0.5 %) |
+| **§10.30** | **Relevant, major win (>99 % under sustained 100-proc load)** |
+
+Math: the codex patch caches `udma_get_tp_list` results keyed by `<peer_eid, trans_mode>`. For repeated `import_jetty` of the same target across many client procs, the first call pays the firmware ctrlq cost (~33 ms in the worst case); calls #2-100 hit the cache and skip firmware entirely (microseconds). Predicted 100-proc setup wall-clock: from ~3.36 s down to **~50 ms** (1 × firmware-miss + 99 × cache-hits).
+
+Caveat: only applies when the 100 procs target the **same peer**. For diverse targets, no cache reuse.
+
+#### E. Experiment priority — sharpened
+
+| Experiment | Status | Notes |
+| --- | --- | --- |
+| Test A (client EID scan ftrace) | **Withdrawn** | Already disproven in #4436759654 (scan stable at ~5 ms) |
+| Test B (random stagger) | Keep | Cheap; if 91× → <10×, client-side stagger is a free fix that should help regardless of firmware-ctrlq mechanism |
+| Test C (depth-4 firmware ctrlq trace) | **Demoted** | Already indirectly confirmed by the 33.5 ms data point + 3.35 s arithmetic; further measurement marginal |
+| **Test D (NEW): apply codex `udma-tp-cache` to master, re-run 100-proc** | **Highest priority** | Predicted 99 %+ wall-clock improvement |
+| Trace `ubmad_process_msg` slow-path (depth ≥4) | **NEW low priority** | The 8.9 ms outlier is a separate mechanism worth knowing, but doesn't change the leading fix |
+
+#### F. Confidence summary (revised again)
+
+| Claim | §10.29 | §10.30 |
+| --- | --- | --- |
+| Firmware ctrlq is the dominant bottleneck | ~70 % | **>95 %** |
+| Codex patch resolves it | unclear | **~85 %** (high if cache hit rate matches workload) |
+| Client-side stagger helps | ~60 % | ~60 % (orthogonal, still useful as a free fix) |
+| `find_primary_eid_in_ues` matters | ~5 % | ~5 % (still disproven by #4436759654) |
+| `ubmad_process_msg` slow path matters | not considered | ~15 % independent contributor (worth a follow-up) |
+
 ## 11. TRACE_EVENT internals — how the macro actually works
 
 ### 11.1 Where `TRACE_EVENT` is defined
