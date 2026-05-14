@@ -1,7 +1,7 @@
 # 公知Jetty可靠通信设计文档（三次握手 / 四次挥手）
 
 _面向读者：对 UMDK/URMA/UBMAD 代码零基础的新开发者。_
-_文档版本：v3.3（修正 v3.2 残留：删除矛盾的 Step 1 §1.5、用真实内核 API 替换虚构 helper、cancel-then-put、close 回滚、FIN 序列号、tx_in_queue 计数）_
+_文档版本：v3.4（修正 v3.3 残留：connect 同步 import tjetty、cancel_delayed_work_sync ref 泄漏、删除 §6.5 重复的 close、sge_addr 类型 mirror 真实内核）_
 _最后更新：2026-05-14_
 
 ---
@@ -894,7 +894,12 @@ void ubmad_release_session(struct kref *kref)
     hash_del(&session->hash_node);
     spin_unlock(&g_session_hash_lock);
 
-    /* 步骤 2：取消定时器（cancel_delayed_work_sync 会等待正在执行的 handler 返回） */
+    /* 步骤 2：取消定时器（保险措施）。
+     * v3.4 说明：本函数只在 kref 归零时被调用，意味着 timer 不可能再持有
+     * 引用（否则 kref 不会归零）。所以此处的 cancel_delayed_work_sync 应当
+     * 永远是 no-op。保留它是为了在 cancel/get 路径有 bug 时能尽早暴露
+     * （work pending 时同步等其完成至少不会泄露——而是会触发 kref 下溢
+     * 的 WARN）。 */
     cancel_delayed_work_sync(&session->rt_work);
     cancel_delayed_work_sync(&session->tw_work);
 
@@ -986,7 +991,7 @@ static int ubmad_post_send_wk(struct ubmad_device_priv *dev_priv,
     struct ubcore_jfs_wr jfs_wr = {};
     struct ubcore_jfs_wr *bad_wr;
     struct ubcore_sge sge;
-    void *sge_addr;
+    uint64_t sge_addr;          /* v3.4: uint64_t to mirror datapath.c:241 pattern */
     uint32_t sge_idx;
     int ret;
 
@@ -1006,6 +1011,7 @@ static int ubmad_post_send_wk(struct ubmad_device_priv *dev_priv,
         return -EBUSY;
     }
     sge_addr = rsrc->send_seg->seg.ubva.va + UBMAD_SGE_MAX_LEN * sge_idx;
+    /* sge_addr is uint64_t; cast to pointer when accessing as struct memory below */
 
     /* 步骤 3：tx 计数（mirror ubmad_datapath.c:276-278）。
      * 必须在 post 之前 inc，因为 post 完成时 ubmad_jfce_handler_s 会 dec。 */
@@ -1017,7 +1023,7 @@ static int ubmad_post_send_wk(struct ubmad_device_priv *dev_priv,
     }
 
     /* 步骤 4：构造 ubmad_msg 头 + ubmad_wk_hdr */
-    msg = (struct ubmad_msg *)sge_addr;
+    msg = (struct ubmad_msg *)(uintptr_t)sge_addr;   /* uint64_t → pointer */
     msg->version     = UBMAD_MSG_VERSION_0;
     msg->msg_type    = msg_type;
     msg->msn         = session->session_id;   /* 借用 msn 字段做日志关联 */
@@ -1035,10 +1041,10 @@ static int ubmad_post_send_wk(struct ubmad_device_priv *dev_priv,
     /* 步骤 5：构造发送 WR（mirror ubmad_datapath.c:680-700） */
     jfs_wr.opcode                  = UBCORE_OPC_SEND;
     jfs_wr.tjetty                  = tjetty->tjetty;
-    jfs_wr.user_ctx                = (uintptr_t)sge_addr;
+    jfs_wr.user_ctx                = sge_addr;       /* uint64_t — no cast needed */
     jfs_wr.flag.bs.complete_enable = 1;
 
-    sge.addr                = (uintptr_t)sge_addr;
+    sge.addr                = sge_addr;              /* same */
     sge.len                 = sizeof(*msg) + msg->payload_len;
     sge.tseg                = rsrc->send_seg;
     jfs_wr.send.src.sge     = &sge;
@@ -1082,7 +1088,7 @@ static int ubmad_post_send_wk(struct ubmad_device_priv *dev_priv,
  *
  * 三次握手流程：
  *   1. 分配 session（状态: CLOSED）
- *   2. 获取/导入对端 tjetty（如未缓存，触发 conn_wq 工作项）
+ *   2. **同步导入对端 tjetty**（v3.4 新增；保证后续 post_send_wk 不返回 -EAGAIN）
  *   3. 生成 local_isn
  *   4. 迁移状态到 SYN_SENT
  *   5. 发送 UBMAD_WK_SYN 消息
@@ -1095,7 +1101,9 @@ int ubmad_wk_connect(struct ubmad_device_priv *dev_priv,
                      void (*on_closed)(struct ubmad_wk_session *, int, void *),
                      void *cb_ctx)
 {
+    struct ubmad_jetty_resource *rsrc = &dev_priv->jetty_rsrc[0];
     struct ubmad_wk_session *session;
+    struct ubmad_tjetty *tjetty;
     unsigned long timeout;
     int ret;
 
@@ -1104,42 +1112,76 @@ int ubmad_wk_connect(struct ubmad_device_priv *dev_priv,
     if (IS_ERR(session))
         return PTR_ERR(session);
 
-    /* 步骤 2：注册回调 */
+    /* 步骤 2（v3.4 新增）：同步导入对端 WK tjetty。
+     * v3.3 让 post_send_wk 在 cache miss 时返回 -EAGAIN，但 connect 收到 -EAGAIN
+     * 后立刻 bail out，导致首次连接对未缓存 peer 永远失败。
+     *
+     * ubmad_import_jetty()（ub_mad.c:575）是幂等的：cache 命中直接返回已有
+     * tjetty，未命中则发 UBCM 控制消息向对端 MUE 协商 tp_handle。本函数本就
+     * 是 sleepable 上下文（下面有 wait_for_completion_timeout），所以同步等
+     * 待导入完成是安全的。
+     *
+     * 异步模式（on_established != NULL）下，如果不希望阻塞调用方，应该改用
+     * 单独的预热 API（v2 待加），或在文档里说明"调用 connect 之前必须确保
+     * 对端 tjetty 已被导入"。本 v3.4 实现选择无条件同步导入以保证正确性。 */
+    tjetty = ubmad_import_jetty(dev_priv->device, rsrc,
+                                 (union ubcore_eid *)remote_eid);
+    if (IS_ERR_OR_NULL(tjetty)) {
+        pr_err("ubmad_wk: import tjetty failed for connect, eid=%pI6\n",
+               remote_eid->raw);
+        ubmad_put_session(session);
+        return tjetty ? PTR_ERR(tjetty) : -EHOSTUNREACH;
+    }
+    ubmad_put_tjetty(tjetty);   /* import 已把 tjetty 放进缓存；丢掉本地引用 */
+
+    /* 步骤 3：注册回调 */
     session->on_established = on_established;
     session->on_closed      = on_closed;
     session->cb_ctx         = cb_ctx;
 
-    /* 步骤 3：生成 local_isn */
+    /* 步骤 4：生成 local_isn */
     session->local_isn = ubmad_gen_isn();
 
-    /* 步骤 4：迁移状态到 SYN_SENT */
+    /* 步骤 5：迁移状态到 SYN_SENT */
     spin_lock(&session->lock);
     session->state = UBMAD_WK_SYN_SENT;
     spin_unlock(&session->lock);
 
-    /* 步骤 5：发送 SYN
-     *  isn = local_isn，ack = 0（无确认） */
+    /* 步骤 6：发送 SYN
+     *  isn = local_isn，ack = 0（无确认）
+     *  v3.4：tjetty 已在步骤 2 同步导入，此处不应再返回 -EAGAIN。
+     *  仍然容许 -EAGAIN 走到 rt_work 重试路径（防止 tjetty 在并发场景被驱逐）。 */
     ret = ubmad_post_send_wk(dev_priv, session,
                               UBMAD_WK_SYN, session->local_isn, 0);
-    if (ret) {
+    if (ret && ret != -EAGAIN) {
         ubmad_put_session(session);
         return ret;
     }
 
-    /* 步骤 6：启动 SYN 重传定时器（2ms，指数退避，详见 Step 7）
-     * v3.2：必须先 kref_get（见 §7.4），定时器路径才能在末尾 put 释放。 */
+    /* 步骤 7：启动 SYN 重传定时器（2ms，指数退避，详见 Step 7）
+     * v3.2：必须先 kref_get（见 §7.4），定时器路径才能在末尾 put 释放。
+     * 如果上一步首发因 -EAGAIN 没成功，rt_work 会很快接手重试。 */
     session->rt_cnt = 0;
     kref_get(&session->kref);
     queue_delayed_work(session->rt_wq, &session->rt_work,
                        msecs_to_jiffies(2));
 
-    /* 步骤 7：同步等待 */
+    /* 步骤 8：同步等待 */
     if (!on_established) {
         timeout = wait_for_completion_timeout(&session->connected,
                                               msecs_to_jiffies(5000));
         if (!timeout) {
-            /* 超时：取消重传，关闭 session */
-            cancel_delayed_work_sync(&session->rt_work);
+            /* 超时：取消重传，关闭 session
+             * v3.4：cancel_delayed_work_sync 在 work 还没跑就被取消的情况下
+             * 不会执行 handler 的 kref_put——这里需要用「先 cancel(非 sync) 看
+             * 是否 pending、pending 就补 put、否则 flush」的模式（详见 §7.4）。 */
+            if (cancel_delayed_work(&session->rt_work)) {
+                /* work 还在队列里，handler 不会跑，timer 持有的 ref 由我们补释 */
+                ubmad_put_session(session);
+            } else {
+                /* 已经在跑或已跑完；等它结束以保证 handler 的 put 已执行 */
+                flush_delayed_work(&session->rt_work);
+            }
             spin_lock(&session->lock);
             session->state = UBMAD_WK_CLOSED;
             spin_unlock(&session->lock);
@@ -1795,38 +1837,25 @@ static void ubmad_process_wk_fin_ack(struct ubmad_msg *msg,
 
 ### 6.5 被动方发送自己的 FIN
 
-被动方在 CLOSE_WAIT 状态下，上层调用 `ubmad_wk_close()`：
+被动方在 CLOSE_WAIT 状态下，上层只需要调用 §6.2 的同一个 `ubmad_wk_close()`——
+该函数已经同时处理 ESTABLISHED → FIN_WAIT_1（主动方）和 CLOSE_WAIT → LAST_ACK
+（被动方）两条路径。**不需要单独定义被动方版本**。
 
-```c
-/* 复用 ubmad_wk_close()，但需要处理 CLOSE_WAIT 状态 */
-int ubmad_wk_close(struct ubmad_wk_session *session)
-{
-    struct ubmad_device_priv *dev_priv = session->dev_priv;
-    enum ubmad_wk_session_state new_state;
-    int ret;
+> **v3.4 修订**：v3.2 / v3.3 在本节给出过一个独立的 `ubmad_wk_close` 副本，
+> 但它（a）使用 `UBMAD_WK_FIN, 0, 0` 而忽略 v3.3 §6.2 引入的 FIN 序列号约定；
+> （b）状态回滚仍是 v3.2 风格的硬编码三元运算。两套实现共存只会让读者迷惑。
+> v3.4 删除本节的重复定义，统一以 §6.2 为准。
 
-    spin_lock(&session->lock);
-    if (session->state == UBMAD_WK_ESTABLISHED) {
-        new_state = UBMAD_WK_FIN_WAIT_1;       /* 主动关闭 */
-    } else if (session->state == UBMAD_WK_CLOSE_WAIT) {
-        new_state = UBMAD_WK_LAST_ACK;          /* 被动关闭，发自己的 FIN */
-    } else {
-        spin_unlock(&session->lock);
-        return -EINVAL;
-    }
-    session->state = new_state;
-    spin_unlock(&session->lock);
+被动方典型调用序列：
 
-    ret = ubmad_post_send_wk(dev_priv, session, UBMAD_WK_FIN, 0, 0);
-    if (ret) {
-        /* 回滚状态 */
-        spin_lock(&session->lock);
-        session->state = (new_state == UBMAD_WK_FIN_WAIT_1)
-                         ? UBMAD_WK_ESTABLISHED : UBMAD_WK_CLOSE_WAIT;
-        spin_unlock(&session->lock);
-    }
-    return ret;
-}
+```text
+1. 收到对端 FIN → ubmad_process_wk_fin() 把 session 迁入 CLOSE_WAIT 并触发
+   on_closed 回调通知上层。
+2. 上层在 on_closed 回调（或之后的某个清理点）里调用 ubmad_wk_close(session)。
+   §6.2 的实现检测 state==CLOSE_WAIT，把 state 迁到 LAST_ACK，发送 FIN
+   （携带 local_fin_seq = local_isn + 1），启动 FIN 重传定时器。
+3. 收到对端 FIN_ACK → ubmad_process_wk_fin_ack() 校验 ack==local_fin_seq+1
+   后迁到 CLOSED，释放 session。
 ```
 
 ### 6.6 验证方法
@@ -2014,7 +2043,20 @@ static void ubmad_wk_time_wait_handler(struct work_struct *work)
 > if (cancel_delayed_work(&session->rt_work))
 >     ubmad_put_session(session);
 > ```
-> 若用 `cancel_delayed_work_sync()` 等到 handler 真正完成（无论是这次还是上次入队的），则不需要补 put——handler 已经做了。但 sync 版本不能在持锁时调用（会和 handler 抢锁死锁）。本设计的接收路径在解锁后用 `cancel_delayed_work()` + 条件 put。
+>
+> **v3.4 修订**：v3.3 曾说「`cancel_delayed_work_sync()` 不需要补 put」——这是错的。`cancel_delayed_work_sync()` 不会"自动执行" handler；它只会：(a) 如果 work 还在排队，从队列移除；(b) 如果 work 已经在跑，等它跑完。两种情况都返回 `true`，**但只有 (b) 中 handler 才执行了 `kref_put`**；(a) 中 handler 永远没机会跑，timer ref 仍泄露。
+>
+> 而且从返回值无法分辨 (a) 和 (b)。所以正确做法是不要在取消热路径用 sync 版本，改用以下规范：
+> ```c
+> if (cancel_delayed_work(&session->rt_work)) {
+>     /* (a) work 还在队列里，handler 不会跑 — 我们补 put */
+>     ubmad_put_session(session);
+> } else {
+>     /* (b) 已经在跑或已跑完；等它结束以保证 handler 的 put 真正发生 */
+>     flush_delayed_work(&session->rt_work);
+> }
+> ```
+> 这个模式在持锁时不能用（`flush_delayed_work` 会等 handler，handler 要拿同一把锁就死锁）。所以：所有同步等待 handler 退出的 cancel 都必须发生在解锁后。本设计的 §4.4 connect() 同步超时分支就是这样写的。
 
 ---
 
@@ -2458,7 +2500,7 @@ dmesg | grep "ubmad_wk.*session"
 
 **原因**：在 `spin_lock(&session->lock)` 持锁期间调用了 `cancel_delayed_work_sync`，而 `rt_work_handler` 也需要获取同一个锁。
 
-**解决**：改用非阻塞的 `cancel_delayed_work()`（不等待 handler 完成），然后在不持锁时调用 `cancel_delayed_work_sync()`，或重新设计以避免锁嵌套。
+**解决**：用 §7.4「v3.4 修订」给出的"先 `cancel_delayed_work()` 看是否 pending、pending 就补 put、否则 `flush_delayed_work()`"模式，并保证整段操作都在解锁之后做。简单一律 `cancel_delayed_work_sync()` 既会死锁也会泄露 ref，**两个问题一起解决**。
 
 ---
 
@@ -2663,3 +2705,16 @@ _v3.3 修订（2026-05-14）相对 v3.2 的主要变化_：
 | 6 | **`tx_in_queue` 不一致**：v3.2 的 `ubmad_post_send_wk()` 直接 post，没 `atomic_fetch_add(&rsrc->tx_in_queue)`。但完成处理（`ubmad_datapath.c:1230`）会无条件 dec，缺增反减计数最终变负。 | 在 post 之前 `atomic_fetch_add(1, &rsrc->tx_in_queue)`，超过 `UBMAD_TX_THREDSHOLD`（已存在的真实宏）回滚 + 释放 SGE 后返回 -EBUSY；post 失败也回退（mirror `ubmad_datapath.c:276-278,287`）。 |
 
 v3.3 后这份文档的代码示例**应当能编译并跑通完整握手 + 挥手**——所有 helper 都映射到真实内核符号，所有 ref 计数路径都成对，所有协议字段都有发送侧填值和接收侧校验。剩余的开放设计问题（§18）不影响代码正确性，只关乎设计取舍与上层消费者落实。
+
+_v3.4 修订（2026-05-14）相对 v3.3 的主要变化_：
+
+第三轮外部 reviewer 在 v3.3 上又找出 4 项残留 bug。v3.4 全部修复：
+
+| # | 缺陷（v3.3 残留） | v3.4 修复 |
+|---|------|-----------|
+| 1 | **首次 connect 对未缓存 peer 永远失败**：v3.3 让 `ubmad_post_send_wk()` 在 tjetty cache miss 时返回 -EAGAIN，但 `ubmad_wk_connect()` 收到 -EAGAIN 后立刻 `ubmad_put_session + return`，根本没机会让 rt_work 重试。结果：第一次连接陌生 peer 必败。 | `ubmad_wk_connect()` 在分配 session 之后、迁状态之前**同步调用 `ubmad_import_jetty()`**（已在 ub_mad.c:575 导出，幂等，可睡眠）。导入失败返回 -EHOSTUNREACH。导入成功后首发 SYN 必然命中缓存。如果首发仍因并发驱逐返回 -EAGAIN，rt_work 接管重试。 |
+| 2 | **`cancel_delayed_work_sync` ref 泄漏**：v3.3 §7.4 的规则错了——sync 版本只在 work 已经在跑的情况下让 handler 完成 put；如果 work 还在排队，cancel 直接移除、handler 永远不跑、timer ref 泄漏。同步超时分支（connect §4.4）就是这种情况。 | `connect()` 同步超时分支改用：`if (cancel_delayed_work(...)) put; else flush_delayed_work(...);` 模式。§7.4 表头加 v3.4 修订段，把 v3.3 「sync 不需要补 put」的错误说法改正。troubleshooting §"错误四" 同步更新。release_session 中的 `cancel_delayed_work_sync` 加注释说明那里是"应当为 no-op 的保险措施"。 |
+| 3 | **§6.5 残留过期 close 副本**：v3.2/v3.3 在 §6.5 留了一个独立的 `ubmad_wk_close()` 实现，沿用 v3.2 的 `UBMAD_WK_FIN, 0, 0` 和硬编码三元回滚。这与 §6.2 的 v3.3 实现完全冲突。 | 删除 §6.5 的代码副本。改成"被动方调用同一个 §6.2 `ubmad_wk_close`"的说明，列出典型调用序列（recv FIN → on_closed 回调 → 上层调 close → ...）。 |
+| 4 | **`sge_addr` 类型不一致**：v3.3 用 `void *sge_addr`，但真实内核 `ubmad_datapath.c:241` 用 `uint64_t sge_addr` 搭配按需 cast。类型不一致会让实现者抄代码时困惑或写出错。 | 改 `ubmad_post_send_wk()` 用 `uint64_t sge_addr`；`msg = (struct ubmad_msg *)(uintptr_t)sge_addr;` 显式 cast；`jfs_wr.user_ctx` 和 `sge.addr` 是 uint64_t 字段直接赋值，不需要 cast。完全 mirror 真实模式。 |
+
+到 v3.4 为止，反复出现的实现层 bug 类别（虚构 helper、ref 泄漏、协议字段不闭环、与现有代码模式不对齐）应当全部清零。剩余风险主要在两类：(a) 没人在真实内核上跑过这份代码；(b) §18 的开放设计问题——这两类都不是 doc 修订能解决的。
