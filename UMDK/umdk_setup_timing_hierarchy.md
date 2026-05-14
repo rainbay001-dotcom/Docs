@@ -194,7 +194,114 @@ Three orthogonal directions to reduce setup wall-clock:
 
 For full mechanism analysis and recommended priorities, see `umdk_link_setup_timing.md` §10.29-§10.30.
 
-## 11. References
+## 11. Under N-concurrent load — same tree, where the time goes instead
+
+The single-process call tree above remains structurally correct under load — `urma_perftest` still issues the same three sequential ioctls, each containing the same nested calls. What changes is **where the time accumulates**.
+
+The numbers below come from JinDou's depth-3 trace on **one specific observed process** in a 100-concurrent run (UMDK issue #2, 2026-05-13 02:59). This is a **tail observation** — the median process at N=100 saw 108-554 ms for `import_jetty`, while this observed process saw ~3.4 s. The distribution across all 100 procs hasn't been characterized yet (see umdk_link_setup_timing.md §10.27 G1 gap).
+
+### 11.1 Call tree under N=100 (one observed process, tail case)
+
+```
+[1] ubcore_import_seg                                          615 ms     (108× baseline)
+    │
+    ├── ubcore_connect_exchange_udata_when_import_seg
+    │   ├── send_seg_info_req                                  5.13 ms    ← UNCHANGED
+    │   │   └── ubmad_post_send
+    │   │       └── ubcore_get_main_primary_eid                4.9 ms     ← UNCHANGED
+    │   │
+    │   └── ubcore_session_wait                                610 ms     ← DILATED 700×
+    │
+    └── ubagg_import_seg                                       ~16 µs     ← UNCHANGED
+
+[2] ubcore_import_jetty Phase A                                3,369 ms   (635× baseline)
+    │
+    └── ubcore_connect_exchange_udata_when_import_jetty
+        ├── send_jetty_info_req                                4.80 ms    ← UNCHANGED
+        │   └── ubmad_post_send
+        │       └── ubcore_get_main_primary_eid                4.9 ms     ← UNCHANGED
+        │
+        └── ubcore_session_wait                                3,364 ms   ← DILATED 7500×
+
+[3] ubcore_import_jetty Phase B                                3,363 ms   (561× baseline)
+    │
+    └── ubcore_import_jetty_compat
+        ├── ubcore_get_tp_list                                 133 µs     ← UNCHANGED (this obs)
+        │   └── udma_get_tp_list                               ~130 µs    ← UNCHANGED (this obs)
+        │
+        ├── ubcore_exchange_tp_info                            3,363 ms   ← DILATED 585×
+        │   └── ubmad_post_send
+        │       ├── ubcore_get_main_primary_eid                4.9 ms     ← UNCHANGED
+        │       └── ubcore_session_wait                        ~3,363 ms  ← DILATED enormously
+        │
+        └── ubcore_import_jetty_ex                             284 µs     ← UNCHANGED
+            └── udma_active_tp                                 ~170 µs    ← UNCHANGED
+```
+
+### 11.2 What dilates and why
+
+The pattern is uniform across all three operations:
+
+| Component | Behavior under load | Why |
+| --- | --- | --- |
+| **CPU-bound EID scan** | UNCHANGED at 4.9 ms / call | Pure local CPU, lock-free static table. N concurrent processes on N+ CPUs run in parallel. See §10.25 source verification. |
+| **Firmware ctrlq cmd** (this obs) | UNCHANGED at ~175 µs | This particular process hit the firmware ctrlq when it was free. **Other processes saw 10-33 ms outliers** — JinDou's server-side trace captured one at 33.5 ms. See §10.30. |
+| **MAD round-trip wait** | DILATED 700-7500× | Server-side firmware ctrlq serializes 100 simultaneous client requests. This process waited for ~100 other firmware cmds to drain. |
+
+### 11.3 Where the 7500× dilation comes from
+
+Math:
+
+- Server's NIC firmware ctrlq has effective depth 1 — only one in-flight command at a time
+- 100 client processes all sending MADs to server at the same moment → 100 firmware cmds queued
+- Per-cmd firmware processing time: ~33.5 ms (worst-observed individual cmd from server-side trace)
+- 100 cmds × 33.5 ms = **3.35 seconds** of queue drain time
+- The 100th client at the back of the queue waits the full 3.35 s
+
+The 3.36 s `ubcore_session_wait` in the observed process matches this arithmetic with <0.5 % error. See §10.30.A.
+
+Different processes see different waits depending on their queue position:
+- Process at front: ~33 ms wait
+- Median process: ~50 × 33 ms ≈ 1.7 s wait (but observed median import_jetty is 108-554 ms, suggesting non-uniform distribution)
+- Process at back (this observation): ~3.36 s wait
+
+The "median import_jetty = 554 ms but tail = 3.36 s" pattern indicates **thundering-herd alignment + firmware ctrlq serialization** — most clients arrive in tight clumps and clear quickly; a few stragglers see the full queue depth. See §10.27.C.
+
+### 11.4 Why `import_jetty A` dilates more than `import_seg` for this observed process
+
+| | `import_seg` | `import_jetty A` |
+| --- | ---: | ---: |
+| MAD wait baseline | 0.87 ms | 0.45 ms |
+| MAD wait under N=100 (this obs) | 610 ms | 3,364 ms |
+| Dilation factor | **700×** | **7500×** |
+
+Both involve **one** server-side firmware ctrlq cmd (so per-cmd cost is identical). The 5.5× difference in MAD wait between the two operations comes from **queue position at the time of arrival**, not from the operation itself.
+
+Mechanism: by the time this observed process completed `import_seg` and started `import_jetty A`, the **other 99 procs had also finished their `import_seg`** and were arriving at the server's firmware ctrlq for `import_jetty A`'s MAD almost simultaneously. The thundering-herd alignment tightens at each phase boundary because the prior phase synchronized them. This observed process had bad luck and ended up near the back of the second wave. See §10.27.C "thundering-herd alignment" framing.
+
+### 11.5 Per-phase time distribution under load (this obs)
+
+| Phase | CPU bound (EID scan) | MAD wait | Firmware ctrlq |
+| --- | ---: | ---: | ---: |
+| `[1] import_seg` | 5.1 ms (1×) | 610 ms (700×) | — |
+| `[2] import_jetty A` | 4.8 ms (1×) | 3,364 ms (7500×) | — |
+| `[3] import_jetty B` | ~5.0 ms (1×) inside `exchange_tp_info` | ~3,363 ms (enormous) | ~350 µs (1×, this obs) |
+
+The dilation is **entirely** in the MAD wait. CPU-bound work is exactly the same as baseline.
+
+### 11.6 Fix-path implications
+
+Knowing the dilation is in MAD wait (which itself is driven by server-side firmware ctrlq serialization) maps fix paths cleanly:
+
+| Fix | Removes | Effect |
+| --- | --- | --- |
+| **Cache `udma_get_tp_list` result** (codex `udma-tp-cache` patch) | Eliminates firmware ctrlq cmds for warm `<peer_eid, trans_mode>` tuples | Under 100-proc with shared target peer: 1 firmware-miss + 99 cache-hits → wall-clock drops from ~3.36 s to ~50 ms (>99 % improvement). See §10.30.D. |
+| **Client-side startup stagger** | Eliminates thundering-herd alignment; spreads firmware ctrlq cmds over time | Server processes one-at-a-time always, but no proc waits behind 99 others. Predicted slowdown from 91× to <10×. See §10.27.G Test B. |
+| **EID scan cache** (`find_primary_eid_in_ues` → hash) | Eliminates 4.9 ms × 8 CPU work per setup | Only meaningful at baseline; under load the EID scan is overlapped with MAD wait so wall-clock savings are <5 ms regardless of N. |
+
+The first two (codex patch + stagger) are orthogonal and could be combined for compound benefit. The EID-scan optimization is **lowest-priority under load** because the CPU work isn't on the load-sensitive critical path.
+
+## 12. References
 
 | Source | What it has |
 | --- | --- |
