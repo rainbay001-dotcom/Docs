@@ -1,7 +1,7 @@
 # 公知Jetty可靠通信设计文档（三次握手 / 四次挥手）
 
 _面向读者：对 UMDK/URMA/UBMAD 代码零基础的新开发者。_
-_文档版本：v3.10（同步散落在 prose/§16 表里的 v3.9 描述：release 不再 cancel；tw_handler put 的是 timer ref；find_by_id 用 kref_get_unless_zero）_
+_文档版本：v3.11（清理散落在 process_wk_fin race 注释和 v3.7/v3.8 changelog 表里的"put 哈希 ref"残留 wording）_
 _最后更新：2026-05-14_
 
 ---
@@ -1836,7 +1836,8 @@ static void ubmad_process_wk_fin(struct ubmad_msg *msg,
         spin_lock(&session->lock);
         if (session->state != UBMAD_WK_FIN_WAIT_2) {
             /* FW2 handler 在我们之前赢得了竞争，session 已被标为 CLOSED
-             * 并 put 了哈希 ref。我们这里只需 put 自己的 find ref，让对端
+             * 并 put 了 timer ref（通常会触发 release_session 做 hash_del +
+             * kfree——哈希表本身不计 ref，§7.4）。我们这里只需 put 自己的 find ref，让对端
              * 重传的 FIN 自行超时即可——session 可能马上释放。 */
             spin_unlock(&session->lock);
             ubmad_put_session(session);
@@ -2947,7 +2948,7 @@ _v3.7 修订（2026-05-14）相对 v3.6 的主要变化_：
 
 | # | 缺陷（v3.6 残留） | v3.7 修复 |
 |---|------|-----------|
-| 1 | **FIN_WAIT_2 期间 session 没有 ref 持有**（BLOCKER）：v3.6 让 close 立刻 consume caller ref。FIN_ACK 到达时 process_wk_fin_ack 走 FIN_WAIT_1→FIN_WAIT_2 分支，在解锁后做了 `cancel_delayed_work + put`（消费 timer ref），然后函数末尾的 `ubmad_put_session(session)`（消费 find ref）。此时 caller ref 早已被 close consume 了，**session 没有任何 ref 持有**——hash 表不计 ref，session 会被立即 free。但本端还在 FIN_WAIT_2 等对端的 FIN，session 必须存活。 | process_wk_fin_ack FIN_WAIT_1→FIN_WAIT_2 分支增加：`kref_get + queue_delayed_work(tw_work, FIN_WAIT_2_MS)`——同时充当 (a) FIN_WAIT_2 keep-alive ref 和 (b) "对端永远不发 FIN 时的 30s 超时"（借鉴 Linux tcp_fin_timeout）。process_wk_fin FIN_WAIT_2→TIME_WAIT 分支：先 cancel-then-put 这个 keep-alive，再启动真正的 TIME_WAIT 定时器。tw_work_handler 同时处理 TIME_WAIT 和 FIN_WAIT_2 两种到期场景（语义都是"迁到 CLOSED + put 哈希 ref"，只是日志不同）。新增 `UBMAD_WK_FIN_WAIT_2_MS = 30000` 常量。 |
+| 1 | **FIN_WAIT_2 期间 session 没有 ref 持有**（BLOCKER）：v3.6 让 close 立刻 consume caller ref。FIN_ACK 到达时 process_wk_fin_ack 走 FIN_WAIT_1→FIN_WAIT_2 分支，在解锁后做了 `cancel_delayed_work + put`（消费 timer ref），然后函数末尾的 `ubmad_put_session(session)`（消费 find ref）。此时 caller ref 早已被 close consume 了，**session 没有任何 ref 持有**——hash 表不计 ref，session 会被立即 free。但本端还在 FIN_WAIT_2 等对端的 FIN，session 必须存活。 | process_wk_fin_ack FIN_WAIT_1→FIN_WAIT_2 分支增加：`kref_get + queue_delayed_work(tw_work, FIN_WAIT_2_MS)`——同时充当 (a) FIN_WAIT_2 keep-alive ref 和 (b) "对端永远不发 FIN 时的 30s 超时"（借鉴 Linux tcp_fin_timeout）。process_wk_fin FIN_WAIT_2→TIME_WAIT 分支：先 cancel-then-put 这个 keep-alive，再启动真正的 TIME_WAIT 定时器。tw_work_handler 同时处理 TIME_WAIT 和 FIN_WAIT_2 两种到期场景（语义都是"迁到 CLOSED + put timer ref，通常触发 release_session"，只是日志不同；v3.10 后 prose 同步）。新增 `UBMAD_WK_FIN_WAIT_2_MS = 30000` 常量。 |
 | 2 | **TIME_WAIT 的 FIN isn 校验自相矛盾**：v3.6 的"record remote_fin_seq"块包含 TIME_WAIT，意味着每次重传 FIN 进来都会先把 remote_fin_seq 覆盖成 wk_hdr->isn；下面的 isn 校验自然永远等于自己。验证形同虚设。 | record 块缩小到只在首次见到 FIN 的两个状态（ESTABLISHED 和 FIN_WAIT_2）记录；CLOSE_WAIT / TIME_WAIT 的重传路径只读取首次记录的值做校验。v3.6 同时把 CLOSE_WAIT 和 TIME_WAIT 合并到同一个 isn-validation 分支，v3.7 之后这套校验真正生效。 |
 
 到 v3.7 为止，session 生命周期在所有路径（ESTABLISHED 主动关闭、CLOSE_WAIT 被动关闭、FIN_WAIT_2 等待对端 FIN、TIME_WAIT 等待重传 FIN、所有失败回滚）都有明确的 ref 持有者，不会出现 use-after-free 或永久泄露；FIN 重传幂等性的 isn 校验真正生效。
@@ -2960,7 +2961,7 @@ _v3.8 修订（2026-05-14）相对 v3.7 的主要变化_：
 
 | # | 缺陷（v3.7 残留） | v3.8 修复 |
 |---|------|-----------|
-| 1 | **FIN_WAIT_2 → TIME_WAIT 与 tw_work handler 的 race**：v3.7 让 tw_work 同时承担 FIN_WAIT_2 keep-alive 和 TIME_WAIT 清理两种角色。process_wk_fin 进 FIN_WAIT_2 分支时按 `set state=TIME_WAIT → cancel → queue` 顺序操作；如果 cancel 失败（FW2 handler 已经在 spinlock 上等候），handler 解锁后会看到 state==TIME_WAIT 并误以为是 TIME_WAIT 期满，把 session 提前 CLOSED 并 put 哈希 ref——本端漏发 FIN_ACK，对端会一直重传到 MSN 上限。 | 重排顺序：先解锁释放 FW2 timer（**不改 state**）→ cancel-then-put（成功）或 flush_delayed_work（失败时等 handler 跑完）→ 重新加锁、检查 state 是否仍是 FIN_WAIT_2 → 是则改成 TIME_WAIT 继续，否则直接 bail。这样 FW2 handler 看到的 state 永远是 FIN_WAIT_2（合法的"FW2 期满"语义）；如果它先把 session 推到 CLOSED，process_wk_fin 在 recheck 时识别并 bail，不再做 FIN_ACK 投递或 timer 排队。 |
+| 1 | **FIN_WAIT_2 → TIME_WAIT 与 tw_work handler 的 race**：v3.7 让 tw_work 同时承担 FIN_WAIT_2 keep-alive 和 TIME_WAIT 清理两种角色。process_wk_fin 进 FIN_WAIT_2 分支时按 `set state=TIME_WAIT → cancel → queue` 顺序操作；如果 cancel 失败（FW2 handler 已经在 spinlock 上等候），handler 解锁后会看到 state==TIME_WAIT 并误以为是 TIME_WAIT 期满，把 session 提前 CLOSED 并 put timer ref（触发 release_session）——本端漏发 FIN_ACK，对端会一直重传到 MSN 上限。 | 重排顺序：先解锁释放 FW2 timer（**不改 state**）→ cancel-then-put（成功）或 flush_delayed_work（失败时等 handler 跑完）→ 重新加锁、检查 state 是否仍是 FIN_WAIT_2 → 是则改成 TIME_WAIT 继续，否则直接 bail。这样 FW2 handler 看到的 state 永远是 FIN_WAIT_2（合法的"FW2 期满"语义）；如果它先把 session 推到 CLOSED，process_wk_fin 在 recheck 时识别并 bail，不再做 FIN_ACK 投递或 timer 排队。 |
 | 2 | **§16 函数表对 ubmad_wk_time_wait_handler 的描述未跟上 v3.7**：v3.7 让该 handler 同时处理 TIME_WAIT 和 FIN_WAIT_2 两种状态的到期，但 §16 表里仍写"TIME_WAIT 超时：将 session 置 CLOSED"。 | §16 第 14 项更新为 "TIME_WAIT / FIN_WAIT_2 共用的超时 handler"，并说明两种触发原因的日志差异。Step 3 §3.7 alloc_session 里关于 tw_work 的注释也补一句双用途说明。 |
 
 到 v3.8 为止，没有再发现明显的"按设计就跑不起来"或"有 race 引发 UAF"的实现层 bug；所有 ref 计数路径成对，所有 timer / state 转换的 race 窗口都被显式 cancel 或 flush 关掉。剩余风险还是 (a) 实际编译运行验证 + (b) §18 设计问题。
@@ -2988,3 +2989,14 @@ _v3.10 修订（2026-05-14）相对 v3.9 的纯 prose 同步_：
 - §16 函数表三项过期：第 4（release）的 "撤销定时器"、第 14（tw_handler）的 "put 哈希 ref"、第 15（find_by_id）的 "kref_get"。全部更新到 v3.9 的实际行为。
 
 无代码改动；纯文档同步。
+
+_v3.11 修订（2026-05-14）相对 v3.10 的纯 prose 同步_：
+
+第十轮 reviewer 又找出几处遗留的 "put 哈希 ref" 用语没改：
+
+- §6.3 process_wk_fin 的 v3.8 race comment 里有 "FW2 handler 在我们之前赢得了竞争，session 已被标为 CLOSED 并 put 了哈希 ref"——hash 不计 ref，put 的是 timer ref，触发 release_session 做 hash_del。改写。
+- v3.7 / v3.8 changelog 表格里两处 "put 哈希 ref" 也同步成 "put timer ref（触发 release_session）"。
+
+继续无代码改动；纯文档同步。
+
+经过 11 轮 review，已知的运行时 bug 全部清零；剩余迭代如继续，应当转向 §18 的开放设计问题（数据平面、v1 消费者）或更深的状态机角落（RST、simultaneous close）——这两类都不是 doc-iteration 能闭环的。
