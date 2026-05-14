@@ -426,6 +426,132 @@ Ops contract for jetty operations (`include/ub/urma/ubcore_types.h`):
 
 UDMA HW driver (in `drivers/ub/urma/hw/udma/`) populates the ops struct with UDMA-specific `udma_create_jetty`, `udma_post_jfs_wr`, `udma_poll_jfc`, etc.
 
+### 4.8 vTP create-req wire send + response infrastructure — `ubcore_msg.c` / `ubcore_vtp.c`
+
+The §4.3 `ubcore_connect_vtp()` walk pinned the ctrlplane TP activation but stopped at a request builder that built a message and freed it without sending. That builder (`ubcore_send_create_vtp_req()` at `ubcore_vtp.c:249-275`) is **dead code** — the live path goes through a parallel function and a separate dispatch flow.
+
+#### Live send path
+
+```
+ubcore_connect_vtp_async(dev, param, vtpn, para, timeout)         [ubcore_vtp.c:1469-1563]
+  1. ubcore_find_add_vtpn(dev, vtpn, &exist_vtpn, param)          [:1491]      ; vtpn dedup, may reuse
+  2. ubcore_queue_wait_connect_vtp_resp_task(dev, param, timeout) [:1505 → :451-489]
+        wait_work = kzalloc(struct ubcore_wait_vtpn_resp_work)    [:458]
+        INIT_DELAYED_WORK(&wait_work->delay_work,
+                          ubcore_wait_connect_vtp_resp_timeout)    [:478]
+        ubcore_queue_delayed_work(UBCORE_CONNECT_VTP_ASYNC_WQ,
+                                  &wait_work->delay_work,
+                                  msecs_to_jiffies(timeout))       [:480]      ; safety-net timer
+  3. ubcore_create_async_connect_vtp_req(dev, param, vtpn)        [:1514 → :491-522]
+        req = kzalloc(sizeof(ubcore_req) + create_vtp_req_len)
+        req->opcode = UBCORE_MSG_CREATE_VTP                       [:504]
+        memcpy(create-vtp-req payload: vtpn / trans_mode / EIDs / jettys / dev_name)
+        s = ubcore_create_ue2mue_session(req, vtpn)               [:518 → ubcore_msg.c:158-171]
+            req->msg_id = ubcore_get_msg_seq()                     [:162]      ; atomic seq
+            s = ubcore_create_msg_session(req)                     [:163 → :75-99]
+                kzalloc(struct ubcore_msg_session)
+                s->is_async = false initially → set to true [:168]
+                s->vtpn = vtpn                                     [:169]
+                init_completion(&s->comp)
+                kref_init(&s->kref); kref_get(&s->kref)
+                spin_lock(g_msg_session_lock)
+                list_add_tail(&s->node, &g_msg_session_list)       [:96]
+        wait_work->s      = s                                      [:1521]
+        wait_work->msg_id = s->req->msg_id                         [:1522]     ; correlate timeout to msg_id
+        ubcore_add_async_wait_list(vtpn, para, wait_work)          [:1523]     ; per-vtpn callback queue
+  4. ubcore_send_req(dev, s->req)                                 [:1526 → ubcore_msg.c:118-135]
+        validate dev / dev->ops / dev->ops->send_req / req->len    [:122-126]
+        return dev->ops->send_req(dev, req)                        [:128]      ; ★ driver-provided
+        ubcore_log_err if non-zero
+  5. on send error: ubcore_set_session_finish(s); kfree(s->req);
+                    ubcore_destroy_msg_session(s); cancel wait_work [:1531-1545]
+```
+
+The driver `dev->ops->send_req` is the actual wire path. For UDMA it is wired in `drivers/ub/urma/hw/udma/` and ships the message to the local MUE/firmware ctrlq; the firmware in turn relays to UVS or the peer MUE depending on opcode. This op is **synchronous** in the sense that it returns once the firmware has accepted the request — it does not block waiting for a peer response.
+
+#### Live response path — and the dormant `_intime` handler
+
+Two response handlers are defined in `ubcore_vtp.c`:
+
+| Handler | Location | Caller |
+|---|---|---|
+| `ubcore_wait_connect_vtp_resp_intime(s, dev, resp)` | `ubcore_vtp.c:332-381` | **none in kernel tree** |
+| `ubcore_wait_connect_vtp_resp_timeout(work)` | `ubcore_vtp.c:420-448` | delayed-work callback queued at `:478` |
+
+The `_intime` path is the documented success-arrival entry point. It looks up the session via the `s` argument, sanity-checks `s->req`, calls `ubcore_handle_create_vtp_resp(dev, resp, vtpn)` at `:369`, then (on success) `ubcore_handle_vtpn_wait_list(vtpn, dev, UBCORE_VTPS_READY, 0)` at `:378` to fire each per-vtpn callback queued in step 3.
+
+**However:** `grep -rnE "wait_connect_vtp_resp_intime"` against the entire kernel tree (`drivers/ub/`, `include/ub/`) and the `umdk/src/` userspace tree returns **only the declaration (`vtp.h:164`) and the definition (`vtp.c:332`)**. There is no live caller. The dispatch hooks that would invoke it are missing in OLK-6.6:
+
+- `ubcore_msg.c:299-309`:
+  ```c
+  int ubcore_recv_req(struct ubcore_device *dev, struct ubcore_req_host *req)  { return 0; }
+  EXPORT_SYMBOL(ubcore_recv_req);
+  int ubcore_recv_resp(struct ubcore_device *dev, struct ubcore_resp *resp)    { return 0; }
+  EXPORT_SYMBOL(ubcore_recv_resp);
+  ```
+  Both are exported no-op stubs. Their declarations live in `include/ub/urma/ubcore_api.h:83 / :91` so drivers can link against them, but a driver that calls `ubcore_recv_resp(dev, resp)` will return 0 and the response will be dropped.
+
+- The only caller of `ubcore_find_msg_session(seq)` (`ubcore_msg.c:51-68`) is the **timeout** handler (`vtp.c:429` for connect, `vtp.c:702` for disconnect). Nothing looks up the session by `msg_id` on success arrival.
+
+Implication: in OLK-6.6 the vTP create flow operationally treats every send as fire-and-forget at the ubcore-msg layer. The wait-list callbacks fire **only via the timeout path** (with status set to either `ETIMEDOUT` or, when the firmware completes synchronously, by the driver invoking `ubcore_handle_vtpn_wait_list` directly through a different entry — to be confirmed in the UDMA driver source). The `_intime` plumbing is staged for a future wiring (likely a netlink or driver-callback hook) but is not yet active.
+
+This matches the empirical observation in `umdk_link_setup_timing.md` §10.27: server-side `ubcore_session_wait` (a different abstraction; see below) is the only kernel-side wait that shows up in 100-process traces, and it serializes via `cancel_delayed_work_sync`, not via `_intime` dispatch.
+
+#### Two parallel session abstractions — do not conflate
+
+The OLK-6.6 ubcore tree carries **two distinct** session structs:
+
+| Type | File | Keyed by | Used for | Wait/complete primitive |
+|---|---|---|---|---|
+| `struct ubcore_msg_session` | `ubcore_msg.c:75 + ubcore_msg.h:36` | `msg_id` (atomic seq) | UE↔MUE control (VTP create, EID discover) | `complete(&s->comp)` + `kref` |
+| `struct ubcore_session` | `net/ubcore_session.c:17` | `session_id` (atomic seq) | Net-layer connection setup | `complete(&s->completion)` + own delayed_work |
+
+The first is the one §4.3 / §4.8 walk; it is the layer with the dormant `_intime` handler. The second (`net/ubcore_session.c`) is what `umdk_link_setup_timing.md` references when discussing `ubcore_session_complete` / `ubcore_session_wait` — that one is fully wired and used by `net/ubcore_cm.c:100-128 ubcore_cm_recv()` → `net/ubcore_comm.c ubcore_net_handle_msg()` → `handle_create_resp()` → `ubcore_session_complete(session)`.
+
+#### CM dispatch — `net/ubcore_cm.c`
+
+The CM (Connection Manager) is the peer↔peer message bus. It is a separate plane from the UE↔MUE msg-session above:
+
+```
+ubcore_ubcm_send_to(dev, addr, msg)                               [net/ubcore_cm.c:168-225]
+  send_buf = kcalloc(ubcore_cm_send_buf + MSG_HDR_SIZE + msg->len)
+  send_buf->session_id = msg->session_id                          [:192]
+  send_buf->msg_type = UBCORE_CM_CONN_REQ
+                     | UBCORE_CM_CONN_RESP
+                     | UBCORE_CM_SINGLE_REQ                       [:194-205]   ; demux on msg->type
+  ubcore_call_cm_send_ops(dev, send_buf)                          [:218 → :63-73]
+        if (!g_send) return -EINVAL                                            ; UBMAD registers via :94
+        return g_send(dev, send_buf)                                           ; resolves to ubmad_ubc_send
+
+ubcore_cm_recv(dev, recv_cr)                                      [net/ubcore_cm.c:100-128]
+  msg = (ubcore_net_msg *)recv_cr->payload                        [:116]
+  ep = ubcore_cm_lookup_ep(dev, &recv_cr->local_eid)              [:121]
+  if (ep && ep->recv_cb) ep->recv_cb(ep, dev, msg, &addr)         [:123]
+  else                   ubcore_net_handle_msg(dev, msg, &addr)   [:125]
+```
+
+`g_send` is set via `ubcore_register_cm_send_ops()` (`:94`), invoked from `ubcm_init()` → `ub_cm.c:334-350` to register `ubmad_ubc_send`. So `ubcore_call_cm_send_ops()` ultimately calls into UBMAD's send path, which posts to a JFS WR on UBMAD WK jetty ID 1 — closing back to the deep-dive doc's call chain.
+
+#### File:line index for §4.8
+
+| Concept | File:line |
+|---|---|
+| Live req builder | `ubcore_vtp.c:491-522 ubcore_create_async_connect_vtp_req` |
+| Dead req builder | `ubcore_vtp.c:249-275 ubcore_send_create_vtp_req` (no callers) |
+| Caller (entry) | `ubcore_vtp.c:1469-1563 ubcore_connect_vtp_async` |
+| Send op wrapper | `ubcore_msg.c:118-135 ubcore_send_req` → `dev->ops->send_req` |
+| Async UE2MUE session | `ubcore_msg.c:157-171 ubcore_create_ue2mue_session` |
+| Session table base | `ubcore_msg.c:28 g_msg_session_list` + `:51 ubcore_find_msg_session` |
+| Dormant intime handler | `ubcore_vtp.c:332-381 ubcore_wait_connect_vtp_resp_intime` (zero callers) |
+| Stub recv entries | `ubcore_msg.c:299-309 ubcore_recv_req / ubcore_recv_resp` (no-ops) |
+| Live timeout handler | `ubcore_vtp.c:420-448 ubcore_wait_connect_vtp_resp_timeout` |
+| Wait-list dispatch | `ubcore_vtp.c:278-330 ubcore_handle_vtpn_wait_list` |
+| Net-layer session | `net/ubcore_session.c:17-230` (separate abstraction) |
+| CM send entry | `net/ubcore_cm.c:168-225 ubcore_ubcm_send_to` |
+| CM recv entry | `net/ubcore_cm.c:100-128 ubcore_cm_recv` |
+| CM send-ops register | `net/ubcore_cm.c:94 ubcore_register_cm_send_ops` |
+| CM send-ops definer | `ubcm/ub_cm.c:334-350 ubcm_init` (registers `ubmad_ubc_send`) |
+
 ---
 
 ## 5. UBSE syssentry — well-known jetty 999 in production
@@ -500,14 +626,14 @@ process                  ubcore                       driver               peer
 
 These are gaps the trace explicitly **did not** resolve:
 
-1. **`ubcore_send_create_vtp_req` actual wire send.** `ubcore_vtp.c:249` builds the message and frees it; the actual send happens in `ubcore_msg.c` (not walked).
-2. **vTP response demux.** `ubcore_wait_connect_vtp_resp_intime` (declaration around `ubcore_vtp.c:332`) is the receive callback, but the inbound message → callback wiring lives in ubcm / ubcore_msg.
+1. ~~`ubcore_send_create_vtp_req` actual wire send.~~ **Resolved in §4.8.** That function is dead code; the live builder is `ubcore_create_async_connect_vtp_req` at `vtp.c:491`, sent via `ubcore_send_req` at `vtp.c:1526` → `dev->ops->send_req` (driver-provided, e.g. UDMA firmware ctrlq).
+2. ~~vTP response demux.~~ **Partially resolved in §4.8 with surprising finding:** `ubcore_wait_connect_vtp_resp_intime` (`vtp.c:332`) has **zero callers** in the entire kernel tree, and `ubcore_recv_resp`/`ubcore_recv_req` (`msg.c:299/305`) are EXPORT_SYMBOL'd no-op stubs. The msg-session response demux is dormant in OLK-6.6. Open follow-up: confirm whether the UDMA driver invokes `ubcore_handle_vtpn_wait_list` directly via a non-intime path on firmware completion.
 3. **UAPI ioctl boundary.** `ubcore_cdev_file.c` snippets shown were sysfs attribute handlers; the IOCTL dispatch (`UBCORE_CMD_CREATE_JETTY` etc.) lives further in the file or in `ubcore_uvs_cmd.c` — not pinned to a `case` line yet.
 4. **Bonding flow specifics.** `ubcore_connect_exchange_udata_when_import_jetty` (called at `ubcore_jetty.c:2491-2496`) implementation is in `ubcore_connect_bonding.c` and was not walked.
-5. **UBMAD ID 2 use.** Only ID 1 is documented in the existing well-known-jetty doc as carrying link-setup; the role of ID 2 (`UBMAD_WK_JETTY_ID_1`) was not pinned to a specific handler in `ubcm/`.
+5. **UBMAD ID 2 use.** Only ID 1 is documented in the existing well-known-jetty doc as carrying link-setup; the role of ID 2 (`UBMAD_WK_JETTY_ID_1`) was not pinned to a specific handler in `ubcm/`. (Partial: the deep-dive doc notes ID 2 is selected for `UBMAD_AUTHN_DATA`; the dispatch code path is still unwalked.)
 6. **UDMA driver-side `udma_create_jetty` body.** Confirmed `dev->ops->create_jetty` resolves to a UDMA function via `register_device`, but the actual HW resource allocation (queue rings, doorbell mapping) was not walked.
 
-Each of these is a one-file follow-up; flag if any is needed in detail.
+Items #1 and #2 walked in §4.8 today (2026-05-14). Items #3–#6 are each a one-file follow-up; flag if any is needed in detail.
 
 ---
 
