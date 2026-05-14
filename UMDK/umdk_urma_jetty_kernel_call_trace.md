@@ -636,9 +636,15 @@ The only callers of `ubcore_handle_vtpn_wait_list` are inside `ubcore_vtp.c` its
 
 ---
 
-### 4.10 UAPI ioctl boundary — `/dev/ub_uburma*` (uburma) vs. UVS netlink (ubcore)
+### 4.10 UAPI ioctl boundary — three parallel planes
 
-§8 open item #3 was framed as "find the IOCTL dispatch for `UBCORE_CMD_CREATE_JETTY` in `ubcore_cdev_file.c` or `ubcore_uvs_cmd.c`". The framing is wrong on two counts; the actual layout is two parallel UAPI planes:
+§8 open item #3 was framed as "find the IOCTL dispatch for `UBCORE_CMD_CREATE_JETTY` in `ubcore_cdev_file.c` or `ubcore_uvs_cmd.c`". The framing is wrong on two counts; the actual layout is **three** parallel UAPI planes:
+
+1. **A.** URMA app verbs — char-dev ioctl on `/dev/uburma/<dev>`
+2. **B.** UVS topology admin — char-dev ioctl on `/dev/ubcore` (single global node)
+3. **C.** UVS general admin — generic netlink family `ubcore_genl_family`
+
+The earlier revision of this section claimed UVS UAPI was netlink-only; that conflated two distinct things — see §4.10.B-vs-C below.
 
 **A. URMA application path — char-device ioctl (the live one perftest et al. use).**
 
@@ -676,7 +682,40 @@ The dispatch table is dense — every URMA verb that the userspace `liburma` iss
   ```
   then unpacks `tjfr->vtpn->vtpn` or `tjfr->tp->tpn` (the connect-time vTP allocation flow walked in §4.3) into the out-TLV. So **UBURMA_CMD_IMPORT_JFR (uburma) → `uburma_cmd_import_jfr` (uburma_cmd.c:3174) → `ubcore_import_jfr` (ubcore_jetty.c)** is what generates the visible 900 ms cost on a cold setup. (`UBURMA_CMD_IMPORT_JFR_EX` at :3229 is the bonding-aware variant routed via `ubcore_import_jfr_ex`.)
 
-**B. UVS daemon control plane — generic netlink (NOT ioctl).**
+**B. UVS topology admin — char-dev ioctl on `/dev/ubcore` (single global node).**
+
+```
+UVS daemon (userspace)
+  |
+  v  open("/dev/ubcore")                          -- single global char dev (not per-device)
+  v  ioctl(fd, UBCORE_UVS_CMD, &hdr)              -- struct ubcore_cmd_hdr {command, args_len, args_addr}
+  |                                                  magic 'V' cmd 1
+  v
+  ubcore_device.c:147-150  static const struct file_operations g_ubcore_global_ops = {
+                              .owner = THIS_MODULE,
+                              .open = ubcore_global_open,
+                              .release = ubcore_global_close,
+                              .unlocked_ioctl = ubcore_global_ioctl,
+                              .compat_ioctl  = ubcore_global_ioctl,
+                            };
+  ubcore_device.c:1177     cdev_init(&g_ubcore_ctx.ubcore_cdev, &g_ubcore_global_ops);
+  ubcore_device.c:1188-1190 device_create(&g_ubcore_class, ..., UBCORE_DEVICE_NAME);  /* /dev/ubcore */
+  |
+  v  ubcore_device.c:94    ubcore_global_ioctl(filp, cmd, arg)
+  v  ubcore_device.c:108     if (cmd == UBCORE_UVS_CMD) { copy hdr; ubcore_uvs_global_cmd_parse(); }
+  |
+  v  ubcore_uvs_cmd.c:383-389  g_ubcore_uvs_global_cmd_funcs[] = {
+                                  [UBCORE_CMD_SET_TOPO]       = { ubcore_cmd_set_topo,       cap=true  },
+                                  [UBCORE_CMD_GET_ROUTE_LIST] = { ubcore_cmd_get_route_list, cap=false },
+                                  [UBCORE_CMD_GET_TOPO]       = { ubcore_cmd_get_topo,       cap=false },
+                                  [UBCORE_CMD_GET_PATH_SET]   = { ubcore_cmd_get_path_set,   cap=false },
+                                };
+  ubcore_uvs_cmd.c:391-411  ubcore_uvs_global_cmd_parse: bounds-check hdr->command, optional CAP_NET_ADMIN check, dispatch
+```
+
+Macro: `UBCORE_UVS_CMD _IOWR(UBCORE_UVS_CMD_MAGIC='V', 1, struct ubcore_cmd_hdr)` at `ubcore_uvs_cmd.h:23-24`. The cmd ids `UBCORE_CMD_SET_TOPO / GET_ROUTE_LIST / GET_TOPO / GET_PATH_SET` are passed inside `hdr->command`, not as the ioctl number itself.
+
+**C. UVS general admin — generic netlink (NOT ioctl).**
 
 ```
 UVS daemon (userspace)
@@ -695,19 +734,23 @@ UVS daemon (userspace)
   |
   v  net/genetlink dispatch → ubcore_genl_admin.c handlers
   |
-  v  bodies in ubcore_uvs_cmd.c (eid table helpers like ubcore_eidtbl_add_entry at uvs_cmd.c:32), ubcore_genl_admin.c (ubcore_set_sl_ops, ubcore_get_topo_info_ops, etc.)
+  v  bodies in ubcore_genl_admin.c (ubcore_set_sl_ops, ubcore_get_topo_info_ops, etc.)
 ```
 
-The `UBCORE_CMD_*` enum in `ubcore_cmd.h:33-60` (`UBCORE_CMD_QUERY_STATS=1 .. UBCORE_CMD_GET_TOPO_BONDING_DEV`) is used as the **netlink command id** field, not as a `_IOWR` cmd. The `UBCORE_CMD _IOWR(UBCORE_CMD_MAGIC, 1, struct ubcore_cmd_hdr)` macro at `ubcore_cmd.h:28` is defined but I find no `.unlocked_ioctl` registration anywhere in ubcore that consumes it — `ubcore_cdev_file.c` is sysfs-attribute-only as the doc already noted. So `UBCORE_CMD` (the ioctl number) appears to be a vestigial header-level definition; the live UVS UAPI is netlink. (Grep `UBCORE_CMD_MAGIC` returns only its definition and the IOWR macro line; no callers.)
+**B vs C — what splits them.** Both serve the UVS daemon, but they're independent kernel surfaces.
 
-**Why the two planes exist.** The split is the standard "control-plane vs. data-plane" partition seen in InfiniBand too:
+- **B (`/dev/ubcore` ioctl)** is for the topology snapshot operations (`SET_TOPO / GET_TOPO / GET_ROUTE_LIST / GET_PATH_SET`). Uses sync ioctl because each call carries a substantial config blob (`UBCORE_MAX_VTP_CFG_CNT = 32` etc.) and writes are guarded by `CAP_NET_ADMIN`. The single-fd, single-global-node model fits "one daemon snapshots/sets the whole topology at once".
+- **C (generic netlink)** is for streamable / per-event admin (stats query, EID add/del per device, namespace mode, SL set, etc.). Netlink is the natural fit because of multicast-able event semantics and per-attribute encoding.
+
+The `UBCORE_CMD _IOWR(UBCORE_CMD_MAGIC='C', 1, ...)` macro at `ubcore_cmd.h:28` is **vestigial** — magic 'C', not 'V', and grep finds no callers. Don't confuse it with the live `UBCORE_UVS_CMD` (magic 'V', §4.10.B).
+
+**Why three planes exist.** The split mirrors mainline RDMA's `ib_uverbs` (char-dev ioctl) + `rdma-netlink` (genl) duality, with an extra "topology snapshot" carve-out:
 
 | Plane | UAPI mechanism | File ops | Owner process |
 |---|---|---|---|
-| URMA app verbs (CREATE_JETTY, IMPORT_JFR, POST_*, POLL_*, ...) | char-dev ioctl on `/dev/ub_uburma/<dev>` | `uburma_main.c` + `uburma_cmd.c` | every URMA app (perftest, ubturbo, …) |
-| UVS admin (EID add/del, SIP add/del, TP query/restore, topo, ns mode, set SL) | generic netlink family `ubcore_genl_family` | `ubcore_genl.c` + `ubcore_genl_admin.c` | UVS daemon (one per host) |
-
-This mirrors `ib_uverbs` (char-dev ioctl, `/dev/infiniband/uverbs*`) vs. `rdma-netlink` (generic netlink, `RDMA_NL_*` family) in mainline RDMA.
+| **A.** URMA app verbs (CREATE_JETTY, IMPORT_JFR, POST_*, POLL_*, ...) | char-dev ioctl on `/dev/uburma/<dev>` (per device) | `uburma_main.c` + `uburma_cmd.c` | every URMA app (perftest, ubturbo, …) |
+| **B.** UVS topology snapshot (SET_TOPO, GET_TOPO, GET_ROUTE_LIST, GET_PATH_SET) | char-dev ioctl on `/dev/ubcore` (single global) via `UBCORE_UVS_CMD` | `ubcore_device.c:147 g_ubcore_global_ops` + `ubcore_uvs_cmd.c` | UVS daemon |
+| **C.** UVS general admin (EID/SIP add/del, TP query/restore, ns mode, set SL, query stats/res) | generic netlink family `ubcore_genl_family` | `ubcore_genl.c` + `ubcore_genl_admin.c` | UVS daemon |
 
 **Pinning table:**
 
@@ -721,10 +764,16 @@ This mirrors `ib_uverbs` (char-dev ioctl, `/dev/infiniband/uverbs*`) vs. `rdma-n
 | `UBURMA_CMD_CREATE_JETTY` handler | `uburma_cmd.c:2368-2470` | calls `ubcore_create_jetty` @ :2439 |
 | `UBURMA_CMD_IMPORT_JFR` handler | `uburma_cmd.c:3174-3227` | calls `ubcore_import_jfr` @ :3204 — first-RPC trigger |
 | `UBURMA_CMD_IMPORT_JFR_EX` handler | `uburma_cmd.c:3229+` | bonding/EX path |
-| UVS netlink ops table | `ubcore_genl.c:47-130` | `ubcore_genl_ops[]` for `UBCORE_CMD_QUERY_STATS..GET_TOPO_BONDING_DEV` |
-| UVS netlink family | `ubcore_genl.c:134-180` | `ubcore_genl_family`, `genl_register_family` @ :169 |
-| `UBURMA_CMD_*` enum (74 cmds) | `uburma_cmd.h:38-100` | magic `'U'`, `UBURMA_CMD _IOWR('U', 1, struct uburma_cmd_hdr)` |
-| `UBCORE_CMD_*` enum (~13 cmds, **netlink**) | `ubcore_cmd.h:33-60` | the `_IOWR('C',1,...)` at line 28 is unused (vestigial) |
+| **B.** `/dev/ubcore` fops | `ubcore_device.c:147-152` | `g_ubcore_global_ops` (single global cdev, not per device) |
+| **B.** cdev registration | `ubcore_device.c:1170-1190` | `cdev_init/add` + `device_create(... UBCORE_DEVICE_NAME)` |
+| **B.** ioctl entry | `ubcore_device.c:94-130` | `ubcore_global_ioctl`; gates on `cmd == UBCORE_UVS_CMD` |
+| **B.** UVS-cmd dispatch | `ubcore_uvs_cmd.c:391-411` | `ubcore_uvs_global_cmd_parse` |
+| **B.** UVS-cmd table | `ubcore_uvs_cmd.c:383-389` | `g_ubcore_uvs_global_cmd_funcs[]` (4 cmds: SET_TOPO/GET_ROUTE_LIST/GET_TOPO/GET_PATH_SET) |
+| **B.** `UBCORE_UVS_CMD` macro | `ubcore_uvs_cmd.h:23-24` | magic `'V'`, `_IOWR('V', 1, struct ubcore_cmd_hdr)` |
+| **C.** UVS netlink ops table | `ubcore_genl.c:47-130` | `ubcore_genl_ops[]` for `UBCORE_CMD_QUERY_STATS..GET_TOPO_BONDING_DEV` |
+| **C.** UVS netlink family | `ubcore_genl.c:134-180` | `ubcore_genl_family`, `genl_register_family` @ :169 |
+| `UBURMA_CMD_*` enum (74 cmds, plane A) | `uburma_cmd.h:38-100` | magic `'U'`, `UBURMA_CMD _IOWR('U', 1, struct uburma_cmd_hdr)` |
+| `UBCORE_CMD_*` enum | `ubcore_cmd.h:33-60` | values are used by both B (as `hdr->command` in ioctl) and C (as netlink cmd id); the `_IOWR('C',1,...)` macro at `ubcore_cmd.h:28` is unused (vestigial — different magic from the live `'V'` in B) |
 
 **Why the "ADVISE_JFR has no handler" footnote in `reference_umdk_link_setup.md` is correct:** the table at `uburma_cmd.c:4886-4969` literally has no `[UBURMA_CMD_ADVISE_JFR]` row — the cmd-id space jumps over those slots. `uburma_cmd_parse` rejects unmapped ids with `-EINVAL`, so a userspace `urma_advise_jfr()` call returns success only because the userspace lib never bridges into the kernel for that op.
 
