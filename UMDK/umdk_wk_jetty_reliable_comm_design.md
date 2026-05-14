@@ -1,7 +1,7 @@
 # 公知Jetty可靠通信设计文档（三次握手 / 四次挥手）
 
 _面向读者：对 UMDK/URMA/UBMAD 代码零基础的新开发者。_
-_文档版本：v3.2（修正 7 项实现 bug：会话 ID 协议、listen NULL 解引用、kref 配对、JFS WR 字段、FIN 重传、tjetty 缓存、构建路径）_
+_文档版本：v3.3（修正 v3.2 残留：删除矛盾的 Step 1 §1.5、用真实内核 API 替换虚构 helper、cancel-then-put、close 回滚、FIN 序列号、tx_in_queue 计数）_
 _最后更新：2026-05-14_
 
 ---
@@ -344,22 +344,24 @@ enum ubmad_msg_type {
 };
 ```
 
-### 1.5 同步修改：`ubmad_post_send()` 资源选择
+### 1.5 不修改 `ubmad_post_send()` —— 握手走独立发送路径
 
-文件：`ubmad_datapath.c`，找到 `ubmad_post_send()` 内的 `switch (send_buf->msg_type)` 块（约 `ubmad_datapath.c:795-807`），**新增**：
+> **v3.3 修订**：v3.2 版本曾要求在 `ubmad_post_send()` 的资源选择 switch 里
+> 加 `UBMAD_WK_SYN/SYN_ACK/...` 五个 case。这与 §0.2 的核心设计决定矛盾：
+> 握手消息**不走 `ubmad_post_send`**，而是经过 §Step 4 的
+> `ubmad_post_send_wk()` 直接调 `ubcore_post_jetty_send_wr()`。
+>
+> 即使把这五个 case 加到资源选择 switch（`ubmad_datapath.c:795-807`），
+> 调用链下游的 `ubmad_do_post_send()` 内部还有第二个 switch
+> （`ubmad_datapath.c:702-718`），只识别 `UBMAD_UBC_CONN_REQ/CONN_RESP/SINGLE_REQ`
+> 三种类型，遇到 WK_* 会走 `default` 分支并 `return -EINVAL`。
+>
+> 所以 v3.3 删除原 §1.5。Step 1 只剩"在 `ub_mad.h` 加 WK_* 枚举值"这一步。
+> 握手消息的真正发送在 [Step 4](#step-4实现握手发送侧函数) 实现。
 
-```c
-    case UBMAD_WK_SYN:
-    case UBMAD_WK_SYN_ACK:
-    case UBMAD_WK_ACK:
-    case UBMAD_WK_FIN:
-    case UBMAD_WK_FIN_ACK:
-        rsrc = &dev_priv->jetty_rsrc[0];   /* 复用 WK ID 1 */
-        break;
-```
-
-**为什么复用 `jetty_rsrc[0]`？**  
-该资源（Jetty ID 1）已有完整的 JFC/JFR/JFS 及预先投递的接收 WQE，底层 TP 连接也已建立。握手消息报文小（< 64 字节），共享通道不会产生拥塞问题。
+`jetty_rsrc[0]`（WK Jetty ID 1）的接收侧本来就已经预投递了 WQE 并绑定了
+JFC/JFR/JFS，所以 `ubmad_post_send_wk()` 直接以 `rsrc = &dev_priv->jetty_rsrc[0]`
+作为发送资源，无需任何配置。
 
 ### 1.6 验证方法
 
@@ -486,6 +488,12 @@ struct ubmad_wk_session {
 
     /* 对端初始序列号（收到 SYN / SYN_ACK 后填入） */
     uint32_t                remote_isn;
+
+    /* v3.3：FIN 序列号（TCP 风格，FIN 也消耗一个 seq）。
+     * 在 ubmad_wk_close() 首次发 FIN 时设为 local_isn+1，重传时保持不变，
+     * 保证 FIN_ACK 的 ack 验证有稳定参照。0 表示尚未发出 FIN。 */
+    uint32_t                local_fin_seq;
+    uint32_t                remote_fin_seq;
 
     /* 对端 EID（用于查找远端 tjetty 和发送回包） */
     union ubcore_eid        remote_eid;
@@ -818,6 +826,48 @@ struct ubmad_wk_session *ubmad_session_find_by_id(
 **为什么额外比较 `dev_priv`？**  
 同一台机器上可能有多个 UB 设备，不同设备的 session_id 可能相同（从各自 IDA 独立分配）。加上 `dev_priv` 判断确保不会跨设备误匹配。
 
+### 3.8b 函数五.5：`ubmad_session_find_by_peer()` (v3.3 新增)
+
+服务端处理 SYN 时需要做幂等检查——如果客户端重传 SYN，应该找到之前已经为它建的 session 而不是再建一个。但此时本地还没分配过对应的 session_id，所以不能用 `find_by_id`；得按 `(remote_eid, remote_session_id)` 二元组查找。
+
+```c
+/**
+ * ubmad_session_find_by_peer - 按 (对端 EID, 对端 session_id) 查找 session
+ *
+ * 用途：服务端处理 SYN 重传时的幂等检查。客户端的 wk_hdr->local_session_id
+ * 是它本地分配的 ID；服务端需要把它当作"已学到的对端 ID"来匹配现有 session
+ * （session->remote_session_id 字段）。
+ *
+ * 性能说明：与 find_by_id 不同，本函数无法用 hash key 直接索引，必须遍历
+ * 整张哈希表。但 LISTEN 节点全部连接平均下来一般不多（v1 单 listen），
+ * 实际开销有限。如未来支持高并发握手，可加二级索引（按 remote_session_id 哈希）。
+ */
+struct ubmad_wk_session *ubmad_session_find_by_peer(
+        struct ubmad_device_priv *dev_priv,
+        const union ubcore_eid *remote_eid,
+        uint16_t remote_session_id)
+{
+    struct ubmad_wk_session *session;
+    int bkt;
+
+    spin_lock(&g_session_hash_lock);
+    hash_for_each(g_session_hash, bkt, session, hash_node) {
+        if (session->dev_priv          != dev_priv)
+            continue;
+        if (session->remote_session_id != remote_session_id)
+            continue;
+        if (memcmp(&session->remote_eid, remote_eid,
+                   sizeof(*remote_eid)) != 0)
+            continue;
+        kref_get(&session->kref);
+        spin_unlock(&g_session_hash_lock);
+        return session;
+    }
+    spin_unlock(&g_session_hash_lock);
+    return NULL;
+}
+```
+
 ### 3.9 函数六：`ubmad_release_session()`
 
 ```c
@@ -900,29 +950,28 @@ pr_debug("ubmad: alloc session id=%u remote_eid=%pI6\n",
  * @dev_priv:    设备私有对象
  * @session:     当前会话（提供 remote_eid、session_id、remote_session_id 等）
  * @msg_type:    要发送的握手消息类型（SYN / SYN_ACK / ACK / FIN / FIN_ACK）
- * @isn:         本端 ISN（SYN 和 SYN_ACK 中填入；ACK/FIN/FIN_ACK 中填 0）
- * @ack:         确认号（SYN_ACK 填 remote_isn+1；ACK 填 remote_isn+1；SYN 填 0）
+ * @isn:         本端 ISN（SYN/SYN_ACK 填 local_isn；FIN 填 local_isn+1）
+ * @ack:         确认号（SYN_ACK/ACK 填 remote_isn+1；FIN_ACK 填 remote_fin_seq+1；SYN/FIN 填 0）
  *
- * 关键实现要点（v3.2 修订）：
- *   - 不复用 ubmad_post_send()。后者走 MSN+重传，握手层有自己的会话级
- *     重传，叠加 MSN 会冲突（详见 §0.2）。
- *   - 直接以 ubmad_datapath.c:680-720 的方式手工构造 jfs_wr：使用栈上
- *     struct ubcore_sge sge，jfs_wr.send.src.sge = &sge，并用
- *     jfs_wr.flag.bs.complete_enable（位域，不是 wr.complete_enable）。
- *   - SGE 内存来自 rsrc->send_seg；调用 ubmad_alloc_send_sge() 取到 addr
- *     和 idx（注意：实际 UBMAD 现有 ubmad_post_send() 用的是 ubmad_alloc_sge
- *     + ubmad_prepare_msg；本设计可以直接复用同一组辅助函数，避免引入
- *     ubmad_get_send_sge_addr() 这种不存在的 API）。
+ * v3.3 修订要点：
+ *   - 删除了 v3.2 引入的虚构 helper（ubmad_alloc_sge / ubmad_free_sge /
+ *     ubmad_queue_import_work）。这些函数在内核里不存在，会编译失败。
+ *     改用真实存在的底层 API：ubmad_bitmap_get_id / ubmad_bitmap_put_id
+ *     （已在 ubmad_datapath.c:248,294,339,378 等多处使用）以及
+ *     atomic_fetch_add(&rsrc->tx_in_queue) 计数（同文件 :276-278,361-363 等）。
+ *   - 增加 tx_in_queue 累加/回退（v3.2 漏掉这个；ubmad_datapath.c:1230 的
+ *     完成处理会无条件做 atomic_fetch_sub，缺增反减会让计数变负）。
+ *   - tjetty cache miss 处理：直接返回 -EAGAIN，**调用方** ubmad_wk_connect()
+ *     等先调用现有 ubmad_post_send（任意一条 CONN_DATA 占位）触发导入，再用
+ *     会话级 rt_work 重试。这条 v3.3 选择不引入新 helper，把触发导入的责任
+ *     上移到调用方；后续如确实需要专用入口可在 ub_mad.c 新增
+ *     ubmad_kick_import(dev_priv, eid)，但本文档不再假设它已存在。
  *
- * tjetty 处理（v3.2 修订）：
- *   ubmad_get_tjetty() 是纯缓存查找（ub_mad.c:441），不会触发异步导入。
- *   导入是在 ubmad_post_send() → ubmad_jetty_work_handler() →
- *   ubmad_import_jetty_compat()（ub_mad.c:575）这条路径中通过
- *   dev_priv->conn_wq 异步完成的。本设计在 cache miss 时返回 -EAGAIN
- *   让上层用会话级 rt_work 重试；首次重试前应主动触发一次
- *   ubmad_queue_import_work(dev_priv, &session->remote_eid, rsrc)。
+ * 不复用 ubmad_post_send()：握手层有自己的会话级重传，叠加 MSN 重传会冲突
+ * （详见 §0.2）。但具体的 SGE 取用、tx 计数、WR 构造完全 mirror
+ * ubmad_datapath.c:240-300 的模式，不重新发明轮子。
  *
- * 返回 0 表示成功，-EAGAIN 表示 tjetty 尚未就绪（应稍后重试），
+ * 返回 0 表示成功，-EAGAIN 表示 tjetty 未就绪（调用方应触发导入并重试），
  * 其他负数表示永久错误。
  */
 static int ubmad_post_send_wk(struct ubmad_device_priv *dev_priv,
@@ -938,30 +987,40 @@ static int ubmad_post_send_wk(struct ubmad_device_priv *dev_priv,
     struct ubcore_jfs_wr *bad_wr;
     struct ubcore_sge sge;
     void *sge_addr;
-    int sge_idx, ret;
+    uint32_t sge_idx;
+    int ret;
 
-    /* 步骤 1：纯缓存查 tjetty（v3.2：不再期待 cache miss 触发导入） */
+    /* 步骤 1：纯缓存查 tjetty。
+     * v3.3：cache miss 不在此处触发导入——返回 -EAGAIN 由调用方重试。 */
     tjetty = ubmad_get_tjetty(&session->remote_eid, rsrc);
     if (!tjetty) {
-        /* 触发异步导入；本次直接返回 -EAGAIN 由会话层重试 */
-        ubmad_queue_import_work(dev_priv, &session->remote_eid, rsrc);
-        pr_debug("ubmad_wk: tjetty not cached, queued import for eid=%pI6\n",
+        pr_debug("ubmad_wk: tjetty not cached for eid=%pI6, retry later\n",
                  session->remote_eid.raw);
         return -EAGAIN;
     }
 
-    /* 步骤 2：从 send_seg_bitmap 分配 SGE 槽位（复用 UBMAD 现有 API） */
-    sge_idx = ubmad_alloc_sge(rsrc, &sge_addr);
-    if (sge_idx < 0) {
+    /* 步骤 2：从 send_seg_bitmap 分配 SGE 槽位（mirror ubmad_datapath.c:248） */
+    sge_idx = ubmad_bitmap_get_id(rsrc->send_seg_bitmap);
+    if (sge_idx >= rsrc->send_seg_bitmap->size) {
         ubmad_put_tjetty(tjetty);
-        return sge_idx;
+        return -EBUSY;
+    }
+    sge_addr = rsrc->send_seg->seg.ubva.va + UBMAD_SGE_MAX_LEN * sge_idx;
+
+    /* 步骤 3：tx 计数（mirror ubmad_datapath.c:276-278）。
+     * 必须在 post 之前 inc，因为 post 完成时 ubmad_jfce_handler_s 会 dec。 */
+    if (atomic_fetch_add(1, &rsrc->tx_in_queue) >= UBMAD_TX_THREDSHOLD) {
+        atomic_fetch_sub(1, &rsrc->tx_in_queue);
+        (void)ubmad_bitmap_put_id(rsrc->send_seg_bitmap, sge_idx);
+        ubmad_put_tjetty(tjetty);
+        return -EBUSY;
     }
 
-    /* 步骤 3：构造 ubmad_msg 头 + ubmad_wk_hdr */
+    /* 步骤 4：构造 ubmad_msg 头 + ubmad_wk_hdr */
     msg = (struct ubmad_msg *)sge_addr;
     msg->version     = UBMAD_MSG_VERSION_0;
     msg->msg_type    = msg_type;
-    msg->msn         = session->session_id;   /* msn 字段同时承载 session_id 用于日志 */
+    msg->msn         = session->session_id;   /* 借用 msn 字段做日志关联 */
     msg->payload_len = sizeof(struct ubmad_wk_hdr);
     msg->reserved    = 0;
 
@@ -969,26 +1028,27 @@ static int ubmad_post_send_wk(struct ubmad_device_priv *dev_priv,
     wk_hdr->isn               = isn;
     wk_hdr->ack               = ack;
     wk_hdr->local_session_id  = session->session_id;
-    wk_hdr->peer_session_id   = session->remote_session_id; /* 0 if SYN before peer learned */
+    wk_hdr->peer_session_id   = session->remote_session_id; /* 0 if SYN */
     wk_hdr->flags             = 0;
     memset(wk_hdr->reserved, 0, sizeof(wk_hdr->reserved));
 
-    /* 步骤 4：构造发送 WR（v3.2 修订：与 ubmad_datapath.c:680-720 对齐） */
-    jfs_wr.opcode               = UBCORE_OPC_SEND;
-    jfs_wr.tjetty               = tjetty->tjetty;
-    jfs_wr.user_ctx             = (uintptr_t)sge_addr;
-    jfs_wr.flag.bs.complete_enable = 1;             /* 位域，不是 wr.complete_enable */
+    /* 步骤 5：构造发送 WR（mirror ubmad_datapath.c:680-700） */
+    jfs_wr.opcode                  = UBCORE_OPC_SEND;
+    jfs_wr.tjetty                  = tjetty->tjetty;
+    jfs_wr.user_ctx                = (uintptr_t)sge_addr;
+    jfs_wr.flag.bs.complete_enable = 1;
 
-    sge.addr  = (uintptr_t)sge_addr;
-    sge.len   = sizeof(*msg) + msg->payload_len;
-    sge.tseg  = rsrc->send_seg;
-    jfs_wr.send.src.sge     = &sge;                 /* 指针赋值，不是数组 */
+    sge.addr                = (uintptr_t)sge_addr;
+    sge.len                 = sizeof(*msg) + msg->payload_len;
+    sge.tseg                = rsrc->send_seg;
+    jfs_wr.send.src.sge     = &sge;
     jfs_wr.send.src.num_sge = 1;
 
-    /* 步骤 5：投递到硬件发送队列 */
+    /* 步骤 6：投递到硬件发送队列 */
     ret = ubcore_post_jetty_send_wr(rsrc->jetty, &jfs_wr, &bad_wr);
     if (ret) {
-        ubmad_free_sge(rsrc, sge_idx);
+        atomic_fetch_sub(1, &rsrc->tx_in_queue);
+        (void)ubmad_bitmap_put_id(rsrc->send_seg_bitmap, sge_idx);
         pr_err("ubmad_wk: post send failed type=%d ret=%d\n", msg_type, ret);
     }
 
@@ -1394,7 +1454,10 @@ static void ubmad_process_wk_syn_ack(struct ubmad_msg *msg,
     session->remote_session_id  = wk_hdr->local_session_id;  /* ★ */
 
     /* 步骤 4：取消 SYN 重传定时器 */
-    cancel_delayed_work(&session->rt_work);   /* 非 sync，避免死锁 */
+    /* v3.3：cancel 成功（work 还在队列里没跑）需要替它把 timer 持有的 ref 释放掉。
+     * 否则 SYN_ACK 早到时（rt_work 还没机会执行 put）会泄露一个引用。 */
+    if (cancel_delayed_work(&session->rt_work))
+        ubmad_put_session(session);
 
     /* 步骤 5：状态迁移到 ESTABLISHED */
     session->state  = UBMAD_WK_ESTABLISHED;
@@ -1456,8 +1519,9 @@ static void ubmad_process_wk_ack(struct ubmad_msg *msg,
         return;
     }
 
-    /* 取消 SYN_ACK 重传定时器 */
-    cancel_delayed_work(&session->rt_work);
+    /* 取消 SYN_ACK 重传定时器（v3.3：cancel 成功要释放 timer 持有的 ref） */
+    if (cancel_delayed_work(&session->rt_work))
+        ubmad_put_session(session);
 
     /* 状态迁移 */
     session->state = UBMAD_WK_ESTABLISHED;
@@ -1527,25 +1591,35 @@ ubmad_process_wk_ack      [server side]
 int ubmad_wk_close(struct ubmad_wk_session *session)
 {
     struct ubmad_device_priv *dev_priv = session->dev_priv;
+    enum ubmad_wk_session_state prev_state;
+    uint32_t fin_seq;
     int ret;
 
     spin_lock(&session->lock);
-    /* v3.2：被动方在 CLOSE_WAIT 状态也可调用 close 发起自己的 FIN（→ LAST_ACK） */
-    if (session->state == UBMAD_WK_ESTABLISHED) {
+    prev_state = session->state;     /* v3.3：保存以便失败回滚到正确状态 */
+
+    /* 被动方在 CLOSE_WAIT 状态也可调用 close 发起自己的 FIN（→ LAST_ACK） */
+    if (prev_state == UBMAD_WK_ESTABLISHED) {
         session->state = UBMAD_WK_FIN_WAIT_1;
-    } else if (session->state == UBMAD_WK_CLOSE_WAIT) {
+    } else if (prev_state == UBMAD_WK_CLOSE_WAIT) {
         session->state = UBMAD_WK_LAST_ACK;
     } else {
         spin_unlock(&session->lock);
         return -EINVAL;
     }
+
+    /* v3.3：FIN 也"消耗"一个序列号（TCP 风格）。SYN 已用 local_isn，
+     * 故 FIN 用 local_isn+1。这个值需要持久存进 session 以便重传时一致。 */
+    if (!session->local_fin_seq)
+        session->local_fin_seq = session->local_isn + 1;
+    fin_seq = session->local_fin_seq;
     spin_unlock(&session->lock);
 
     ret = ubmad_post_send_wk(dev_priv, session,
-                              UBMAD_WK_FIN, 0, 0);
+                              UBMAD_WK_FIN, fin_seq, 0);
     if (ret) {
         spin_lock(&session->lock);
-        session->state = UBMAD_WK_ESTABLISHED;   /* 发送失败，回滚状态 */
+        session->state = prev_state;     /* v3.3：回滚到原状态（不是硬编码 ESTABLISHED） */
         spin_unlock(&session->lock);
         return ret;
     }
@@ -1593,13 +1667,21 @@ static void ubmad_process_wk_fin(struct ubmad_msg *msg,
     spin_lock(&session->lock);
     old_state = session->state;
 
+    /* v3.3：记录对端 FIN 的 seq，FIN_ACK 的 ack 字段需要回填 wk_hdr->isn+1 */
+    if (old_state == UBMAD_WK_FIN_WAIT_2 ||
+        old_state == UBMAD_WK_ESTABLISHED ||
+        old_state == UBMAD_WK_TIME_WAIT) {
+        session->remote_fin_seq = wk_hdr->isn;
+    }
+
     if (old_state == UBMAD_WK_FIN_WAIT_2) {
         /* 场景一：主动方收到对端 FIN */
         session->state = UBMAD_WK_TIME_WAIT;
         spin_unlock(&session->lock);
 
-        /* 发送 FIN_ACK */
-        ubmad_post_send_wk(dev_priv, session, UBMAD_WK_FIN_ACK, 0, 0);
+        /* 发送 FIN_ACK（v3.3：ack = remote_fin_seq + 1） */
+        ubmad_post_send_wk(dev_priv, session, UBMAD_WK_FIN_ACK,
+                            0, session->remote_fin_seq + 1);
 
         /* 启动 TIME_WAIT 定时器（UBMAD_WK_TIME_WAIT_MS = 4000ms）
          * v3.2：必须先 kref_get，否则 tw_work_handler 的 put 会跌破 0。 */
@@ -1612,8 +1694,9 @@ static void ubmad_process_wk_fin(struct ubmad_msg *msg,
         session->state = UBMAD_WK_CLOSE_WAIT;
         spin_unlock(&session->lock);
 
-        /* 发送 FIN_ACK */
-        ubmad_post_send_wk(dev_priv, session, UBMAD_WK_FIN_ACK, 0, 0);
+        /* 发送 FIN_ACK（v3.3：ack = remote_fin_seq + 1） */
+        ubmad_post_send_wk(dev_priv, session, UBMAD_WK_FIN_ACK,
+                            0, session->remote_fin_seq + 1);
 
         /* 通知上层"对端已关闭，你可以继续发数据，但最终也需要调用 close()" */
         if (session->on_closed)
@@ -1627,7 +1710,8 @@ static void ubmad_process_wk_fin(struct ubmad_msg *msg,
         spin_unlock(&session->lock);
         pr_debug("ubmad_wk: re-ACK FIN in TIME_WAIT for session=%u\n",
                  session->session_id);
-        ubmad_post_send_wk(dev_priv, session, UBMAD_WK_FIN_ACK, 0, 0);
+        ubmad_post_send_wk(dev_priv, session, UBMAD_WK_FIN_ACK,
+                            0, session->remote_fin_seq + 1);
 
     } else {
         spin_unlock(&session->lock);
@@ -1666,20 +1750,36 @@ static void ubmad_process_wk_fin_ack(struct ubmad_msg *msg,
         return;
 
     spin_lock(&session->lock);
+
+    /* v3.3：校验 ack 字段。本端发出的 FIN 用 local_fin_seq，故 FIN_ACK 的
+     * ack 应等于 local_fin_seq + 1。
+     * local_fin_seq == 0 表示本端从未发过 FIN（不应收到 FIN_ACK）。 */
+    if (session->local_fin_seq == 0 ||
+        wk_hdr->ack != session->local_fin_seq + 1) {
+        spin_unlock(&session->lock);
+        pr_warn("ubmad_wk: FIN_ACK ack mismatch session=%u expect=%u got=%u\n",
+                session->session_id,
+                session->local_fin_seq + 1, wk_hdr->ack);
+        ubmad_put_session(session);
+        return;
+    }
+
     old_state = session->state;
 
     if (old_state == UBMAD_WK_FIN_WAIT_1) {
         session->state = UBMAD_WK_FIN_WAIT_2;
         spin_unlock(&session->lock);
-        /* v3.2：取消 FIN 重传定时器（FIN_ACK 已收到） */
-        cancel_delayed_work(&session->rt_work);
+        /* v3.3：cancel 成功要释放 timer 持有的 ref */
+        if (cancel_delayed_work(&session->rt_work))
+            ubmad_put_session(session);
         /* 等待对端的 FIN（ubmad_process_wk_fin 处理） */
 
     } else if (old_state == UBMAD_WK_LAST_ACK) {
         session->state = UBMAD_WK_CLOSED;
         spin_unlock(&session->lock);
-        /* v3.2：取消 FIN 重传定时器 */
-        cancel_delayed_work(&session->rt_work);
+        /* v3.3：同上 */
+        if (cancel_delayed_work(&session->rt_work))
+            ubmad_put_session(session);
 
         /* 被动方四次挥手完成，释放 session */
         pr_info("ubmad_wk: session=%u closed (passive side)\n",
@@ -1834,9 +1934,12 @@ static void ubmad_wk_syn_rt_work_handler(struct work_struct *work)
         break;
     case UBMAD_WK_FIN_WAIT_1:
     case UBMAD_WK_LAST_ACK:
-        /* v3.2 新增：主动方/被动方重传自己发的 FIN */
+        /* v3.2 新增：主动方/被动方重传自己发的 FIN
+         * v3.3：用 session->local_fin_seq 而不是 0；
+         * 重传必须与首次发送 seq 一致，否则对端 FIN_ACK 的 ack 校验会失败。 */
         ret = ubmad_post_send_wk(dev_priv, session,
-                                  UBMAD_WK_FIN, 0, 0);
+                                  UBMAD_WK_FIN,
+                                  session->local_fin_seq, 0);
         break;
     default:
         ret = 0;  /* 不应到达 */
@@ -1905,6 +2008,13 @@ static void ubmad_wk_time_wait_handler(struct work_struct *work)
 | tw_work 入队前 | `kref_get` | `tw_work_handler` 末尾 `put` |
 
 > **重要**：每次 `queue_delayed_work` 之前必须先 `kref_get`，并在 handler 最后 `kref_put`。否则 session 对象可能在 handler 执行中途被释放。
+>
+> **v3.3 补充**：取消 work 时若 `cancel_delayed_work()` 返回 `true`（说明 work 还在队列里没执行），handler 不会跑、它的 `kref_put` 也不会发生。**调用方此时必须代替 handler 做一次 `ubmad_put_session(session)`**，否则就泄露一个引用。
+> ```c
+> if (cancel_delayed_work(&session->rt_work))
+>     ubmad_put_session(session);
+> ```
+> 若用 `cancel_delayed_work_sync()` 等到 handler 真正完成（无论是这次还是上次入队的），则不需要补 put——handler 已经做了。但 sync 版本不能在持锁时调用（会和 handler 抢锁死锁）。本设计的接收路径在解锁后用 `cancel_delayed_work()` + 条件 put。
 
 ---
 
@@ -2538,3 +2648,18 @@ _v3.2 修订（2026-05-14）相对 v3.1 的主要变化_：
 | 7 | **构建路径错误**：Step 9 引用不存在的 `ubcore/ubcm/Makefile`；Step 11 引用不存在的 `ubcore/Kconfig` | Step 9 改为 `drivers/ub/urma/ubcore/Makefile` 中 `ubcore-objs` 块加 `ubcm/ubmad_session.o`；Step 11 说明 Kconfig 应放在 `drivers/ub/Kconfig`（方式 A）或新建 `drivers/ub/urma/ubcore/Kconfig` 并 `source` 引入（方式 B） |
 
 外部 reviewer 链接：上述 7 项中的 #1（双 ID 协议）和 #3（kref 配对）属于"如照 v3 实现就跑不起来"的阻塞性 bug；其余 5 项严重性递减但都是必须修。修复后这份文档才真正达到「可照着写代码」的实现指南级别。
+
+_v3.3 修订（2026-05-14）相对 v3.2 的主要变化_：
+
+第二轮外部 reviewer 在 v3.2 上又找出 6 项实现层面的 bug。v3.3 全部修复：
+
+| # | 缺陷（v3.2 残留） | v3.3 修复 |
+|---|------|-----------|
+| 1 | **Step 1 §1.5 与 §0.2 设计矛盾**：v3 / v3.2 让读者把 WK_* 加进 `ubmad_post_send()` 的资源选择 switch，但握手实际走 `ubmad_post_send_wk()` 直接调 `ubcore_post_jetty_send_wr()`，根本不经过 `ubmad_post_send`。即使加了，下游的 `ubmad_do_post_send()` 内还有第二个 switch（`ubmad_datapath.c:702-718`）只识别 CONN_REQ/CONN_RESP/SINGLE_REQ，遇 WK_* 直接 -EINVAL。 | **删除 §1.5**。Step 1 只剩"在 `ub_mad.h` 加 WK_* 枚举"。重写说明指出删除原因和下游 switch 的限制（§Step 1 §1.5）。 |
+| 2 | **虚构的 helper 不存在**：v3.2 引入 `ubmad_alloc_sge() / ubmad_free_sge() / ubmad_queue_import_work()` 三个不在内核里的函数，会编译失败。`ubmad_session_find_by_peer()` 也只用未定义。 | **全部替换为真实 API**：`ubmad_bitmap_get_id` / `ubmad_bitmap_put_id`（参 `ub_mad_priv.h:237`、`ubmad_datapath.c:248,294`）；SGE 地址用 `rsrc->send_seg->seg.ubva.va + UBMAD_SGE_MAX_LEN * sge_idx`（参 `ubmad_datapath.c:254`）；tjetty cache miss 不在底层触发导入而是返回 `-EAGAIN` 给调用方。`ubmad_session_find_by_peer()` 在 §3.8b 给出完整定义（哈希表遍历 + `(remote_eid, remote_session_id)` 二元组匹配）。（§Step 3 §3.8b、§Step 4 §4.3） |
+| 3 | **取消定时器漏 put 引用**：`cancel_delayed_work` 成功（work 还在队列里没跑）说明 handler 不会执行也就不会做 `ubmad_put_session`，timer 持有的那个 ref 会泄露。v3.2 的 4 处 cancel 都没补 put。 | 改用 `if (cancel_delayed_work(...)) ubmad_put_session(session);` 模式。§7.4 规则表加补充说明，明确 sync 与非 sync 两种取消方式的 ref 处理差异。涉及 process_wk_syn_ack / process_wk_ack / process_wk_fin_ack 三个函数，共 4 个 cancel 点。 |
+| 4 | **`ubmad_wk_close()` 回滚到错的状态**：v3.2 把"被动方 CLOSE_WAIT → LAST_ACK"加上了，但失败回滚仍硬编码 `state = ESTABLISHED`，被动方失败后会跳到错的状态。 | 用局部变量 `prev_state` 保存原状态，失败时 `session->state = prev_state`。 |
+| 5 | **FIN_ACK 缺校验**：v3.2 的 FIN 用 `isn=0, ack=0`，FIN_ACK 也无 ack 校验；任何乱序到达的 FIN_ACK 都会被接受。 | session 增加 `local_fin_seq / remote_fin_seq` 字段。`ubmad_wk_close()` 首发 FIN 时 `local_fin_seq = local_isn + 1`（FIN 消耗一个 seq，TCP 风格），重传保持一致。`process_wk_fin()` 记录 `remote_fin_seq = wk_hdr->isn` 后用 `ack = remote_fin_seq + 1` 回 FIN_ACK。`process_wk_fin_ack()` 校验 `wk_hdr->ack == local_fin_seq + 1`，不符则丢弃。 |
+| 6 | **`tx_in_queue` 不一致**：v3.2 的 `ubmad_post_send_wk()` 直接 post，没 `atomic_fetch_add(&rsrc->tx_in_queue)`。但完成处理（`ubmad_datapath.c:1230`）会无条件 dec，缺增反减计数最终变负。 | 在 post 之前 `atomic_fetch_add(1, &rsrc->tx_in_queue)`，超过 `UBMAD_TX_THREDSHOLD`（已存在的真实宏）回滚 + 释放 SGE 后返回 -EBUSY；post 失败也回退（mirror `ubmad_datapath.c:276-278,287`）。 |
+
+v3.3 后这份文档的代码示例**应当能编译并跑通完整握手 + 挥手**——所有 helper 都映射到真实内核符号，所有 ref 计数路径都成对，所有协议字段都有发送侧填值和接收侧校验。剩余的开放设计问题（§18）不影响代码正确性，只关乎设计取舍与上层消费者落实。
