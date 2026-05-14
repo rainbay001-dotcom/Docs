@@ -552,6 +552,88 @@ ubcore_cm_recv(dev, recv_cr)                                      [net/ubcore_cm
 | CM send-ops register | `net/ubcore_cm.c:94 ubcore_register_cm_send_ops` |
 | CM send-ops definer | `ubcm/ub_cm.c:334-350 ubcm_init` (registers `ubmad_ubc_send`) |
 
+### 4.9 UDMA driver-side `udma_create_jetty()` — `drivers/ub/urma/hw/udma/udma_jetty.c`
+
+Resolves §8 item #6 ("UDMA driver-side `udma_create_jetty` body — actual HW resource allocation"). Also closes the §4.8 follow-up ("does the UDMA driver invoke `ubcore_handle_vtpn_wait_list` directly on firmware completion?") with a clean **no**.
+
+#### Body walk
+
+```
+udma_create_jetty(ub_dev, cfg, udata)                              [udma_jetty.c:655]
+  ── kzalloc(struct udma_jetty)                                    [:662]
+  ── udma_active_jetty_detail(udma_dev, udma_jetty, cfg, udata)    [:666 → :637-652]
+       ── udma_alloc_jetty_sq(udma_dev, udma_jetty, cfg, udata)    [:642 → :502]
+            udma_get_user_jetty_cmd(udata, &user_cmd)              [:508]
+            alloc_jetty_id(udma_dev, udma_jetty, cfg)              [:515 → :402-428]
+                 if cfg->id > 0 && !cfg->jetty_grp:
+                     udma_user_specify_jetty_id()                  ; user-specified path
+                 else if cfg->jetty_grp:
+                     add_jetty_to_grp()                            ; group-managed path
+                 else:
+                     udma_alloc_jetty_id_own()                     ; type-dispatched alloc
+                         (STARS / NORMAL / CCU / default; the public-jetty
+                          fallback pool — caps.public_jetty — is reachable
+                          from this layer, see udma_alloc_jetty_id at :244)
+            udma_get_jetty_buf(udma_dev, udma_jetty, ...)          [:523]
+                 user-mode:   udma_alloc_u_sq_buf()                [:105]
+                 kernel-mode: udma_alloc_k_sq_buf()                [:106]
+            udma_jetty_copy_resp(udata, ...)                       [:528]
+       ── udma_add_xa_and_create_hw_ctx(udma_dev, udma_jetty)      [:648 → :601]
+            xa_store(&udma_dev->jetty_table.xa, sq.id, jetty)      [:606]
+            udma_init_jettyc(udma_dev, jetty, &ctx)                [:571]
+                 fill jetty context: JFS mode, trans_type, SL from priority,
+                 SQE base addr, token id, JFC ids (s/r), JFR binding, EID idx, SSN
+            post_mailbox_update_ctx(udma_dev, &ctx, sq.id)         [:575]
+                 udma_alloc_cmd_mailbox(udma_dev)                  [udma_cmd.c:139]
+                 memcpy(mailbox, &ctx, sizeof(ctx))                [:147]
+                 udma_post_mbox(udma_dev, mailbox, ...)            [:149 → :89]
+                      ubase_hw_upgrade_ctx_ex(...)                 ; ★ SYNCHRONOUS
+                 udma_free_cmd_mailbox(udma_dev, mailbox)          [:155]
+            udma_set_query_flush_time(udma_dev, jetty)             [:622]
+            jetty->state = UBCORE_JETTY_STATE_READY                [:623]
+            refcount_set + init_completion                         [:624-625]
+  ── return &udma_jetty->ubcore_jetty                              [:676]
+```
+
+Key points:
+
+- The mailbox post (`udma_post_mbox` → `ubase_hw_upgrade_ctx_ex`) is **synchronous and blocking**. There is no completion callback registered for jetty creation; firmware ack returns the call.
+- HW resources allocated: SQ ring (kernel or mmap'd user buffer), token ID for memory protection, jetty ID from the appropriate pool (regular / public-jetty fallback / group-managed / user-specified), HW jetty context (delivered via mailbox), JFC + JFR bindings inside the context.
+- The doorbell page mapping is **not** in `udma_create_jetty`; it lives in the user-buffer alloc path (`udma_alloc_u_sq_buf`) reached via the user-space mmap setup, not the create-jetty kernel call itself.
+
+#### UDMA does NOT implement `dev->ops->send_req`
+
+Searched `drivers/ub/urma/hw/udma/udma_main.c:264-352` (the ops registration block) for `send_req` — **the field is not set**. The `send_req` member of `struct ubcore_ops` (`include/ub/urma/ubcore_types.h:3015` area) is optional, and UDMA does not register one.
+
+This was the missing piece for the §4.8 question. The chain `ubcore_send_req(dev, req)` → `dev->ops->send_req(dev, req)` (`ubcore_msg.c:128`) **null-derefs** on UDMA-managed devices unless something else registers send_req. Combined with the dormant `_intime` resp handler and the no-op `ubcore_recv_resp` stubs, the entire UE↔MUE `ubcore_msg_session` pipeline is structurally inert in OLK-6.6 on UDMA.
+
+The §4.8 dormant-path observation was therefore not "the driver picks up the slack via a non-`_intime` route" — it's "the whole pipeline isn't wired, on either end." The vTP create flow that `umdk_link_setup_timing.md` §10.27 measured under 100-process load can NOT be using this pipeline; the live path must be the parallel `net/ubcore_session.c` + CM (`net/ubcore_cm.c`, `g_send=ubmad_ubc_send`, JFS WR over UBMAD WK jetty 1) chain documented in §4.8's "Two parallel session abstractions" subsection.
+
+#### Search evidence
+
+```
+grep -rn "ubcore_handle_vtpn_wait_list\|UBCORE_VTPS_READY\|UBCORE_VTPS_ERROR" \
+    /Volumes/KernelDev/kernel/drivers/ub/urma/hw/udma/
+→ (no output)
+```
+
+The only callers of `ubcore_handle_vtpn_wait_list` are inside `ubcore_vtp.c` itself (`:371`, `:378`, `:408`, `:1822`) — all reached from ubcore's own VTP state-machine entries, not from UDMA. UDMA participates in jetty/JFC/JFR/JFS lifecycle but not in the vTP control plane.
+
+#### File:line index for §4.9
+
+| Concept | File:line |
+|---|---|
+| `udma_create_jetty` entry | `udma_jetty.c:655-678` |
+| `udma_active_jetty_detail` | `udma_jetty.c:637-652` |
+| `udma_alloc_jetty_sq` | `udma_jetty.c:502-543` |
+| `alloc_jetty_id` (allocator dispatch) | `udma_jetty.c:402-428` |
+| `udma_add_xa_and_create_hw_ctx` | `udma_jetty.c:601-630` |
+| `udma_init_jettyc` (HW ctx fill) | `udma_jetty.c:558` area |
+| `post_mailbox_update_ctx` | `udma_jetty.c:117` area |
+| `udma_post_mbox` (sync mailbox) | `udma_cmd.c:89` |
+| Ops registration (no `send_req`) | `udma_main.c:264-352` |
+| Public-jetty alloc helper | `udma_jetty.c:244` |
+
 ---
 
 ## 5. UBSE syssentry — well-known jetty 999 in production
@@ -631,9 +713,9 @@ These are gaps the trace explicitly **did not** resolve:
 3. **UAPI ioctl boundary.** `ubcore_cdev_file.c` snippets shown were sysfs attribute handlers; the IOCTL dispatch (`UBCORE_CMD_CREATE_JETTY` etc.) lives further in the file or in `ubcore_uvs_cmd.c` — not pinned to a `case` line yet.
 4. **Bonding flow specifics.** `ubcore_connect_exchange_udata_when_import_jetty` (called at `ubcore_jetty.c:2491-2496`) implementation is in `ubcore_connect_bonding.c` and was not walked.
 5. **UBMAD ID 2 use.** Only ID 1 is documented in the existing well-known-jetty doc as carrying link-setup; the role of ID 2 (`UBMAD_WK_JETTY_ID_1`) was not pinned to a specific handler in `ubcm/`. (Partial: the deep-dive doc notes ID 2 is selected for `UBMAD_AUTHN_DATA`; the dispatch code path is still unwalked.)
-6. **UDMA driver-side `udma_create_jetty` body.** Confirmed `dev->ops->create_jetty` resolves to a UDMA function via `register_device`, but the actual HW resource allocation (queue rings, doorbell mapping) was not walked.
+6. ~~UDMA driver-side `udma_create_jetty` body.~~ **Resolved in §4.9.** Body walked at `udma_jetty.c:655-678`: `kzalloc → udma_active_jetty_detail → (alloc_jetty_sq → alloc_jetty_id + get_jetty_buf) + (add_xa_and_create_hw_ctx → init_jettyc → post_mailbox_update_ctx → udma_post_mbox sync mailbox)`. Doorbell page mapping is in the user-buffer alloc path (`udma_alloc_u_sq_buf`), not the create-jetty kernel call. **Bonus finding that closes the §4.8 follow-up:** UDMA does NOT register `dev->ops->send_req` at all (`udma_main.c:264-352` ops table). So the entire `ubcore_send_req → dev->ops->send_req` chain null-derefs on UDMA-managed devices; combined with the dormant `_intime` resp handler and no-op `ubcore_recv_resp` stubs, the `ubcore_msg_session` pipeline is structurally inert in OLK-6.6. The live VTP path must be the parallel `net/ubcore_session.c` + CM chain.
 
-Items #1 and #2 walked in §4.8 today (2026-05-14). Items #3–#6 are each a one-file follow-up; flag if any is needed in detail.
+Items #1, #2, #6 resolved today (2026-05-14). Items #3–#5 remain as one-file follow-ups; flag if any is needed in detail.
 
 ---
 
