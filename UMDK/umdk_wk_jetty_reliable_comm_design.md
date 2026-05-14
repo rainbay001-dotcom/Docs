@@ -1,7 +1,7 @@
 # 公知Jetty可靠通信设计文档（三次握手 / 四次挥手）
 
 _面向读者：对 UMDK/URMA/UBMAD 代码零基础的新开发者。_
-_文档版本：v3.15（v3.14 only 修了 SYN_RCVD；FIN_WAIT_1 / LAST_ACK 同样的 close-consume 后无所有者问题也一并修；retry-limit 分支重构成显式四态 switch）_
+_文档版本：v3.16（同步 v3.15 引入的四态 switch 行为到 §7.2 函数注释、§16 表项、SYN_SENT switch comment 关于 async 模式的措辞）_
 _最后更新：2026-05-14_
 
 ---
@@ -2062,11 +2062,14 @@ ubmad_wk: session=1 TIME_WAIT expired, session closed
  * 重传逻辑（指数退避）：
  *   - 首次重传延迟：2ms
  *   - 第 n 次重传延迟：2 * 2^(n-1) ms（最大不超过 1000ms）
- *   - 超过 UBMAD_WK_MAX_RETRY 次后，放弃并通知上层失败
+ *   - 超过 UBMAD_WK_MAX_RETRY 次后，按"external owner notifies; internal
+ *     release otherwise"模型分四态处理（v3.15 起；下方 retry-limit switch
+ *     和 §7.4 / §18.8 详述）：仅 SYN_SENT 通知调用方；SYN_RCVD 内部释放
+ *     alloc ref；FIN_WAIT_1/LAST_ACK 仅 log，alloc ref 已被 close consume。
  *
  * 幂等性保证：
- *   检查 session->state 是否仍处于 SYN_SENT / SYN_RCVD，
- *   如果已迁移则说明握手已完成，不再重传。
+ *   检查 session->state 是否仍处于 SYN_SENT / SYN_RCVD / FIN_WAIT_1 /
+ *   LAST_ACK，如果已迁移则说明握手 / 挥手已完成，不再重传。
  */
 static void ubmad_wk_syn_rt_work_handler(struct work_struct *work)
 {
@@ -2117,8 +2120,12 @@ static void ubmad_wk_syn_rt_work_handler(struct work_struct *work)
          *                    走的是同一个 close）。 */
         switch (state) {
         case UBMAD_WK_SYN_SENT:
-            /* Client connect 还没拿到 session（同步在阻塞、异步未触发回调）。
-             * 通知调用方失败：on_closed 或 complete connect 的等待。 */
+            /* Client connect 还没完成握手——但调用方持有 alloc ref：
+             *   - 同步模式：connect 在 wait_for_completion_timeout 上阻塞，
+             *     收到 complete(&connected) 后醒来读 session->result 并 put alloc ref。
+             *   - 异步模式：connect 立刻返回 session 指针给调用方（v3.5），
+             *     调用方收到 on_closed 通知后调 ubmad_wk_close consume alloc ref。
+             * 两种模式都安全——alloc ref 都在外部、close-consume 链路明确。 */
             if (session->on_closed)
                 session->on_closed(session, -ETIMEDOUT, session->cb_ctx);
             else
@@ -2703,7 +2710,7 @@ nm drivers/ub/urma/ubcore/ubcore.ko | grep ubmad_wk_  # 期望：列出所有握
 | 10 | `ubmad_wk_close()` | `ubmad_datapath.c` | 发起四次挥手（主动 / 被动关闭均可调用），发 FIN |
 | 11 | `ubmad_process_wk_fin()` | `ubmad_datapath.c` | 收到 FIN：发 FIN_ACK → 迁移状态 → 回调上层 |
 | 12 | `ubmad_process_wk_fin_ack()` | `ubmad_datapath.c` | 收到 FIN_ACK：推进关闭状态机（FIN_WAIT_1→2 或 LAST_ACK→CLOSED）|
-| 13 | `ubmad_wk_syn_rt_work_handler()` | `ubmad_datapath.c` | SYN/SYN_ACK 重传工作：指数退避，超限则通知失败 |
+| 13 | `ubmad_wk_syn_rt_work_handler()` | `ubmad_datapath.c` | SYN/SYN_ACK/FIN/FIN_ACK 重传工作（v3.2 起兼任 close-side 重传）：指数退避；超限按 v3.15 四态 switch 处理——仅 SYN_SENT 通知调用方（on_closed 或 complete），SYN_RCVD 内部释放 alloc ref + 不通知，FIN_WAIT_1/LAST_ACK 仅 log + 不通知（alloc ref 已被 close consume）|
 | 14 | `ubmad_wk_time_wait_handler()` | `ubmad_datapath.c` | **TIME_WAIT / FIN_WAIT_2** 共用的超时 handler（v3.7 起复用）：到期把 session 置 CLOSED 并 put 自己（timer ref，§7.4 哈希表不计 ref）；通常是最后一份 ref，会触发 release_session。两种触发原因日志区分：TIME_WAIT 是正常清理；FIN_WAIT_2 是对端没在 30s 内发 FIN，强制关闭 |
 | 15 | `ubmad_session_find_by_id()` | `ubmad_session.c` | 哈希表查找 session：持锁、**`kref_get_unless_zero`** 后返回（v3.9 起防复活 ref==0 的将释放对象），调用者负责 put |
 | 16 | `ubmad_session_init_global()` | `ubmad_session.c` | 初始化全局哈希表和 IDA，在 ubmad_init() 中调用 |
@@ -3123,3 +3130,13 @@ _v3.15 修订（2026-05-14）相对 v3.14 的主要变化_：
 §18.8 同步扩展：原来只列 "accept 失败无回调"，现在加上 "close-side FIN 投递失败也无回调"，二者根因相同——session 指针在这些状态下属于内部，不能交给上层。v2 候选 API 列出 `on_session_event(eid, event_type, error, ctx)` 这种"无 session 指针"的统一通知接口。
 
 到 v3.15 为止，retry-limit 分支应当对所有 4 个 retry-relevant 状态都明确处理，没有"借用指针给上层"的盲点。
+
+_v3.16 修订（2026-05-14）相对 v3.15 的纯 prose 同步_：
+
+第十五轮 reviewer 没找代码 bug，但指出 v3.15 的代码改动没完整传播到几处描述：
+
+- **§7.2 `ubmad_wk_syn_rt_work_handler` 注释里"超过 UBMAD_WK_MAX_RETRY 次后，放弃并通知上层失败"**：v3.15 起只对 SYN_SENT 通知，其它三态不通知。改写成完整的四态描述并指向 §7.4 / §18.8。
+- **§16 第 13 项"SYN/SYN_ACK 重传工作：指数退避，超限则通知失败"**：同上，扩写成 v3.15 四态行为描述（顺便补上 v3.2 起就支持的 FIN/FIN_ACK 重传）。
+- **SYN_SENT switch case 注释"Client connect 还没拿到 session（同步在阻塞、异步未触发回调）"**：异步模式下 connect 是**立刻**返回 session 指针的（v3.5）——结论"alloc ref 在调用方手里"是对的，但说"还没拿到"是错的。改写成显式区分同步/异步两种模式下调用方持有 alloc ref 的方式。
+
+无代码改动；纯文档同步。
