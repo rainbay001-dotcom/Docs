@@ -1152,7 +1152,7 @@ this callback.
 `ubmad_check_eid_in_dev()` (`ub_mad.c:148`) scans the device EID table for the
 specific `(eid, eid_index)` pair.
 
-`ubmad_update_device_priv_resources()` (`ub_mad.c:170`) destroys old WK
+`ubmad_update_device_priv_resources()` (`ub_mad.c:171`) destroys old WK
 resources, copies new EID info, creates resources again, and sets
 `has_create_jetty_rsrc`.
 
@@ -1276,10 +1276,10 @@ WK resource.
 if `dev_priv->valid` is false and the device has at least one EID. If no EID
 exists, it returns success without creating resources.
 
-`ubmad_destroy_device_priv_resources()` (`ub_mad.c:1046`) checks `valid`, marks
+`ubmad_destroy_device_priv_resources()` (`ub_mad.c:1047`) checks `valid`, marks
 the object invalid, and destroys the WK resource array.
 
-`ubmad_get_device_priv_lockless()` (`ub_mad.c:1060`) finds a device-private
+`ubmad_get_device_priv_lockless()` (`ub_mad.c:1061`) finds a device-private
 object in `g_ubmad_device_list` and increments its kref.
 
 `ubmad_get_device_priv()` (`ub_mad.c:1074`) wraps the lockless lookup with
@@ -1316,7 +1316,7 @@ UBMAD ubcore client, and registers CM EID ops.
 
 ### Agent Lifecycle
 
-`ubmad_get_agent_priv_lockless()` (`ub_mad.c:1297`) finds the UBMAD agent for a
+`ubmad_get_agent_priv_lockless()` (`ub_mad.c:1298`) finds the UBMAD agent for a
 device and increments its kref.
 
 `ubmad_get_agent_priv()` (`ub_mad.c:1312`) wraps that lookup with
