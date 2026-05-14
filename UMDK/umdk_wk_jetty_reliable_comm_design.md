@@ -1,7 +1,7 @@
 # 公知Jetty可靠通信设计文档（三次握手 / 四次挥手）
 
 _面向读者：对 UMDK/URMA/UBMAD 代码零基础的新开发者。_
-_文档版本：v3.16（同步 v3.15 引入的四态 switch 行为到 §7.2 函数注释、§16 表项、SYN_SENT switch comment 关于 async 模式的措辞）_
+_文档版本：v3.17（清理 §2 字段表和 §7.2 函数名仍说 "SYN/SYN_ACK only" 的描述——v3.2 起 rt_work 已兼任 FIN 重传）_
 _最后更新：2026-05-14_
 
 ---
@@ -622,9 +622,9 @@ uint32_t ubmad_gen_isn(void);
 | `state` | enum | 当前状态机状态；所有迁移必须在 `lock` 下进行 |
 | `lock` | `spinlock_t` | 保护 `state` 字段，避免并发的定时器 / 接收回调同时修改状态 |
 | `local_isn` / `remote_isn` | `uint32_t` | 类比 TCP 的 ISN，用于防重放和有序确认 |
-| `rt_work` | `delayed_work` | SYN 或 SYN_ACK 重传工作，入队到 `rt_wq`（复用 dev_priv->rt_wq） |
-| `rt_cnt` | `int` | 已重传次数，超过 `UBMAD_WK_MAX_RETRY` 则放弃 |
-| `tw_work` | `delayed_work` | TIME_WAIT 定时器，到期后释放 session |
+| `rt_work` | `delayed_work` | session 控制消息重传工作（SYN / SYN_ACK / FIN，按 state 在 handler 内分派；v3.2 起兼任 close-side FIN 重传），入队到 `rt_wq`（复用 dev_priv->rt_wq） |
+| `rt_cnt` | `int` | 已重传次数，超过 `UBMAD_WK_MAX_RETRY` 则按 v3.15 四态 switch 处理（仅 SYN_SENT 通知调用方；其它三态内部清理）|
+| `tw_work` | `delayed_work` | TIME_WAIT / FIN_WAIT_2 共用超时定时器（v3.7 起复用），到期把 session 置 CLOSED 并释放 |
 | `connected` | `completion` | `ubmad_wk_connect()` 调用者在此等待，收到 SYN_ACK + 发出 ACK 后由接收处理路径 `complete()` |
 | `accepted` | `completion` | 服务端 accept 调用者在此等待，收到 ACK（进入 ESTABLISHED）后 `complete()` |
 | `on_established` / `on_closed` | 函数指针 | 上层注册的生命周期回调，可选 |
@@ -2055,7 +2055,9 @@ ubmad_wk: session=1 TIME_WAIT expired, session closed
 
 ```c
 /**
- * ubmad_wk_syn_rt_work_handler - SYN / SYN_ACK 重传工作处理函数
+ * ubmad_wk_syn_rt_work_handler - session 控制消息重传工作处理函数
+ *   （SYN / SYN_ACK / FIN —— v3.2 起兼任 close-side FIN 重传，名字里
+ *    保留 "syn" 前缀只是历史遗留，按 state 在 switch 内分派到正确的消息）
  *
  * 此函数在 dev_priv->rt_wq 工作队列中执行（非中断上下文）。
  *
@@ -3140,3 +3142,12 @@ _v3.16 修订（2026-05-14）相对 v3.15 的纯 prose 同步_：
 - **SYN_SENT switch case 注释"Client connect 还没拿到 session（同步在阻塞、异步未触发回调）"**：异步模式下 connect 是**立刻**返回 session 指针的（v3.5）——结论"alloc ref 在调用方手里"是对的，但说"还没拿到"是错的。改写成显式区分同步/异步两种模式下调用方持有 alloc ref 的方式。
 
 无代码改动；纯文档同步。
+
+_v3.17 修订（2026-05-14）相对 v3.16 的纯 prose 同步_：
+
+第十六轮 reviewer 又指出两处 v3.2 时代就该改但一直没改的 prose（rt_work 早就兼任 FIN 重传，但描述仍只说 SYN/SYN_ACK）：
+
+- **§2.x 数据结构字段表**：`rt_work` 描述说 "SYN 或 SYN_ACK 重传工作"，`rt_cnt` 只提"放弃"不说四态分派，`tw_work` 只提 TIME_WAIT。三项一起更新。
+- **§7.2 函数注释 header**：函数名 `ubmad_wk_syn_rt_work_handler` 历史遗留含 "syn"，但实际 handler 按 state 分派到 SYN/SYN_ACK/FIN。注释明确历史命名 + 当前 dispatch 范围。
+
+无代码改动；同 v3.16 的同类残留扫尾。
