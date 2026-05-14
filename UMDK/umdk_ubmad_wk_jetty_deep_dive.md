@@ -1396,6 +1396,15 @@ How it relates to WK jetty:
   `UBMAD_UBC_CONN_REQ`; the actual net message type is inside the payload.
 - `UBMAD_CLOSE_REQ` has a dedicated close-notification path and is not selected
   in the normal `ubmad_post_send()` switch.
+- **Connection model is UM trans_mode + UTP tp_type.** UBMAD WK jetty/jfr/tjetty
+  are all configured with `UBCORE_TP_UM` (`ub_mad.c:355,404,605`); `tp_type` is
+  never set explicitly so it defaults to `UBCORE_UTP` via the else-branch in
+  `ubcore_connect_adapter.c:1080-1085`. Reliability is added on top by UBMAD's
+  MSN-based retry path (§13). HW-priority quirk: `ubmad_jetty_set_priority()`
+  at `ub_mad.c:363-392` registers the jetty in an RTP-capable hardware priority
+  slot because no UTP-capable priority slot exists on current hardware (the log
+  message "tp_type : ctp" at line 378 is a stale string; the condition tests
+  RTP). See `umdk_urma_well_known_jetty.md` §4.7 for the full discussion.
 
 ## 19. Condensed End-To-End Call Graph
 

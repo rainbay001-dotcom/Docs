@@ -447,6 +447,80 @@ Relevant lines:
 - `create_tp_info()` calls `urma_get_tp_list()` in `perftest_resources.c:1027-1064`.
 - `connect_jetty_tp_aware()` calls `urma_import_jetty_ex()` and `urma_bind_jetty_ex()` in `perftest_resources.c:1574-1625`.
 
+### 4.7 Connection model — UM trans_mode + UTP tp_type
+
+The well-known jetty UBMAD uses for link setup is **connectionless / unreliable-message** at the URMA transport-mode layer, mapped to **UTP (Unreliable Transport Path)** at the physical TP-type layer. Two orthogonal axes:
+
+| Axis | Enum | UBMAD WK value | Source |
+|---|---|---|---|
+| Reliability / connection | `enum ubcore_transport_mode` (RM, RC, UM) | `UBCORE_TP_UM` (Unreliable Message) | `ub_mad.c:355` (jfr), `:404` (jetty), `:605` (tjetty import) |
+| Physical TP type | `enum ubcore_tp_type { RTP, CTP, UTP }` | defaults to `UBCORE_UTP` | `ubcore_connect_adapter.c:1080-1085` |
+
+#### trans_mode — UBCORE_TP_UM
+
+`kernel/include/ub/urma/ubcore_types.h:379-383`:
+```c
+enum ubcore_transport_mode {
+    UBCORE_TP_RM = 0x1,        /* Reliable message */
+    UBCORE_TP_RC = 0x1 << 1,   /* Reliable connection */
+    UBCORE_TP_UM = 0x1 << 2    /* Unreliable message */
+};
+```
+
+UM is the URMA analog of IB UD (unreliable datagram) — message-oriented, no per-peer connection state, no guaranteed delivery. UBMAD picks UM for all three configs that touch the WK jetty:
+
+- `ub_mad.c:355` — `jfr_cfg.trans_mode = UBCORE_TP_UM` for the receive queue.
+- `ub_mad.c:404` — `jetty_cfg.trans_mode = UBCORE_TP_UM` for the local WK jetty.
+- `ub_mad.c:605` — `tjetty_cfg.trans_mode = UBCORE_TP_UM` for any imported remote tjetty (peer endpoint).
+
+This matches the link-setup workload: small, infrequent, addressed by EID, no per-pair session state needed at the message layer (UBMAD adds its own MSN-based retry on top of UM, see deep-dive §13).
+
+#### tp_type — defaults to UBCORE_UTP
+
+`kernel/include/ub/urma/ubcore_types.h:1495`:
+```c
+enum ubcore_tp_type { UBCORE_RTP, UBCORE_CTP, UBCORE_UTP };
+```
+
+The mapping rule lives in the import path at `ubcore_connect_adapter.c:1080-1085`:
+
+```c
+if (cfg->tp_type == UBCORE_CTP)       get_tp_cfg->flag.bs.ctp = 1;
+else if (cfg->tp_type == UBCORE_RTP)  get_tp_cfg->flag.bs.rtp = 1;
+else                                  get_tp_cfg->flag.bs.utp = 1;
+```
+
+UBMAD never sets `tp_type` on its `ubcore_jetty_cfg` / `ubcore_jfr_cfg` / `ubcore_tjetty_cfg` — the field stays at its zero-init value, and the import path falls into the `else` branch → **UTP**. This is consistent with the comment one line above at `ubcore_connect_adapter.c:1073`: "Only for import_jetty/jfr, thus only for RM/UM" — connection-oriented modes (RC) take a different code path that doesn't reach this defaulting block.
+
+#### HW-priority quirk: WK jetty registers in an RTP-capable priority slot
+
+`ubmad_jetty_set_priority()` at `ub_mad.c:363-392` walks the device's per-priority capability table and picks the first slot whose `priority_info[i].tp_type.bs.rtp == 1`:
+
+```c
+for (i = 0; i < UBCORE_MAX_PRIORITY_CNT; ++i) {
+    /* No priority supports utp currently, so rtp priority used */
+    if (attr.dev_cap.priority_info[i].tp_type.bs.rtp == 1) {
+        jetty_cfg->priority = i;
+        ubcore_log_info(
+            "ubmad create jetty set priority : %d, tp_type : ctp\n", i);
+        ...
+    }
+}
+```
+
+Two things to know:
+
+1. The runtime connection is still UTP (per the mapping above). The priority logic only chooses which **hardware priority class** the jetty registers in. Current hardware exposes RTP-capable priority classes but not UTP-capable ones, so UBMAD borrows an RTP slot for its UTP jetty.
+2. The log message "tp_type : ctp" is a **stale string** — the condition tests RTP, not CTP. Cosmetic, but if you grep dmesg for these messages, expect to see "ctp" even on RTP slots.
+
+#### Implication for the link-setup payload
+
+Because the wire connection is UM/UTP:
+
+- No per-peer queue state on the WK jetty itself — the same jetty handles messages to/from any number of EIDs.
+- Reliability is UBMAD's responsibility: the MSN-based duplicate-detection cache and the retry workqueue (`dev_priv->rt_wq`, see deep-dive §13) sit above an unreliable transport.
+- The "connection" terminology you see in `UBCORE_NET_CREATE_REQ` / `UBCORE_CM_CONN_REQ` is about the **higher-level vTP/TP being negotiated**, not about the WK-jetty transport that carries the negotiation. The WK jetty is the unreliable-datagram bus over which connection setup messages travel.
+
 ## 5. Other real consumers
 
 ### IPoURMA — the textbook case
