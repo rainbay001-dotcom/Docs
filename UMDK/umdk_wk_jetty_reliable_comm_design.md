@@ -1,7 +1,7 @@
 # 公知Jetty可靠通信设计文档（三次握手 / 四次挥手）
 
 _面向读者：对 UMDK/URMA/UBMAD 代码零基础的新开发者。_
-_文档版本：v3.19（修正 v3.16/v3.17 把 rt_work 范围说成"FIN/FIN_ACK"的过度声明：FIN_ACK 不由 timer 重传，由 process_wk_fin 反应式重发；同步修 §2 struct comment 也仍说 "SYN/SYN_ACK only"）_
+_文档版本：v3.20（修复 tjetty cache miss 在三个 send 路径上的恢复——server SYN_ACK / close 前 FIN / rt_work retry 都补充 import；术语澄清"握手消息"覆盖 FIN/FIN_ACK 的歧义）_
 _最后更新：2026-05-14_
 
 ---
@@ -103,7 +103,7 @@ URMA 的 WK Jetty（参见 [`umdk_urma_well_known_jetty.md`](umdk_urma_well_know
 >
 > 详细的 MSN 实现路径在 `umdk_ubmad_wk_jetty_deep_dive.md` §13。
 
-**关键决定：握手消息绕过 MSN，直接调用 `ubcore_post_jetty_send_wr()`。**
+**关键决定：本设计的所有 WK 会话控制消息（SYN/SYN_ACK/ACK + FIN/FIN_ACK，下文为简洁有时统称"握手消息"——但请记住 FIN/FIN_ACK 是挥手/teardown 不是 handshake）绕过 MSN，直接调用 `ubcore_post_jetty_send_wr()`。**
 
 这是 [Step 4](#step-4实现握手发送侧函数) 中 `ubmad_post_send_wk()` 的实现选择。原因：
 
@@ -231,7 +231,7 @@ Client                          Server
 
 ### 2.1 新增消息类型
 
-在 `ub_mad.h` 中新增五种握手消息，复用 `jetty_rsrc[0]`（Jetty ID 1）传输：
+在 `ub_mad.h` 中新增五种 **WK 会话控制消息**（三次握手 + 四次挥手），复用 `jetty_rsrc[0]`（Jetty ID 1）传输：
 
 ```
 UBMAD_WK_SYN         = 0x30   连接建立请求
@@ -1486,6 +1486,27 @@ static void ubmad_process_wk_syn(struct ubmad_msg *msg,
     session->state = UBMAD_WK_SYN_RCVD;
     spin_unlock(&session->lock);
 
+    /* 步骤 5b（v3.20 新增）：在发 SYN_ACK 前**同步导入** client 的 tjetty。
+     * 服务端在收到 SYN 时，本端 tjetty 缓存对该 client EID 通常**未填充**
+     * （tjetty 是发送侧的对端缓存；接收一条消息不会填它）。如果直接调
+     * post_send_wk 发 SYN_ACK，会拿到 -EAGAIN，rt_work 退化成空转
+     * （v3.x 的 rt_work_handler 不主动 import）。在此处同步 import 与
+     * §4.4 connect 的 v3.4 对称，保证后续 SYN_ACK 必命中缓存。
+     * 工作队列（dev_priv->jfce_wq_r）上下文是 sleepable，安全。 */
+    {
+        struct ubmad_jetty_resource *rsrc = &dev_priv->jetty_rsrc[0];
+        struct ubmad_tjetty *tjetty;
+
+        tjetty = ubmad_import_jetty(dev_priv->device, rsrc, &client_eid);
+        if (IS_ERR_OR_NULL(tjetty)) {
+            pr_err("ubmad_wk: import client tjetty failed for SYN, eid=%pI6\n",
+                   client_eid.raw);
+            ubmad_put_session(session);
+            return;
+        }
+        ubmad_put_tjetty(tjetty);   /* 缓存已填好；丢局部引用 */
+    }
+
     /* 步骤 6：发送 SYN_ACK
      *   isn = local_isn（本端 ISN）
      *   ack = remote_isn + 1（确认对端的 ISN）
@@ -1768,6 +1789,30 @@ int ubmad_wk_close(struct ubmad_wk_session *session)
         session->local_fin_seq = session->local_isn + 1;
     fin_seq = session->local_fin_seq;
     spin_unlock(&session->lock);
+
+    /* v3.20 新增：在发 FIN 前**同步重新导入** tjetty。
+     * 长时间 ESTABLISHED 之后，session 的对端 tjetty 在缓存中可能已被
+     * 驱逐（缓存有 UBMAD_MAX_TJETTY_NUM 上限）。直接 post FIN 拿到 -EAGAIN
+     * 会让 rt_work 退化成空转——v3.x 的 rt_work_handler 不主动 import。
+     * 此处与 §4.4 connect、§5.4 process_wk_syn 的 pre-import 模式对称。
+     * 调用方上下文（用户线程或 on_closed 回调）通常是 sleepable。 */
+    {
+        struct ubmad_jetty_resource *rsrc = &dev_priv->jetty_rsrc[0];
+        struct ubmad_tjetty *tjetty;
+
+        tjetty = ubmad_import_jetty(dev_priv->device, rsrc,
+                                     &session->remote_eid);
+        if (IS_ERR_OR_NULL(tjetty)) {
+            pr_err("ubmad_wk: re-import tjetty failed for close, eid=%pI6\n",
+                   session->remote_eid.raw);
+            spin_lock(&session->lock);
+            session->state = prev_state;
+            spin_unlock(&session->lock);
+            ubmad_put_session(session);   /* v3.6 close-consume even on failure */
+            return tjetty ? PTR_ERR(tjetty) : -EHOSTUNREACH;
+        }
+        ubmad_put_tjetty(tjetty);
+    }
 
     ret = ubmad_post_send_wk(dev_priv, session,
                               UBMAD_WK_FIN, fin_seq, 0);
@@ -2229,9 +2274,25 @@ static void ubmad_wk_syn_rt_work_handler(struct work_struct *work)
         break;
     }
 
-    if (ret) {
+    if (ret == -EAGAIN) {
+        /* v3.20 新增：post_send_wk 返回 -EAGAIN 意味着 tjetty cache miss。
+         * 调用 send 路径的 pre-import（§4.4 connect / §5.4 process_wk_syn /
+         * §6.2 close）通常会保证缓存有效；但中间发生缓存驱逐（hash 表上限
+         * UBMAD_MAX_TJETTY_NUM）会让后续 retry 持续 -EAGAIN。
+         * 在重新排重传前**同步重新导入**——workqueue 上下文 sleepable，安全。
+         * 失败也不致命，下次 retry 再尝试。 */
+        struct ubmad_jetty_resource *rsrc = &dev_priv->jetty_rsrc[0];
+        struct ubmad_tjetty *tjetty;
+
+        tjetty = ubmad_import_jetty(dev_priv->device, rsrc,
+                                     &session->remote_eid);
+        if (!IS_ERR_OR_NULL(tjetty))
+            ubmad_put_tjetty(tjetty);
+        else
+            pr_warn("ubmad_wk: rt_work re-import tjetty failed; will retry\n");
+    } else if (ret) {
         pr_err("ubmad_wk: retransmit failed ret=%d\n", ret);
-        /* 仍然继续重试，下次可能网络就好了 */
+        /* 非 -EAGAIN 错误继续重试，下次可能网络就好了 */
     }
 
     /* 计算下次重传延迟（指数退避，上限 1000ms） */
@@ -3208,3 +3269,14 @@ _v3.19 修订（2026-05-14）的纯 prose 修正_：
 - **§18.8** 同步：把 "close 路径上 FIN/FIN_ACK 投递最终失败" 改成 "FIN 重传超限（即对端始终没回 FIN_ACK）"。
 
 这是 v3.16/v3.17 prose 修复阶段引入的过度声明的尾扫。
+
+_v3.20 修订（2026-05-14）相对 v3.19 的主要变化_：
+
+第十八轮 reviewer 指出 v3.4 引入的 connect 同步 import 只补了 client 一侧；server SYN_ACK / close FIN / rt_work retry 三条路径都还可能撞上 tjetty cache miss → -EAGAIN 而无法恢复。是真实 MEDIUM 缺陷。
+
+| # | 缺陷 | v3.20 修复 |
+|---|------|-----------|
+| 1 | **tjetty cache miss 恢复不一致**（MEDIUM）：v3.4 让 connect 在发 SYN 之前同步 import。但其它三个 send 路径都缺这步——<br>(a) **server process_wk_syn 发 SYN_ACK**：服务端在收到客户端 SYN 时，本端缓存对该 client EID 通常未填充（tjetty 是发送侧的对端缓存；接收一条消息不会填它）。post_send_wk 拿到 -EAGAIN，rt_work 退化空转。<br>(b) **close 发 FIN**：长时间 ESTABLISHED 后，缓存可能已驱逐（hash 上限 `UBMAD_MAX_TJETTY_NUM`）。close 直接返回 -EAGAIN 或退化空转。<br>(c) **rt_work retry**：handler 只 retry post_send_wk，从不 import；万一中途缓存被驱逐，永远拉不回来。 | (a) `process_wk_syn` 在 SYN_ACK 前补 `ubmad_import_jetty(dev_priv->device, rsrc, &client_eid)`；失败回滚 + put session。<br>(b) `ubmad_wk_close` 在 FIN 前补同样的 import；失败回滚 prev_state + close-consume put + 返回错误。<br>(c) `rt_work_handler` 在 post_send_wk 返回 -EAGAIN 时同步 import 然后再 reschedule 下一次 retry。三处 sleepable 上下文（接收工作队列、用户线程、retry 工作队列）都允许 `ubmad_import_jetty` 阻塞。 |
+| 2 | **"握手消息"涵盖 FIN/FIN_ACK 时不准确**（LOW）：FIN/FIN_ACK 是挥手/teardown，不是 handshake。文档反复用"握手消息"统称所有 5 种 WK 控制消息有歧义。 | 在 §0.2 关键决定句和 §2.1 新增枚举句两处把"握手消息"明确替换/补注成"WK 会话控制消息（三次握手 + 四次挥手）"。其余 prose 因为太多处不做大规模重命名（rt_work_handler 函数名也保留 "syn" 前缀，前面已注明历史命名）；但读者看到§0.2 句末的提醒后能理解后文的统称只是简称。 |
+
+到 v3.20 为止，每个 send 路径要么有 caller 端的 pre-import，要么有 timer 端的 import-on-EAGAIN 兜底。Cache 驱逐场景下整个生命周期都能 self-heal。
