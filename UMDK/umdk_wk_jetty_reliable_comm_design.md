@@ -1,7 +1,7 @@
 # 公知Jetty可靠通信设计文档（三次握手 / 四次挥手）
 
 _面向读者：对 UMDK/URMA/UBMAD 代码零基础的新开发者。_
-_文档版本：v3.11（清理散落在 process_wk_fin race 注释和 v3.7/v3.8 changelog 表里的"put 哈希 ref"残留 wording）_
+_文档版本：v3.12（修正 LAST_ACK 路径多余 put 导致的 UAF；清理 process_wk_syn 关于 ref 持有者的过时注释）_
 _最后更新：2026-05-14_
 
 ---
@@ -1479,7 +1479,12 @@ static void ubmad_process_wk_syn(struct ubmad_msg *msg,
     queue_delayed_work(session->rt_wq, &session->rt_work,
                        msecs_to_jiffies(2));
 
-    /* session 引用计数由哈希表持有，此处不 put */
+    /* v3.12 修订：哈希表本身不持有 ref（§7.4 invariant）。
+     * 此处不 put 是因为 alloc_session 拿到的那 1 份 ref 在被动 server 这条路径里
+     * 是预备给上层的——后续 process_wk_ack 把 state 推到 ESTABLISHED 时通过
+     * on_established(session, ctx) 把这份 ref 移交给上层，由上层调
+     * ubmad_wk_close(session) 时被 consume。
+     * timer ref（上面 kref_get）由 rt_work_handler / cancel-then-put 路径释放。 */
 }
 ```
 
@@ -1973,14 +1978,19 @@ static void ubmad_process_wk_fin_ack(struct ubmad_msg *msg,
     } else if (old_state == UBMAD_WK_LAST_ACK) {
         session->state = UBMAD_WK_CLOSED;
         spin_unlock(&session->lock);
-        /* v3.3：同上 */
+        /* v3.3：cancel 成功要补 put 释放 timer 持有的 ref */
         if (cancel_delayed_work(&session->rt_work))
             ubmad_put_session(session);
 
-        /* 被动方四次挥手完成，释放 session */
+        /* v3.12 修订：v3.11 之前这里多调了一次 ubmad_put_session(session)，
+         * 注释写"释放哈希表持有的引用"——但 v3.9 起的 invariant 是哈希表
+         * 不持有 ref。多出的这次 put 让 kref 在常规路径上跌破 0：
+         *   timer ref + find ref = 2，cancel-then-put + 多余 put + 函数末尾 put = 3，
+         * 触发 release_session 后 find ref 那一次 put 命中已释放内存（UAF）。
+         * 删除多余 put；session 的最终释放由"timer ref 在 cancel 处补 put + find ref
+         * 在函数末尾 put + 没有其它 ref"自然完成。 */
         pr_info("ubmad_wk: session=%u closed (passive side)\n",
                 session->session_id);
-        ubmad_put_session(session);   /* 释放哈希表持有的引用 */
     } else {
         spin_unlock(&session->lock);
     }
@@ -3000,3 +3010,14 @@ _v3.11 修订（2026-05-14）相对 v3.10 的纯 prose 同步_：
 继续无代码改动；纯文档同步。
 
 经过 11 轮 review，已知的运行时 bug 全部清零；剩余迭代如继续，应当转向 §18 的开放设计问题（数据平面、v1 消费者）或更深的状态机角落（RST、simultaneous close）——这两类都不是 doc-iteration 能闭环的。
+
+_v3.12 修订（2026-05-14）相对 v3.11 的主要变化_：
+
+第十一轮 reviewer 又找出 1 项真实 BLOCKER（虽然只是 1 行多余代码），plus 1 项相关的过时注释。"已知运行时 bug 全部清零"的 v3.11 claim 又被打破了。
+
+| # | 缺陷 | v3.12 修复 |
+|---|------|-----------|
+| 1 | **LAST_ACK 路径 double-put 导致 UAF**（BLOCKER）：v3.x 起 `ubmad_process_wk_fin_ack` 的 LAST_ACK 分支里有一行 `ubmad_put_session(session)` 注释 "释放哈希表持有的引用"——但 v3.9 起的 invariant 是哈希表**不持有 ref**。此处多 put 一次让 kref 在常规 cancel-成功 路径上跌破 0：timer ref + find ref = 2，cancel-then-put + 多余 put + 函数末尾 put = 3，触发 release_session 后函数末尾 put 命中已释放内存。这是经典的 use-after-free。 | 删除 LAST_ACK 分支里多余的 `ubmad_put_session(session)`。被动方四次挥手完成时的 release 由 cancel-then-put（timer ref）+ 函数末尾 put（find ref）+ 没有其它 ref 自然完成。注释解释 v3.12 为什么删除。 |
+| 2 | **process_wk_syn 末尾注释"session 引用计数由哈希表持有"**（LOW）：与 v3.9 invariant 矛盾。实际情况是 alloc 拿到的那 1 份 ref 在被动 server 路径上是预备移交给上层的——后续 process_wk_ack 推到 ESTABLISHED 时通过 on_established 回调把 session 指针传给上层，相当于把 alloc ref 隐式转移；上层完成业务后调 ubmad_wk_close 时被 consume。 | 改写注释，明确 alloc ref 的去向（→ on_established → upper-layer → close consume）以及 timer ref 的释放路径。 |
+
+UAF 的发现说明哪怕 v3.9 重写了 ref 模型，"哈希表不持有 ref"这个 invariant 还有遗留代码点没跟上。v3.12 关闭这个 LAST_ACK 漏洞之后应当全部修齐。
