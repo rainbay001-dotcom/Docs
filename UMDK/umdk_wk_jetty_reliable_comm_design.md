@@ -1,7 +1,7 @@
 # 公知Jetty可靠通信设计文档（三次握手 / 四次挥手）
 
 _面向读者：对 UMDK/URMA/UBMAD 代码零基础的新开发者。_
-_文档版本：v3.4（修正 v3.3 残留：connect 同步 import tjetty、cancel_delayed_work_sync ref 泄漏、删除 §6.5 重复的 close、sge_addr 类型 mirror 真实内核）_
+_文档版本：v3.5（修正 v3.4 残留：connect 返回 session 指针、SYN_ACK/FIN 重传幂等响应、async 文档与同步 import 行为统一）_
 _最后更新：2026-05-14_
 
 ---
@@ -1077,14 +1077,17 @@ static int ubmad_post_send_wk(struct ubmad_device_priv *dev_priv,
  * @on_closed:   连接断开时的回调（可为 NULL）
  * @cb_ctx:      传递给回调的上下文指针
  *
- * 同步模式（on_established == NULL）：
- *   - 阻塞等待，最多 5 秒
- *   - 返回 0 表示连接成功，负数表示失败
+ * v3.5 修订：返回类型改为 struct ubmad_wk_session *。
+ *   - 成功：返回 session 指针；**调用方持有一个 ref**，必须最终调用
+ *     ubmad_wk_close(session) 推进到关闭流程。
+ *   - 失败：返回 ERR_PTR(-errno)（用 IS_ERR / PTR_ERR 检查）。
  *
- * 异步模式（on_established != NULL）：
- *   - 立即返回，连接结果通过回调通知
- *   - 连接成功：调用 on_established(session, ctx)
- *   - 连接失败：调用 on_closed(session, -ETIMEDOUT, ctx)
+ * v3.5 修订：tjetty 是同步导入的（不论同步还是异步模式都会阻塞约 ~10ms 量级）。
+ *   - 同步模式（on_established == NULL）：还会再阻塞最多 5 秒等待握手 ACK。
+ *   - 异步模式（on_established != NULL）：tjetty 导入后立即返回 session 指针；
+ *     握手完成时调 on_established，失败时调 on_closed。
+ *   - 如果调用方完全不能接受 import 阻塞，应在 connect 之前用其他方式预热
+ *     tjetty 缓存（例如发一条 CONN_DATA），此处不再涉及。
  *
  * 三次握手流程：
  *   1. 分配 session（状态: CLOSED）
@@ -1093,9 +1096,10 @@ static int ubmad_post_send_wk(struct ubmad_device_priv *dev_priv,
  *   4. 迁移状态到 SYN_SENT
  *   5. 发送 UBMAD_WK_SYN 消息
  *   6. 启动 SYN 重传定时器
- *   7. 等待 connected completion（收到 SYN_ACK 后由 ubmad_process_wk_syn_ack 发出）
+ *   7. 同步模式：等待 connected completion；异步模式：立即返回
  */
-int ubmad_wk_connect(struct ubmad_device_priv *dev_priv,
+struct ubmad_wk_session *ubmad_wk_connect(
+                     struct ubmad_device_priv *dev_priv,
                      const union ubcore_eid *remote_eid,
                      void (*on_established)(struct ubmad_wk_session *, void *),
                      void (*on_closed)(struct ubmad_wk_session *, int, void *),
@@ -1110,27 +1114,18 @@ int ubmad_wk_connect(struct ubmad_device_priv *dev_priv,
     /* 步骤 1：分配 session */
     session = ubmad_alloc_session(dev_priv, remote_eid);
     if (IS_ERR(session))
-        return PTR_ERR(session);
+        return ERR_CAST(session);   /* v3.5: 返回类型已是指针 */
 
     /* 步骤 2（v3.4 新增）：同步导入对端 WK tjetty。
-     * v3.3 让 post_send_wk 在 cache miss 时返回 -EAGAIN，但 connect 收到 -EAGAIN
-     * 后立刻 bail out，导致首次连接对未缓存 peer 永远失败。
-     *
-     * ubmad_import_jetty()（ub_mad.c:575）是幂等的：cache 命中直接返回已有
-     * tjetty，未命中则发 UBCM 控制消息向对端 MUE 协商 tp_handle。本函数本就
-     * 是 sleepable 上下文（下面有 wait_for_completion_timeout），所以同步等
-     * 待导入完成是安全的。
-     *
-     * 异步模式（on_established != NULL）下，如果不希望阻塞调用方，应该改用
-     * 单独的预热 API（v2 待加），或在文档里说明"调用 connect 之前必须确保
-     * 对端 tjetty 已被导入"。本 v3.4 实现选择无条件同步导入以保证正确性。 */
+     * 详见函数注释关于 sleepable / aborbing import 阻塞的说明。 */
     tjetty = ubmad_import_jetty(dev_priv->device, rsrc,
                                  (union ubcore_eid *)remote_eid);
     if (IS_ERR_OR_NULL(tjetty)) {
         pr_err("ubmad_wk: import tjetty failed for connect, eid=%pI6\n",
                remote_eid->raw);
+        ret = tjetty ? PTR_ERR(tjetty) : -EHOSTUNREACH;
         ubmad_put_session(session);
-        return tjetty ? PTR_ERR(tjetty) : -EHOSTUNREACH;
+        return ERR_PTR(ret);
     }
     ubmad_put_tjetty(tjetty);   /* import 已把 tjetty 放进缓存；丢掉本地引用 */
 
@@ -1155,7 +1150,7 @@ int ubmad_wk_connect(struct ubmad_device_priv *dev_priv,
                               UBMAD_WK_SYN, session->local_isn, 0);
     if (ret && ret != -EAGAIN) {
         ubmad_put_session(session);
-        return ret;
+        return ERR_PTR(ret);
     }
 
     /* 步骤 7：启动 SYN 重传定时器（2ms，指数退避，详见 Step 7）
@@ -1186,15 +1181,26 @@ int ubmad_wk_connect(struct ubmad_device_priv *dev_priv,
             session->state = UBMAD_WK_CLOSED;
             spin_unlock(&session->lock);
             ubmad_put_session(session);
-            return -ETIMEDOUT;
+            return ERR_PTR(-ETIMEDOUT);
         }
         ret = session->result;
-        ubmad_put_session(session);
-        return ret;
+        if (ret) {
+            /* 握手层报告失败（如重传超限）。释放 session，返回错误。 */
+            ubmad_put_session(session);
+            return ERR_PTR(ret);
+        }
+        /* v3.5：握手成功——把 session 指针交给调用方持有的那一份 ref。
+         * 不再 ubmad_put_session（v3.4 的 bug：put 会让 kref 跌到 0、free
+         * session，调用方拿到的是悬空指针）。调用方未来调 ubmad_wk_close
+         * 推进到 CLOSED 时再 put。 */
+        return session;
     }
 
-    /* 异步模式：调用者持有 session 引用，由回调负责释放 */
-    return 0;
+    /* 异步模式：调用方持有这个 session 指针的 ref；
+     * 握手完成时回调 on_established(session, ctx)，
+     * 失败时回调 on_closed(session, -errno, ctx)。
+     * 调用方完成业务后必须调 ubmad_wk_close 释放。 */
+    return session;
 }
 EXPORT_SYMBOL_GPL(ubmad_wk_connect);
 ```
@@ -1474,7 +1480,28 @@ static void ubmad_process_wk_syn_ack(struct ubmad_msg *msg,
 
     spin_lock(&session->lock);
 
-    /* 步骤 2：校验状态 */
+    /* 步骤 2：校验状态。
+     * v3.5：ESTABLISHED 也是合法状态——表示对端没收到我们的 ACK，重传了 SYN_ACK。
+     * 此时不更改本端状态，但要重发 ACK 帮助对端推进到 ESTABLISHED。 */
+    if (session->state == UBMAD_WK_ESTABLISHED) {
+        /* 校验是同一会话的重传（remote_isn 必须一致） */
+        if (wk_hdr->isn != session->remote_isn ||
+            wk_hdr->ack != session->local_isn + 1) {
+            spin_unlock(&session->lock);
+            pr_warn("ubmad_wk: SYN_ACK retransmit mismatch session=%u\n",
+                    session->session_id);
+            ubmad_put_session(session);
+            return;
+        }
+        spin_unlock(&session->lock);
+        pr_debug("ubmad_wk: re-ACK duplicate SYN_ACK for session=%u\n",
+                 session->session_id);
+        ubmad_post_send_wk(dev_priv, session, UBMAD_WK_ACK,
+                            0, session->remote_isn + 1);
+        ubmad_put_session(session);
+        return;
+    }
+
     if (session->state != UBMAD_WK_SYN_SENT) {
         spin_unlock(&session->lock);
         pr_warn("ubmad_wk: SYN_ACK in wrong state=%d\n", session->state);
@@ -1751,6 +1778,18 @@ static void ubmad_process_wk_fin(struct ubmad_msg *msg,
          * 同样能从此分支再 ACK 一次。 */
         spin_unlock(&session->lock);
         pr_debug("ubmad_wk: re-ACK FIN in TIME_WAIT for session=%u\n",
+                 session->session_id);
+        ubmad_post_send_wk(dev_priv, session, UBMAD_WK_FIN_ACK,
+                            0, session->remote_fin_seq + 1);
+
+    } else if (old_state == UBMAD_WK_CLOSE_WAIT) {
+        /* v3.5 新增：场景四 — 被动方处于 CLOSE_WAIT 时收到对端重传的 FIN。
+         * 我们之前的 FIN_ACK 可能丢了，对端在 FIN_WAIT_1 状态下超时重传 FIN。
+         * 重发 FIN_ACK，使用首次记录的 remote_fin_seq（已在 ESTABLISHED 分支
+         * 设置过；这里不更新，以防对端因 ISN 边界差异发出不同 isn）。
+         * 不通知上层（on_closed 已在首次 FIN 时回调）。 */
+        spin_unlock(&session->lock);
+        pr_debug("ubmad_wk: re-ACK FIN in CLOSE_WAIT for session=%u\n",
                  session->session_id);
         ubmad_post_send_wk(dev_priv, session, UBMAD_WK_FIN_ACK,
                             0, session->remote_fin_seq + 1);
@@ -2718,3 +2757,18 @@ _v3.4 修订（2026-05-14）相对 v3.3 的主要变化_：
 | 4 | **`sge_addr` 类型不一致**：v3.3 用 `void *sge_addr`，但真实内核 `ubmad_datapath.c:241` 用 `uint64_t sge_addr` 搭配按需 cast。类型不一致会让实现者抄代码时困惑或写出错。 | 改 `ubmad_post_send_wk()` 用 `uint64_t sge_addr`；`msg = (struct ubmad_msg *)(uintptr_t)sge_addr;` 显式 cast；`jfs_wr.user_ctx` 和 `sge.addr` 是 uint64_t 字段直接赋值，不需要 cast。完全 mirror 真实模式。 |
 
 到 v3.4 为止，反复出现的实现层 bug 类别（虚构 helper、ref 泄漏、协议字段不闭环、与现有代码模式不对齐）应当全部清零。剩余风险主要在两类：(a) 没人在真实内核上跑过这份代码；(b) §18 的开放设计问题——这两类都不是 doc 修订能解决的。
+
+_v3.5 修订（2026-05-14）相对 v3.4 的主要变化_：
+
+第四轮外部 reviewer 在 v3.4 上找出 4 项问题——两条 API/生命周期、两条协议幂等性。v3.5 全部修复：
+
+| # | 缺陷（v3.4 残留） | v3.5 修复 |
+|---|------|-----------|
+| 1 | **`ubmad_wk_connect()` 同步成功路径释放 session**：返回类型是 int，成功时 `ubmad_put_session(session)` 后 `return 0`。调用方既拿不到 session 指针（无法后续调 close），且这一 put 可能让 kref 归零并立即释放刚建好的 session。结构性 API 缺陷。 | 函数签名改为 `struct ubmad_wk_session *`。成功时返回 session 指针，**调用方持有 ref**，必须最终调 `ubmad_wk_close(session)` 推进到 CLOSED 状态以触发释放。失败返回 `ERR_PTR(-errno)`，用 `IS_ERR/PTR_ERR` 检查。同步和异步两条路径统一返回这一份指针；async 路径上 session 状态在调用方手里时为 SYN_SENT 或后续被推进。 |
+| 2 | **异步模式注释与 v3.4 行为矛盾**：v3.4 引入同步 `ubmad_import_jetty()` 在 SYN 之前。但异步分支的注释仍然说"立即返回"——同步 import 会阻塞约 ~10ms 量级的控制平面 RPC。 | 函数注释更新：明确 tjetty 导入是同步的（不论模式），异步只指代握手 ACK 阶段。给出"如果完全不能阻塞，应在 connect 之前另行预热缓存"的指导，并把这条作为可选的 v2 增强 API（参见 §18）。 |
+| 3 | **客户端 ESTABLISHED 状态丢弃重传 SYN_ACK**：标准 TCP 边界场景——客户端发 ACK 后即进入 ESTABLISHED；如果 ACK 路上丢了，服务端在 SYN_RCVD 重传 SYN_ACK；客户端 v3.4 在 ESTABLISHED 状态收到 SYN_ACK 直接 `pr_warn` 后丢弃，不重发 ACK。结果：服务端会一直重传 SYN_ACK 直到 UBMAD_WK_MAX_RETRY 失败。 | `ubmad_process_wk_syn_ack()` 在 ESTABLISHED 状态下识别为重传：先校验 `wk_hdr->isn == session->remote_isn` 且 `wk_hdr->ack == local_isn+1` 确保是同一连接的重传，然后重发 ACK，让服务端能推进到 ESTABLISHED。 |
+| 4 | **被动方 CLOSE_WAIT 状态丢弃重传 FIN**：对应于 #3 的对称问题。被动方收 FIN → CLOSE_WAIT → 发 FIN_ACK；FIN_ACK 丢失；主动方在 FIN_WAIT_1 重传 FIN；被动方 v3.4 在 CLOSE_WAIT 状态走到 default 分支 `pr_warn`，不重发 FIN_ACK。 | `ubmad_process_wk_fin()` 增加 CLOSE_WAIT 分支：用首次记录的 `remote_fin_seq` 重发 FIN_ACK（不更新 remote_fin_seq 以防 ISN 边界差异）。不重新触发 on_closed 回调（已在首次 FIN 时回调过）。 |
+
+到 v3.5 为止，握手和挥手两个方向上「ACK 单次丢失」这一类问题都被对称地补全了。这是 TCP 实现里教科书级的边界条件，对应于 RFC 793 中的"FIN_WAIT_2 接收 FIN 重传"、"ESTABLISHED 接收 SYN_ACK 重传"等场景。
+
+剩余 §18 设计问题（数据平面、v1 消费者）依旧未答；这些不会出现在再下一轮代码 review 里，需要 stakeholder 输入。
