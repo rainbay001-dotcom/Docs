@@ -140,7 +140,7 @@ The 0.45 - 0.87 ms baseline cost is dominated by **network RTT + server-side pro
 4. Firmware writes a completion to the ctrlq response area
 5. Kworker polls/IRQs the completion and returns
 
-Baseline cost ~175 µs per cmd. Under single-process load the firmware ctrlq is depth-1 but unloaded, so each cmd completes immediately.
+Baseline cost ~175 µs per cmd. The firmware ctrlq ring is actually **depth 2048** per `drivers/ub/ubase/ubase_ctrlq.c:257` (`UBASE_CTRLQ_QUEUE_DEFAULT`), but each calling kworker is synchronous (`ubase_ctrlq_send_msg()` blocks until firmware ACK), so per-kworker concurrency is 1. Under single-process load this is irrelevant — the one cmd in flight completes immediately. Earlier sections of this doc and `umdk_link_setup_timing.md` §10.30 used a "depth-1 firmware ctrlq" framing; that framing is wrong and is corrected in §10.31 — the effective serialization is at the kworker-pool layer, not the firmware queue.
 
 **Under N-concurrent load, this is the SECONDARY bottleneck** — when 100 processes' MADs all reach the server simultaneously, the server's firmware ctrlq queues them serially. One observed `udma_get_tp_list` call on the server side took **33.5 ms** under N=100 burst (issue #2, 2026-05-14). See `umdk_link_setup_timing.md` §10.30.
 
@@ -252,13 +252,13 @@ The pattern is uniform across all three operations:
 
 Math:
 
-- Server's NIC firmware ctrlq has effective depth 1 — only one in-flight command at a time
+- Server's NIC firmware ctrlq has depth 2048 hardware capacity, but effective per-kworker concurrency is 1 (synchronous wait in `ubase_ctrlq_send_msg`). With ~1 dominant kworker on server (per §10.27.A), the effective queue depth becomes 1.
 - 100 client processes all sending MADs to server at the same moment → 100 firmware cmds queued
 - Per-cmd firmware processing time: ~33.5 ms (worst-observed individual cmd from server-side trace)
-- 100 cmds × 33.5 ms = **3.35 seconds** of queue drain time
-- The 100th client at the back of the queue waits the full 3.35 s
+- 100 cmds × 33.5 ms = 3.35 seconds (arithmetic check)
+- The 100th client at the back of the queue waits the full 3.35 s in this model
 
-The 3.36 s `ubcore_session_wait` in the observed process matches this arithmetic with <0.5 % error. See §10.30.A.
+The 3.36 s `ubcore_session_wait` in the observed process matches this arithmetic. **Caveat (§10.31 correction)**: the match is a coincidence, not mechanism proof. The 33.5 ms outlier is rare (2-7 % of cmds), so 100 cmds at the *outlier* value isn't realistic — most cmds finish in ~200 µs. The real mechanism that produces the 3.36 s wait involves **multi-stage server-side processing across ~13.5 MAD round-trips per setup** queued through ~1 effective kworker. See §10.31.D for the corrected math.
 
 Different processes see different waits depending on their queue position:
 - Process at front: ~33 ms wait

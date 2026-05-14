@@ -4476,6 +4476,8 @@ If Test C shows uniform fast ctrlq completion (no dilation), the bottleneck is o
 
 ### 10.30 Smoking-gun confirmation: `udma_get_tp_list` 33.5 ms × 100 ≈ 3.35 s (2026-05-14)
 
+> **Correction notice (2026-05-14, see §10.31):** the "firmware ctrlq depth-1 serialization" framing used throughout this section is **wrong**. The firmware ctrlq is actually depth-2048 per source. The 33.5 ms × 100 arithmetic match is a coincidence, not a mechanism proof. The serialization is one layer up (sync per-kworker + ~1 effective kworker per §10.27.A). Section retained as-is for the record; see §10.31 for the corrected model.
+
 JinDou shared a mid-trace excerpt from experiment 6 that **directly pins the firmware ctrlq hypothesis from §10.29**.
 
 #### A. The critical line
@@ -4544,6 +4546,113 @@ Caveat: only applies when the 100 procs target the **same peer**. For diverse ta
 | Client-side stagger helps | ~60 % | ~60 % (orthogonal, still useful as a free fix) |
 | `find_primary_eid_in_ues` matters | ~5 % | ~5 % (still disproven by #4436759654) |
 | `ubmad_process_msg` slow path matters | not considered | ~15 % independent contributor (worth a follow-up) |
+
+### 10.31 Correction: firmware ctrlq is depth 2048, not 1 — serialization is at the kworker layer (2026-05-14)
+
+#### A. The wrong claim in §10.30 and what triggered the correction
+
+§10.30.B and §10.30.D state "firmware ctrlq depth-1 serialization" as the mechanism, with the arithmetic `100 × 33.5 ms = 3.35 s` matching the observed 3.36 s tail wait. The match looked like proof of mechanism. It was not.
+
+While drafting an explanation of "how do we know the ctrlq depth", source check disproved the depth-1 framing.
+
+#### B. Source evidence
+
+From `drivers/ub/ubase/ubase_ctrlq.c:257-263` (OLK-6.6 base):
+
+```c
+#define UBASE_CTRLQ_QUEUE_DEFAULT    2048
+...
+csq->depth = UBASE_CTRLQ_QUEUE_DEFAULT;
+crq->depth = UBASE_CTRLQ_QUEUE_DEFAULT;
+```
+
+`csq` is the command send queue (driver → firmware), `crq` is the command response queue (firmware → driver). Both are ring buffers of **2048 slots**. At runtime the depth can be re-read from `UBASE_CTRLQ_CSQ_DEPTH_REG` / `UBASE_CTRLQ_CRQ_DEPTH_REG` (lines 279-287), so the actual configured depth could be smaller, but it cannot be lower than what the hardware advertises and is not 1 by construction.
+
+`ubase_ctrlq_send_msg()` at line 926 has docstring (lines 920-924):
+> when `msg->is_async = 0` and `msg->need_resp = 1`, this function will wait synchronously for the management software's response
+
+So the **per-call API is synchronous** (one in-flight cmd per calling thread), but the **queue itself can hold many concurrent cmds from different threads**.
+
+#### C. Corrected model — three stacked layers
+
+| Layer | Capacity | Where it limits |
+| --- | ---: | --- |
+| Firmware ctrlq ring | **2048 slots** | Hardware queue, plenty of headroom |
+| Per-kworker in-flight cmd | **1** | `ubase_ctrlq_send_msg()` blocks until response |
+| Server kworker pool effective concurrency | **~1** in observed traces (one kworker handles 93-98 % per §10.27.A1) | This is the real serialization point |
+
+The bottleneck **is** depth-1 in effect, but the serialization happens at the **kworker pool layer**, not at the firmware queue. The firmware could in principle accept many concurrent cmds; the kernel software just doesn't issue them in parallel.
+
+#### D. Why the §10.30 arithmetic match was a coincidence
+
+§10.30.B math: "100 × 33.5 ms = 3.35 s ≈ 3.36 s observed". The problem:
+
+- 33.5 ms is the **single observed worst-case outlier** for `udma_get_tp_list`. Most calls are ~175 µs. Only 2-7 % exceeded 5 ms (per §10.26.A3).
+- If 100 cmds ran serially at the **median** ~200 µs each, total = 20 ms, not 3.35 s.
+- If they ran serially at the **outlier** 33.5 ms each, total = 3.35 s — but **most cmds aren't outliers**.
+
+The math `100 × 33.5 ms ≈ 3.35 s` would only hold if all 100 cmds hit the slow path. JinDou's trace shows they don't.
+
+The actual mechanism that produces the 3.36 s wait must involve **multi-stage server-side processing**, not single per-cmd amplification:
+
+- 100 setups × ~13.5 inbound MADs per setup (§10.28.C) = **~1,350 MAD round-trips on server**, with the tail process waiting for ~half of them to drain through ~1 kworker
+- Per-round-trip server processing (recv handler + kworker dispatch + ubmad_post_send reply): ~few ms on average
+- 1,350 × ~few ms × position-in-queue factor → seconds for tail clients
+
+The correct cumulative server-side time across these MAD events is what gives the 3.36 s, not 100 instances of the outlier value.
+
+#### E. What this changes for fix paths
+
+**Codex `udma-tp-cache` patch impact estimate (§10.30.D) needs revision down**:
+
+§10.30.D predicted "1 firmware-miss + 99 cache-hits → wall-clock drops from ~3.36 s to ~50 ms". That assumed each cmd cost ~33 ms and bypassing 99 of them saves 99 × 33 ms. In reality:
+
+- The 33.5 ms outlier is a tail event, not typical
+- Most `udma_get_tp_list` calls cost ~200 µs already
+- Caching saves ~200 µs per cache hit, plus avoids the rare 33 ms outliers
+- Estimated client-perceived savings under N=100: probably ~10-30 % wall-clock reduction (eliminate firmware-ctrlq tail + reduce server-side processing time), not >99 %
+
+The patch is still worthwhile because it eliminates the outlier tail. But the headline number from §10.30.D was inflated by the wrong mechanism model.
+
+**Adding more kworkers might be just as effective** as the codex patch:
+
+If the bottleneck is "1 effective kworker on server", then raising the kworker pool concurrency (e.g., setting `WQ_UNBOUND` workqueue's `max_active` higher, or using a different workqueue tier per peer EID) would parallelize the server-side processing. This is a different fix dimension entirely.
+
+#### F. Cumulative server-side time math (corrected)
+
+From the existing data (§10.30.C):
+
+| Function | Calls in N=100 trace | Cumulative active time |
+| --- | ---: | ---: |
+| `udma_get_tp_list` | ~200 | ~35 ms baseline + ~150-330 ms from 5-10 outliers ≈ **200-365 ms** |
+| `ubcore_active_tp` | ~200 | ~32 ms |
+| `ubmad_recv_work_handler` | 2,704 | ~19 ms baseline + ~45 ms slow-path outliers ≈ **65 ms** |
+| `ubmad_process_msg` slow-path | ~5 of 2,704 | ~45 ms |
+
+**Total server active time ≈ 250-450 ms** in a span where the tail client waited 3.36 s. The factor between them (~7-13×) is queue-position amplification, not single-cmd amplification.
+
+#### G. Experiments that would actually verify the model
+
+1. **Trace `ubase_ctrlq_send_msg` entry/exit at depth 2 on server during N=100 load** with no PID filter. Count the maximum simultaneously in-flight cmds across all kworkers. If max = 1-3, the kworker-pool-concurrency reading is correct. If max ≥ 10, the firmware queue is the bottleneck after all.
+2. **Read `/sys/module/ubase/...` debug if exposed** to see the runtime configured `csq->depth` and `crq->depth` and the live `pi`/`ci` counters during load. Gives a direct snapshot of queue occupancy.
+3. **Per-kworker total active time during N=100 trace** — sum the duration of every traced function per kworker PID. If one kworker has ~400 ms active and others have <20 ms, single-kworker bottleneck confirmed. If 5 kworkers each have ~80 ms active, multi-kworker parallelism is working and the bottleneck is elsewhere.
+
+Experiment 3 is cheapest (post-hoc analysis of existing trace_server_P100_round4 traces; just regroup the kworker stats by total active time instead of by call count). Likely worth doing before any further fix-path work.
+
+#### H. Honest confidence summary (after this correction)
+
+| Claim | Confidence |
+| --- | ---: |
+| Server kworker software is fast per-call (53 µs dispatch, 175 µs median ctrlq) | **>99 %** (directly measured) |
+| ~1 kworker handles 93-98 % of server work | **>95 %** (directly measured in 2 traces) |
+| 3.36 s tail wait is caused by server-side serialization | **~85 %** (consistent with all data, but exact mechanism not pinned) |
+| Specifically firmware ctrlq depth-1 is the mechanism | **~10 %** (source disproves depth-1 firmware queue; if the effective serialization is at kworker layer, fix path differs) |
+| Codex patch eliminates >99 % of dilation | **~30 %** (depends on cache hit rate AND on whether firmware tail is the actual amplifier vs. server-side cumulative processing) |
+| Increasing kworker pool concurrency would help | **~50 %** (untested but plausible given the kworker-concentration data) |
+
+#### I. Lesson
+
+§10.30's "33.5 × 100 = 3.35 s" arithmetic match created an illusion of confirmed mechanism. The actual confirmation requires either (a) seeing all 100 cmds genuinely take 33.5 ms each, or (b) direct queue-depth instrumentation. We had neither. The correction pattern is the same one §10.19 (CM RTT → topo scan) and §10.29 (server not bottleneck → server's kworker not bottleneck) followed: arithmetic plausibility ≠ mechanism proof. Future sections should explicitly state "this arithmetic is consistent with hypothesis H but does not prove it" when leaning on coincidence-match evidence.
 
 ## 11. TRACE_EVENT internals — how the macro actually works
 
