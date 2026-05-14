@@ -1,7 +1,7 @@
 # 公知Jetty可靠通信设计文档（三次握手 / 四次挥手）
 
 _面向读者：对 UMDK/URMA/UBMAD 代码零基础的新开发者。_
-_文档版本：v3（设计说明 + 开发步骤）_
+_文档版本：v3.1（设计说明 + 开发步骤；多实体可靠通道动机澄清）_
 _最后更新：2026-05-14_
 
 ---
@@ -36,17 +36,44 @@ _最后更新：2026-05-14_
 
 ### 0.1 这个设计在解决什么问题
 
-URMA 的 WK Jetty（参见 [`umdk_urma_well_known_jetty.md`](umdk_urma_well_known_jetty.md)）当前提供的是**无连接、单消息往返**的控制平面：发起方发 `UBCORE_NET_CREATE_REQ`，对端回 `UBCORE_NET_CREATE_RESP`，结束。两端都不维护"连接"概念。可靠性由 UBMAD 的 MSN+重传机制（`ubmad_datapath.c`，详见 [`umdk_ubmad_wk_jetty_deep_dive.md`](umdk_ubmad_wk_jetty_deep_dive.md) §13）在**单条消息粒度**上保证。
+> **核心动机**：把 WK Jetty 从"UBMAD 内部独占使用的不可靠消息总线"，改造成一个可被**多个上层实体并发使用**的**可靠通信通道**——类似 TCP 在 IP 之上提供多路复用的可靠流。
 
-本设计在 UBMAD 层面新增**有状态的连接抽象**，让两端共同维护一个 `ESTABLISHED` 会话生命周期。适用场景：
+#### 现状
 
-- **上层协议需要"连接已就绪"信号**：例如某种 SMB/iSCSI-like 的应用层协议，希望在数据传输前确认对端已准备好接收。
-- **有序拆除**：两端约定数据传输完毕后再回收资源（类比 TCP FIN-ACK 与 RST 的差别）。
-- **会话级流控/计数**：以连接为单位统计重传率、RTT、活跃数等。
+URMA 的 WK Jetty（参见 [`umdk_urma_well_known_jetty.md`](umdk_urma_well_known_jetty.md) §4.7）在物理上是 `UM trans_mode + UTP tp_type`：**不可靠数据报、无连接**。当前几乎只有 UBMAD 在使用它，承载 UBCM 的 `CREATE_REQ`/`CREATE_RESP` 等控制消息。可靠性由 UBMAD 自己的 MSN+重传机制（`ubmad_datapath.c`，详见 [`umdk_ubmad_wk_jetty_deep_dive.md`](umdk_ubmad_wk_jetty_deep_dive.md) §13）在**单条消息粒度**上保证——但这套机制是 UBMAD 内部的，不暴露给其他上层使用者。
 
-> ⚠️ **本设计不是为了让 WK Jetty 本身变成"可靠传输"**——单消息可靠性已经由 MSN 提供。本设计添加的是**会话状态机**，不是字节流可靠传输。
+#### 目标
 
-如果你的需求只是"让 WK Jetty 上的某条消息一定能送达"，**不需要本设计**——直接用现有的 `ubmad_post_send()`（走 MSN+重传）即可。
+让 WK Jetty 成为一个**共享基础设施**：
+
+1. **多实体并发使用**：除了 UBMAD 自身的 UBCM 控制流之外，其他内核组件（ULP、自研协议、cluster control plane 等）可以**同时**在 WK Jetty 上跑各自的会话，互不干扰。每个会话有自己独立的状态、序列号、重传定时器。
+2. **可靠通道封装**：底层 WK Jetty 是 UTP（不可靠），上层通过本设计提供的 `ubmad_wk_session` 抽象获得**类 TCP 的可靠通道**——三次握手建链、有序拆除、会话级重传保障传输完整性。
+
+#### 类比 TCP / IP 模型
+
+| 网络模型 | URMA 模型（本设计后） |
+|---------|---------------------|
+| IP 层：尽力而为投递、不可靠、共享 | WK Jetty（UM/UTP），以 EID 为目的地址 |
+| TCP 层：多路复用、可靠流、连接抽象 | `ubmad_wk_session`（本设计），以 `session_id` 为多路复用键 |
+| TCP 端口：标识应用层服务 | （v1 缺失）见 [§18.2](#182-high-多-listen-支持的迁移路径)：未来需要的 `service_id` 字段 |
+| TCP 三次握手 / 四次挥手 | UBMAD_WK_SYN/SYN_ACK/ACK / FIN/FIN_ACK |
+| TCP 重传（超时 + 快速重传）| `ubmad_wk_syn_rt_work_handler` 指数退避（见 [Step 7](#step-7实现重传定时器与-time_wait)）|
+
+#### 与现有 MSN 的分工（关键概念）
+
+| 层级 | 谁负责 | 粒度 | 谁能用 |
+|------|--------|------|--------|
+| WK Jetty 本身（UTP） | 硬件 / UDMA | 单数据报 | 任何上层 |
+| UBMAD MSN+重传 | UBMAD（`ubmad_post_send`）| 单消息 | **仅 UBMAD 自己**（UBCM/UBMAD_AUTHN） |
+| 本设计 `ubmad_wk_session` | UBMAD 新增模块 | 会话生命周期 + 多消息重传 | **任何启用了 `CONFIG_UBMAD_WK_SESSION` 的上层模块** |
+
+注意：MSN 是 UBMAD 内部的实现细节，不是公开 API；其他上层无法直接复用 MSN 的可靠性。本设计提供的 `ubmad_wk_*` API **才是**对其他上层公开的可靠通信接口。
+
+#### 当前不在范围内（v1 已知缺口）
+
+- **数据平面**：本设计仅提供建链和拆链（`connect / listen / close`），**没有提供** `ubmad_wk_send(session, data)` 用于会话建立后的可靠数据发送。如果上层只需要"建立连接"这一信号，v1 即可满足；如果需要类 TCP 的可靠数据流，**需要追加 v2 数据平面 API**——见 [§18.0](#180-critical-数据平面缺失)。
+- **流控**：v1 没有 TCP 风格的滑动窗口或拥塞控制。每个会话独立重传，但发送速率由调用方自行管控。
+- **多端口（service_id）**：v1 每设备一个 listen，相当于"只有一个端口"。上层只能用 `(local_eid, remote_eid)` 作为隐式 service 标识。多 service 见 [§18.2](#182-high-多-listen-支持的迁移路径)。
 
 ### 0.2 与 UBMAD MSN+重传的层叠关系
 
@@ -2246,16 +2273,44 @@ ubmad_process_msg()
 
 下面这些问题在 v3 中**未做决定**，需要设计作者（或上层 stakeholder）拍板后再进入实现阶段。每个问题都标了影响范围，便于评估优先级。
 
-### 18.1 [HIGH] 具体的上层消费者是谁
+### 18.0 [CRITICAL] 数据平面缺失
 
-**问题**：v3 §0.1 列举了三类可能的使用场景（连接就绪信号、有序拆除、会话级流控），但没有指明具体哪个上层模块需要这套机制。如果没有真实需求，整个设计是「为可能的未来留口子」，会增加内核维护面但无实际价值。
+**问题**：§0.1 把本设计定位为"在 UTP 之上提供类 TCP 的可靠通道"，但 v1 API 表面只有 `ubmad_wk_connect / ubmad_wk_listen / ubmad_wk_close`——**没有** `ubmad_wk_send(session, buf, len)` 这样的数据发送 API。会话建立到 `ESTABLISHED` 之后，上层除了"知道连接已建立"以外做不了别的事。
 
-**建议**：在合入主干前，至少列出一个**已经存在或确定要做**的上层模块作为消费者。如：
-- 是某个 ULP（如 IPoURMA、SMC-R-over-URMA）需要连接生命周期？
-- 是某个用户态库需要内核态的连接抽象？
-- 还是计划性的 R&D（在这种情况下可以先放在 staging/experimental 目录）？
+这与 TCP/IP 类比的承诺有出入：TCP 的核心价值是 `send/recv` 的可靠字节流，不只是建链。
 
-**影响**：决定是否接受 Step 11 的 Kconfig 默认 `n` 策略；决定是否需要导出符号到 ULP；决定 `ubmad_wk_connect/listen/close` 的 API 签名是否需要适配特定调用方。
+**两种解决思路**：
+
+**思路 A：v1 只做控制平面，v2 加数据平面**
+- v1 约定上层只用 `ubmad_wk_session` 作为"连接已就绪"信号，建链后实际数据走其他通道（例如双方协商的普通 jetty 上的 RC 连接）。
+- v2 才追加 `ubmad_wk_send / ubmad_wk_recv`，引入 SEQ/ACK/window，把会话变成真正的可靠流。
+- **代价**：v1 的实用价值有限，§0.1 §0.7 的多消费者承诺要打折扣。
+- **好处**：v1 范围可控，可以先验证状态机和会话管理机制。
+
+**思路 B：v1 直接做最小数据平面**
+- 在 v1 加一组 API：`ubmad_wk_send(session, msg_type=DATA, payload, len)` + `ubmad_wk_recv_register_cb(session, cb)`。
+- 数据消息也走 session 级重传（超时未收到 DATA_ACK 则重传），与握手消息共用 `rt_work`。
+- 不做窗口/流控，发送方自己管节奏（如同步阻塞、应用层节流）。
+- **代价**：实现复杂度上升约 50%，需要新增 `UBMAD_WK_DATA / UBMAD_WK_DATA_ACK` 消息类型和对应的处理器；要处理乱序、重复、合法性校验。
+- **好处**：v1 一步到位，承诺与实现一致。
+
+**待定**：选 A 还是 B？如选 A，v1 文档的 §0 应明确说"v1 仅是控制平面，数据由上层另行约定"；如选 B，需要在文档中追加 Step 12「实现数据平面」，并把 16 个核心函数扩展到约 20 个。
+
+**影响**：决定 v1 的实用价值边界；决定文档第二、三、四章的整体框架是否需要重写；决定上层使用者的实际收益。
+
+### 18.1 [HIGH] 具体的 v1 API 消费者是谁
+
+**问题（v3 修订）**：§0.1 已经说清楚整体动机（多实体共享 + 可靠通道封装）。剩下的具体问题是：v1 合入主干时，**至少一个**上层模块要立刻调用 `ubmad_wk_*` API。否则代码合入后会变成"无人使用的接口"，CI 覆盖率低、回归风险积累。
+
+**候选清单**（需挑出至少一个并落地）：
+- IPoURMA：在多 EID 场景下，可能需要建立"对端节点已上线"的会话感知。
+- SMC-R-over-URMA / USOCK：用 `ubmad_wk_session` 替代当前的 socket 连接初始化握手。
+- ubmgr / cluster control plane：节点间健康探测、配置同步通道。
+- 自研协议（用户名）：______（待填）
+
+**待定**：哪一个上层模块在 v1 落地时同步迁移过来？
+
+**影响**：决定 `ubmad_wk_connect/listen/close` 的 API 签名细节（如 timeout 是否暴露、callback 模型 vs 阻塞模型）；决定符号导出策略（`EXPORT_SYMBOL` vs `EXPORT_SYMBOL_GPL`）；决定 v1 是放主干还是 staging。
 
 ### 18.2 [HIGH] 多 listen 支持的迁移路径
 
@@ -2344,3 +2399,9 @@ _v3 修订（2026-05-14）相对 v2 的主要变化_：
 - 修正 §1.3「现有枚举」：补全遗漏的 `UBMAD_CONN_DATA / UBMAD_CONN_ACK / UBMAD_AUTHN_ACK`
 - 修正 §3：状态总数 9 → 10
 - 修正 `UBMAD_WK_TIME_WAIT_MS` 注释：澄清 4000ms 不是 TCP 风格的 2×MSL，而是 UBMAD MSN 最大重传窗口
+
+_v3.1 修订（2026-05-14）相对 v3 的主要变化_：
+- 重写 §0.1「这个设计在解决什么问题」：从"枚举 3 类可能场景"升级为明确动机——把 WK Jetty 改造为**多实体共享 + 可靠通道封装**（类比 TCP/IP 多路复用 + 可靠流），含 TCP/IP 类比表与现有 MSN 分工表
+- §0.1 增补「当前不在范围内」小节，明确 v1 不含数据平面、流控、多 service_id
+- 新增 §18.0 [CRITICAL]「数据平面缺失」：v1 只有 connect/listen/close，没有 `ubmad_wk_send/recv`；列出"v2 再加" vs "v1 直接加"两条路径供选择
+- 重写 §18.1：原"具体的上层消费者是谁"已被 §0.1 部分回答；剩余问题聚焦在「v1 合入时哪个具体上层模块同步迁移过来」
