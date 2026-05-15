@@ -1,7 +1,7 @@
 # 公知Jetty可靠通信设计文档（三次握手 / 四次挥手）
 
 _面向读者：对 UMDK/URMA/UBMAD 代码零基础的新开发者。_
-_文档版本：v3.26（修复 v3.25 §18.9 三处不准确：把 `udma_ctl.c:1075` 误称 TP_ERR/TP_FLUSH_DONE producer——实为消费侧映射；enum 计数 16→18；§19/§20 加入目录）_
+_文档版本：v3.27（新增 §0.7 实现规模估算：~1,500 LOC 生产 + ~200 测试 + ~50 构建胶水 ≈ 1,750 LOC，按文件/组件拆分）_
 _最后更新：2026-05-15_
 
 ---
@@ -182,9 +182,39 @@ URMA 内核已有一个名为 `ubcore_session` 的抽象，定义在 `kernel/dri
 ### 0.6 阅读建议
 
 - **想理解为什么这么设计**：本节即可。
-- **想动手实现**：跳到 [Step 1](#step-1添加握手消息类型枚举) 顺序读到 [Step 11](#step-11kconfig-特性开关)。
+- **想动手实现**：跳到 [Step 1](#step-1添加握手消息类型枚举) 顺序读到 [Step 11](#step-11kconfig-特性开关)。先扫一眼 §0.7 知道总规模。
 - **想了解 WK Jetty 现状**：先读 [`umdk_urma_well_known_jetty.md`](umdk_urma_well_known_jetty.md)（特别是 §4.7 连接模型），再回到本文档。
 - **想了解 UBMAD 内部细节**：[`umdk_ubmad_wk_jetty_deep_dive.md`](umdk_ubmad_wk_jetty_deep_dive.md) §13（重传） + §11（接收路径）。
+
+### 0.7 实现规模估算（v3.27 新增）
+
+按本文档 §1-§11 实现的 v1 总代码量：**约 1,500 LOC 生产代码 + ~200 LOC 测试 + ~50 LOC 构建胶水 ≈ 1,750 LOC**（kernel 注释偏多的风格；如果压缩注释能少 10-20%，如果 code review 后补错误处理可能多 10-15%——叫"1500-2000 LOC 区间"更诚实）。
+
+机械计数依据：本文档 40 个 C 代码块共 1,924 行；其中约 200 行是 §10.1/§10.2 的 KUnit 和集成测试，约 50 行是 changelog 块里的重复片段——剩 ~1,700 行独有生产代码，再压一压得到上面的估算。
+
+按文件 / 组件拆分：
+
+| 组件 | 文件 | 估算 LOC |
+|---|---|---:|
+| Wire format + 状态枚举 + session 结构 + 常量 | `ubmad_session.h`（新建） | ~180 |
+| Session 管理（alloc/release/find_by_id/find_by_peer/ISN/全局 init/cleanup） | `ubmad_session.c`（新建） | ~280 |
+| 发送 helpers（`ubmad_post_send_wk` + `_with_import`） | `ubmad_datapath.c` 添加 | ~110 |
+| `ubmad_wk_connect` + `ubmad_wk_listen` | `ubmad_datapath.c` 添加 | ~150 |
+| 接收处理（`process_wk_syn` / `_syn_ack` / `_ack`） | `ubmad_datapath.c` 添加 | ~330 |
+| `ubmad_wk_close` + `process_wk_fin` + `process_wk_fin_ack` | `ubmad_datapath.c` 添加 | ~280 |
+| 定时器（`rt_work_handler` + `tw_work_handler`） | `ubmad_datapath.c` 添加 | ~130 |
+| `process_wk_*` 分发加进 `ubmad_process_msg` | `ubmad_datapath.c` 修改 | ~15 |
+| 模块 init/cleanup 集成 | `ub_mad.c` 修改 | ~30 |
+| 加 `listen_session` 等字段到 `struct ubmad_device_priv` | `ub_mad_priv.h` 修改 | ~5 |
+| 加 5 个枚举值到 `enum ubmad_msg_type` | `ub_mad.h` 修改 | ~7 |
+| **生产小计** | | **~1,515** |
+| KUnit + 集成测试 | 新建测试文件 | ~200 |
+| Kconfig + Makefile + ifdef 守护 | 多处 | ~40 |
+| **总计** | | **~1,755** |
+
+如果不做 §18.9 v2 增强（UBcore 事件接入加速链路故障检测）省 ~80 LOC。如果数据平面也跳过（§18.0 路径 B 留作 v2）这就是 v1 完整生产代码量。
+
+**对比量级**：Linux TCP 在 `net/ipv4/tcp.c` + `tcp_input.c` + `tcp_output.c` + `tcp_minisocks.c` + `tcp_timer.c` 共约 30,000 LOC。本设计约是 5%——合理，因为不实现拥塞控制、滑动窗口流控、四元组 demux、SYN cookies、MSS/PMTU 发现、四元组 keyed socket 等等，且跑在受控 fabric 上。
 
 ---
 
@@ -3706,3 +3736,9 @@ _v3.26 修订（2026-05-15）_：
 | 3 | **LOW：目录缺 §19 / §20。** | 把 v3.24/v3.25 加的两节补进 §1 目录。 |
 
 无代码改动；准确性扫尾。整体看，§18.9 仍然成立——PORT_DOWN 这个 producer 真的存在，主要价值（本端 link 故障的事件级检测）依然有效，只是不要过度承诺为"全场景事件级故障检测"。
+
+_v3.27 修订（2026-05-15）_：
+
+新增 §0.7 实现规模估算。机械计数本文档 40 个 C 代码块共 1,924 行，扣掉 ~200 行测试和 ~50 行 changelog 重复片段，得 ~1,500 LOC 生产代码。按文件/组件拆分成 11 行表格（`ubmad_session.h` ~180 / `ubmad_session.c` ~280 / `ubmad_datapath.c` 各模块累计 ~1,015 / `ub_mad.c` ~30 / 头文件改动 ~12）。加测试和构建胶水约 1,755 LOC 总计。对比 Linux TCP ~30,000 LOC（约 5%）——合理因为不实现拥塞控制、滑动窗口、4-tuple demux、SYN cookies 等等。
+
+无代码改动；纯规划信息为实现者提前知道范围。同时在 §0.6「阅读建议」里给"想动手实现"的读者补一句先扫 §0.7。
