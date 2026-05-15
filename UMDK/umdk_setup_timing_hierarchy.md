@@ -189,10 +189,10 @@ Three orthogonal directions to reduce setup wall-clock:
 | Optimization target | What it removes | Estimated wall-clock saving |
 | --- | --- | --- |
 | **Cache EID lookup** (replace `find_primary_eid_in_ues` with hash) | 4.9 ms × 8 = 39 ms CPU per setup | ~85% reduction at single-process baseline (17 ms → ~3 ms) |
-| **Cache `udma_get_tp_list` result** (codex `udma-tp-cache` patch) | Firmware ctrlq cmd, mostly meaningful under load | ~3% at baseline, but **huge under load** (eliminates 33 ms tail × N) |
-| **Client-side startup stagger** (break thundering-herd alignment) | Reduces queue depth at server firmware ctrlq | Only helps under load; no effect on baseline |
+| **Cache `udma_get_tp_list` result** (codex `udma-tp-cache` patch) | Firmware ctrlq cmd, mostly meaningful under load | ~3% at baseline; under load **moderate, not huge** — per §10.31.E corrected estimate ~10-30% wall-clock reduction at N=100 (kills the rare 5-33 ms outlier tail and reduces aggregate server-side processing time, but typical cmd is only ~200 µs so the per-cmd savings are small) |
+| **Client-side startup stagger** (break thundering-herd alignment) | Reduces queue depth at the server-side kworker pool that processes inbound MADs (the actual serialization point per §10.31, not the firmware ctrlq itself) | Only helps under load; no effect on baseline |
 
-For full mechanism analysis and recommended priorities, see `umdk_link_setup_timing.md` §10.29-§10.30.
+For full mechanism analysis and recommended priorities, see `umdk_link_setup_timing.md` §10.29-§10.31.
 
 ## 11. Under N-concurrent load — same tree, where the time goes instead
 
@@ -250,22 +250,22 @@ The pattern is uniform across all three operations:
 
 ### 11.3 Where the 7500× dilation comes from
 
-Math:
+The serialization point is the **server-side kworker pool** (per §10.27.A, ~1 effective kworker handles 93-98% of inbound MADs), NOT the firmware ctrlq (which is depth 2048 per `ubase_ctrlq.c:257`, plenty of headroom). Math:
 
-- Server's NIC firmware ctrlq has depth 2048 hardware capacity, but effective per-kworker concurrency is 1 (synchronous wait in `ubase_ctrlq_send_msg`). With ~1 dominant kworker on server (per §10.27.A), the effective queue depth becomes 1.
-- 100 client processes all sending MADs to server at the same moment → 100 firmware cmds queued
-- Per-cmd firmware processing time: ~33.5 ms (worst-observed individual cmd from server-side trace)
-- 100 cmds × 33.5 ms = 3.35 seconds (arithmetic check)
-- The 100th client at the back of the queue waits the full 3.35 s in this model
+- Each setup involves ~13.5 inbound MAD round-trips on the server (§10.28.C)
+- 100 client setups × ~13.5 MADs = **~1,350 MAD round-trips funneled through ~1 effective kworker**
+- Per-MAD server processing (recv handler + kworker dispatch + `ubmad_post_send` reply): a few ms average, with rare 5-33 ms tail outliers in `udma_get_tp_list` (only 2-7% of cmds per §10.26.A3)
+- Aggregate server-side active time: ~250-450 ms per §10.31.F
+- Tail client wait (~3.36 s) ≈ aggregate server time × queue-position amplification (factor ~7-13×) for the process arriving last
 
-The 3.36 s `ubcore_session_wait` in the observed process matches this arithmetic. **Caveat (§10.31 correction)**: the match is a coincidence, not mechanism proof. The 33.5 ms outlier is rare (2-7 % of cmds), so 100 cmds at the *outlier* value isn't realistic — most cmds finish in ~200 µs. The real mechanism that produces the 3.36 s wait involves **multi-stage server-side processing across ~13.5 MAD round-trips per setup** queued through ~1 effective kworker. See §10.31.D for the corrected math.
+**The earlier "100 × 33.5 ms = 3.35 s" arithmetic was a coincidence**, not a mechanism. The 33.5 ms value is the worst-observed single outlier; most cmds are ~200 µs, so 100 sequential cmds at the outlier value isn't realistic. See §10.31.D for the full correction; §10.31.F gives the cumulative server-time table.
 
-Different processes see different waits depending on their queue position:
-- Process at front: ~33 ms wait
-- Median process: ~50 × 33 ms ≈ 1.7 s wait (but observed median import_jetty is 108-554 ms, suggesting non-uniform distribution)
-- Process at back (this observation): ~3.36 s wait
+Different processes see different waits depending on queue position:
+- Process at front: ~few ms wait (one round-trip's worth)
+- Median process: ~couple-hundred ms (matches observed median `import_jetty` of 108-554 ms)
+- Process at back (this observation): ~3.36 s
 
-The "median import_jetty = 554 ms but tail = 3.36 s" pattern indicates **thundering-herd alignment + firmware ctrlq serialization** — most clients arrive in tight clumps and clear quickly; a few stragglers see the full queue depth. See §10.27.C.
+The "median 554 ms but tail 3.36 s" pattern indicates **thundering-herd alignment + kworker-pool serialization** — most clients arrive in tight clumps and clear quickly through the single dominant kworker; a few stragglers wait behind the cumulative server-side queue. See §10.27.C.
 
 ### 11.4 Why `import_jetty A` dilates more than `import_seg` for this observed process
 
@@ -275,9 +275,9 @@ The "median import_jetty = 554 ms but tail = 3.36 s" pattern indicates **thunder
 | MAD wait under N=100 (this obs) | 610 ms | 3,364 ms |
 | Dilation factor | **700×** | **7500×** |
 
-Both involve **one** server-side firmware ctrlq cmd (so per-cmd cost is identical). The 5.5× difference in MAD wait between the two operations comes from **queue position at the time of arrival**, not from the operation itself.
+Both involve one server-side firmware ctrlq cmd (so per-cmd cost is identical), but more importantly both go through the same single-effective-kworker MAD-processing path on the server. The 5.5× difference in MAD wait between the two operations comes from **queue position at the time of arrival** (in the kworker's inbound-MAD queue), not from the operation itself.
 
-Mechanism: by the time this observed process completed `import_seg` and started `import_jetty A`, the **other 99 procs had also finished their `import_seg`** and were arriving at the server's firmware ctrlq for `import_jetty A`'s MAD almost simultaneously. The thundering-herd alignment tightens at each phase boundary because the prior phase synchronized them. This observed process had bad luck and ended up near the back of the second wave. See §10.27.C "thundering-herd alignment" framing.
+Mechanism: by the time this observed process completed `import_seg` and started `import_jetty A`, the **other 99 procs had also finished their `import_seg`** and were arriving at the server's MAD-processing kworker for `import_jetty A`'s MAD almost simultaneously. The thundering-herd alignment tightens at each phase boundary because the prior phase synchronized them. This observed process had bad luck and ended up near the back of the second wave. See §10.27.C "thundering-herd alignment" framing.
 
 ### 11.5 Per-phase time distribution under load (this obs)
 
@@ -291,12 +291,12 @@ The dilation is **entirely** in the MAD wait. CPU-bound work is exactly the same
 
 ### 11.6 Fix-path implications
 
-Knowing the dilation is in MAD wait (which itself is driven by server-side firmware ctrlq serialization) maps fix paths cleanly:
+Knowing the dilation is in MAD wait (which itself is driven by server-side kworker-pool / MAD-processing serialization per §10.31, not the firmware ctrlq) maps fix paths cleanly:
 
 | Fix | Removes | Effect |
 | --- | --- | --- |
 | **Cache `udma_get_tp_list` result** (codex `udma-tp-cache` patch) | Eliminates firmware ctrlq cmds for warm `<peer_eid, trans_mode>` tuples | **Per §10.31.E (correction to §10.30.D)**: typical cmd is ~200 µs, only 2-7% are 5-33 ms outliers. Caching saves ~200 µs per hit + eliminates the rare outlier tail. Estimated wall-clock reduction under N=100: **~10-30%, NOT >99%**. The patch is still worthwhile (kills the outlier tail and reduces aggregate server-side processing time) but the original >99% headline was based on the wrong "100 × 33.5 ms" arithmetic. |
-| **Client-side startup stagger** | Eliminates thundering-herd alignment; spreads firmware ctrlq cmds over time | Server processes one-at-a-time always, but no proc waits behind 99 others. Predicted slowdown from 91× to <10×. See §10.27.G Test B. |
+| **Client-side startup stagger** | Eliminates thundering-herd alignment; spreads inbound MADs across the server's kworker over time | Server processes one-at-a-time through ~1 effective kworker always, but no proc waits behind ~1,350 aggregated MADs. Predicted slowdown from 91× to <10×. See §10.27.G Test B. |
 | **EID scan cache** (`find_primary_eid_in_ues` → hash) | Eliminates 4.9 ms × 8 CPU work per setup | Only meaningful at baseline; under load the EID scan is overlapped with MAD wait so wall-clock savings are <5 ms regardless of N. |
 
 The first two (codex patch + stagger) are orthogonal and could be combined for compound benefit. The EID-scan optimization is **lowest-priority under load** because the CPU work isn't on the load-sensitive critical path.
