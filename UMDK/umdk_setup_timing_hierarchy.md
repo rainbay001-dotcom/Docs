@@ -128,7 +128,7 @@ For the topo-table source-verification (lock-free, no synchronization), see `umd
 
 The 0.45 - 0.87 ms baseline cost is dominated by **network RTT + server-side processing**. Under single-process load, the server-side processing is microseconds (kworker dispatch + a few firmware ctrlq cmds), so most of the wait is wire latency.
 
-**Under N-concurrent load, this is where the dilation lives** — the server-side firmware ctrlq becomes a serialization point, and the wait grows from ~0.5 ms to ~600 ms - 3.36 s at N=100. See `umdk_link_setup_timing.md` §10.27-§10.30.
+**Under N-concurrent load, this is where the dilation lives** — but the serialization point is not the firmware ctrlq itself. Per `umdk_link_setup_timing.md` §10.31, the firmware ctrlq is depth 2048; the actual serialization is at the **server-side kworker pool layer** (one dominant kworker handles 93-98% of inbound MADs per §10.27.A), so the effective concurrency is ~1 even though the queue can hold many cmds. The wait grows from ~0.5 ms to ~600 ms - 3.36 s at N=100 because ~13.5 inbound MADs per setup × ~100 client setups all funnel through that single kworker, not because the firmware ring is full. See `umdk_link_setup_timing.md` §10.27-§10.31.
 
 ## 7. Level 3 — the firmware ctrlq cmd in detail
 
@@ -142,7 +142,7 @@ The 0.45 - 0.87 ms baseline cost is dominated by **network RTT + server-side pro
 
 Baseline cost ~175 µs per cmd. The firmware ctrlq ring is actually **depth 2048** per `drivers/ub/ubase/ubase_ctrlq.c:257` (`UBASE_CTRLQ_QUEUE_DEFAULT`), but each calling kworker is synchronous (`ubase_ctrlq_send_msg()` blocks until firmware ACK), so per-kworker concurrency is 1. Under single-process load this is irrelevant — the one cmd in flight completes immediately. Earlier sections of this doc and `umdk_link_setup_timing.md` §10.30 used a "depth-1 firmware ctrlq" framing; that framing is wrong and is corrected in §10.31 — the effective serialization is at the kworker-pool layer, not the firmware queue.
 
-**Under N-concurrent load, this is the SECONDARY bottleneck** — when 100 processes' MADs all reach the server simultaneously, the server's firmware ctrlq queues them serially. One observed `udma_get_tp_list` call on the server side took **33.5 ms** under N=100 burst (issue #2, 2026-05-14). See `umdk_link_setup_timing.md` §10.30.
+**Under N-concurrent load**, the firmware ctrlq is **not the primary bottleneck** (per §10.31): the queue is depth 2048 and most cmds finish in ~200 µs; only 2-7% are slow-path outliers. One outlier hit 33.5 ms in the server-side trace, but that was a tail event not a typical cost. The cmd path matters under load only as a contributor to the ~few ms / round-trip server-side processing time that gets multiplied across ~1,350 MAD round-trips through ~1 kworker — see §10.31.D for the corrected math. The primary bottleneck is the kworker-pool serialization (Level 2 above), not this layer.
 
 ## 8. Cross-cutting view — the 8 EID scans
 
@@ -246,7 +246,7 @@ The pattern is uniform across all three operations:
 | --- | --- | --- |
 | **CPU-bound EID scan** | UNCHANGED at 4.9 ms / call | Pure local CPU, lock-free static table. N concurrent processes on N+ CPUs run in parallel. See §10.25 source verification. |
 | **Firmware ctrlq cmd** (this obs) | UNCHANGED at ~175 µs | This particular process hit the firmware ctrlq when it was free. **Other processes saw 10-33 ms outliers** — JinDou's server-side trace captured one at 33.5 ms. See §10.30. |
-| **MAD round-trip wait** | DILATED 700-7500× | Server-side firmware ctrlq serializes 100 simultaneous client requests. This process waited for ~100 other firmware cmds to drain. |
+| **MAD round-trip wait** | DILATED 700-7500× | Server-side **kworker pool** (~1 effective kworker per §10.27.A) serializes ~13.5 MADs × 100 setups = ~1,350 inbound round-trips. This process's tail wait reflects queue position across that aggregate, not 100 firmware cmds. See §10.31. |
 
 ### 11.3 Where the 7500× dilation comes from
 
@@ -295,7 +295,7 @@ Knowing the dilation is in MAD wait (which itself is driven by server-side firmw
 
 | Fix | Removes | Effect |
 | --- | --- | --- |
-| **Cache `udma_get_tp_list` result** (codex `udma-tp-cache` patch) | Eliminates firmware ctrlq cmds for warm `<peer_eid, trans_mode>` tuples | Under 100-proc with shared target peer: 1 firmware-miss + 99 cache-hits → wall-clock drops from ~3.36 s to ~50 ms (>99 % improvement). See §10.30.D. |
+| **Cache `udma_get_tp_list` result** (codex `udma-tp-cache` patch) | Eliminates firmware ctrlq cmds for warm `<peer_eid, trans_mode>` tuples | **Per §10.31.E (correction to §10.30.D)**: typical cmd is ~200 µs, only 2-7% are 5-33 ms outliers. Caching saves ~200 µs per hit + eliminates the rare outlier tail. Estimated wall-clock reduction under N=100: **~10-30%, NOT >99%**. The patch is still worthwhile (kills the outlier tail and reduces aggregate server-side processing time) but the original >99% headline was based on the wrong "100 × 33.5 ms" arithmetic. |
 | **Client-side startup stagger** | Eliminates thundering-herd alignment; spreads firmware ctrlq cmds over time | Server processes one-at-a-time always, but no proc waits behind 99 others. Predicted slowdown from 91× to <10×. See §10.27.G Test B. |
 | **EID scan cache** (`find_primary_eid_in_ues` → hash) | Eliminates 4.9 ms × 8 CPU work per setup | Only meaningful at baseline; under load the EID scan is overlapped with MAD wait so wall-clock savings are <5 ms regardless of N. |
 
