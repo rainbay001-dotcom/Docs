@@ -173,6 +173,11 @@ implicitly uses RM regardless of caller-supplied mode).
 
 ## 4. Ordering — how both axes touch the 3-layer model
 
+> Full ordering deep-dive (three scopes, intra-transaction atomicity, OI-vs-OT,
+> the producer/consumer flag pattern, "who reorders the target", retransmit
+> guarantor, RM+RTP-vs-RC+RTP semantics) →
+> [`umdk_transport_ordering_semantics.md`](umdk_transport_ordering_semantics.md).
+
 Three independent ordering layers (full detail in
 [`umdk_spec_deep_dive.md`](umdk_spec_deep_dive.md) §6.4.1, §7.3.2–7.3.3):
 
