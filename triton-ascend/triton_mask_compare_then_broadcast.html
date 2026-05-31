@@ -1,0 +1,338 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Compare-then-Broadcast: how <code>k_attn[None,:] == 0</code> lowers in the Triton frontend</title>
+<style>
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    line-height: 1.55;
+    max-width: 1200px;
+    margin: 2em auto;
+    padding: 0 2em;
+    color: #222;
+  }
+  h1 { color: #0d47a1; border-bottom: 3px solid #0d47a1; padding-bottom: 0.3em; }
+  h2 { color: #1565c0; margin-top: 1.8em; border-bottom: 1px solid #bbdefb; padding-bottom: 0.2em; }
+  h3 { color: #1976d2; margin-top: 1.2em; }
+  table { border-collapse: collapse; margin: 1em 0; font-size: 0.92em; }
+  th, td { border: 1px solid #cbd0d6; padding: 0.45em 0.8em; text-align: left; vertical-align: top; }
+  th { background: #e3f2fd; font-weight: 600; }
+  tr:nth-child(even) { background: #f8fbff; }
+  code, pre { font-family: "SF Mono", Menlo, Consolas, monospace; }
+  code { background: #f2f4f6; padding: 0.05em 0.35em; border-radius: 3px; font-size: 0.9em; }
+  pre { background: #f7f7f8; padding: 0.9em 1.1em; border-radius: 6px; border: 1px solid #e3e6e9; overflow-x: auto; font-size: 0.86em; line-height: 1.5; }
+  pre code { background: none; padding: 0; }
+  .src { font-size: 0.84em; color: #666; font-style: italic; }
+  .callout { border-left: 4px solid #fbc02d; background: #fffde7; padding: 0.6em 1em; margin: 1.1em 0; }
+  .callout-info { border-left-color: #1976d2; background: #e3f2fd; }
+  .callout-key { border-left-color: #e65100; background: #fff3e0; }
+  .callout-good { border-left-color: #2e7d32; background: #e8f5e9; }
+  /* IR / source token coloring */
+  .v  { color: #6f42c1; }                 /* %ssa */
+  .op { color: #0d47a1; font-weight: 600; }/* op names */
+  .ty { color: #0a7c6e; }                 /* mlir types */
+  .cm { color: #6a737d; font-style: italic; } /* comments */
+  .kw { color: #b31d28; }                 /* python keywords */
+  .hl { background: #fff3c4; display: inline-block; width: 100%; }
+  .pill { display:inline-block; padding:1px 7px; border-radius:10px; font-size:0.78em; font-weight:600; }
+  .pill-c { background:#c8e6c9; color:#1b5e20; }   /* compare-then-broadcast (C) */
+  .pill-b { background:#ffe0b2; color:#bf360c; }   /* broadcast-then-compare (B) */
+  svg { display: block; margin: 1.2em auto; max-width: 100%; height: auto; }
+  .legend { font-size:0.85em; color:#444; text-align:center; margin-top:-0.6em; }
+  .footnote { font-size: 0.84em; color: #555; border-top: 1px solid #e0e0e0; margin-top: 2.5em; padding-top: 1em; }
+</style>
+</head>
+<body>
+
+<h1>Compare-then-Broadcast</h1>
+<p style="font-size:1.05em; color:#444; margin-top:-0.4em;">
+Why <code>k_attn_arg[None,&nbsp;:]&nbsp;==&nbsp;0</code> lowers to a <b>[1,128] compare followed by a broadcast</b>,
+and not a broadcast followed by a [64,128] compare &mdash; a trace of Triton&rsquo;s frontend lowering.
+</p>
+
+<p class="src">
+Source of the IR: GitHub issue <code>rainbay001-dotcom/test#1</code> &mdash; the <code>tt.</code>-dialect TTIR dump of
+<code>@fwd_kernel</code> from <code>flash_attention_npu_v9_mask_in.py</code>, target <code>Ascend950PR_9579</code>.
+Source of the Python: <code>~/Documents/docs/helloworld.py</code> (the standalone 1:1 extraction of that kernel&rsquo;s
+<code>mask_fn</code>, <code>TYPE==1</code>). Compiler internals verified against the local fork
+<code>Triton-Ascend/python/triton/language/semantic.py</code> (triton-ascend <b>3.2.0</b>). Compiled 2026-05-31.
+</p>
+
+<h2>1. The two lines in question</h2>
+
+<p>Inside the mask region of the issue&rsquo;s TTIR, two adjacent operations:</p>
+
+<pre><code>%84 = <span class="op">arith.cmpi</span> eq, <span class="v">%81</span>, <span class="v">%cst</span> : <span class="ty">tensor&lt;1x128xi32&gt;</span>     <span class="cm">// C := (k_attn == 0), compared at [1,128]</span>
+%85 = <span class="op">tt.broadcast</span> <span class="v">%84</span> : <span class="ty">tensor&lt;1x128xi1&gt;</span> -&gt; <span class="ty">tensor&lt;64x128xi1&gt;</span>   <span class="cm">// then broadcast the i1 result to [64,128]</span></code></pre>
+
+<p>The natural expectation would be the opposite order &mdash; broadcast <code>k_attn</code> to
+<code>[64,128]</code> first, <em>then</em> do a full <code>64&times;128</code> compare. This page explains why the
+compiler does it the way it does, and shows that the answer is structural, not a cost heuristic.</p>
+
+<div class="callout callout-key">
+<b>The one-sentence answer.</b> The broadcast is <b>not part of</b> <code>== 0</code> at all. The <code>==</code>
+sub-expression only ever produces <code>[1,128]</code> (its operands are a <code>[1,128]</code> vector and a
+<b>scalar</b>). The <code>[64,128]</code> broadcast belongs to the <b>enclosing <code>|</code> operator</b>, applied to the
+already-finished <code>[1,128]</code> result. They are two different operators at two different levels of the
+expression tree, emitted at two different times.
+</div>
+
+<h2>2. The source expression</h2>
+
+<p>From <code>helloworld.py</code>, the <code>TYPE==1</code> branch of <code>mask_fn</code> (the highlighted line is C):</p>
+
+<pre><code><span class="kw">@triton.jit</span>
+<span class="kw">def</span> mask_fn(q_attn_arg, k_attn_arg, q_offset, k_offset, TYPE: tl.constexpr):
+    <span class="kw">if</span> TYPE == 1:
+        triu_causal = (q_offset[:, None] &lt;= k_offset[None, :])        <span class="cm"># A  →  [64,128]</span>
+        <span class="kw">return</span>(
+            (triu_causal &amp;
+            ((q_attn_arg[:, None] == k_attn_arg[None, :]) |          <span class="cm"># B  →  [64,128]</span>
+<span class="hl">            (k_attn_arg[None, :] == 0))) |                          <span class="cm"># C  →  [1,128]   ← these two IR lines</span></span>
+            (q_offset[:, None] == k_offset[None, :]))                <span class="cm"># D  →  [64,128]</span></code></pre>
+
+<p>The whole mask is the boolean tree <code>(A &amp; (B | C)) | D</code>. Three of the four leaves (A, B, D) carry a
+<code>[:,&nbsp;None]</code> <b>row</b> term, so they are inherently <code>[64,128]</code>. Only <b>C</b> is purely
+<code>[None,&nbsp;:]</code> <b>column</b>-indexed and compared against a scalar &mdash; that is the entire reason it behaves
+differently.</p>
+
+<h2>3. The killer contrast &mdash; same input, two orderings, visible in the IR</h2>
+
+<p>Both B and C compare against <code>k_attn[None,:]</code>, which is the single SSA value <code>%81</code>
+(<code>tt.expand_dims</code> of the loaded <code>tensor&lt;128xi32&gt;</code> key vector). Watch what each does with it:</p>
+
+<pre><code><span class="cm">// %81 = k_attn[None, :]  :  tensor&lt;1x128xi32&gt;     (shared by B and C)</span>
+
+<span class="cm">// ---- B :</span> <span class="pill pill-b">broadcast → then compare</span> <span class="cm">----</span>
+%82 = <span class="op">tt.broadcast</span> <span class="v">%81</span> : <span class="ty">tensor&lt;1x128xi32&gt;</span> -&gt; <span class="ty">tensor&lt;64x128xi32&gt;</span>   <span class="cm">// k_attn widened to [64,128] FIRST</span>
+%83 = <span class="op">arith.cmpi</span> eq, <span class="v">%66</span>, <span class="v">%82</span> : <span class="ty">tensor&lt;64x128xi32&gt;</span>          <span class="cm">// compare at [64,128]   (%66 = q_attn[:,None])</span>
+
+<span class="cm">// ---- C :</span> <span class="pill pill-c">compare → then broadcast</span> <span class="cm">----</span>
+%84 = <span class="op">arith.cmpi</span> eq, <span class="v">%81</span>, <span class="v">%cst</span> : <span class="ty">tensor&lt;1x128xi32&gt;</span>           <span class="cm">// compare at [1,128] FIRST   (%cst = dense&lt;0&gt;)</span>
+%85 = <span class="op">tt.broadcast</span> <span class="v">%84</span> : <span class="ty">tensor&lt;1x128xi1&gt;</span> -&gt; <span class="ty">tensor&lt;64x128xi1&gt;</span>    <span class="cm">// broadcast the i1 RESULT to [64,128]</span></code></pre>
+
+<p><b>Same <code>%81</code>. B broadcasts the <i>input</i> up to <code>[64,128]</code> and then compares; C compares at
+<code>[1,128]</code> and then broadcasts the <i>output</i>.</b> The difference is decided entirely by the <em>other</em>
+operand of each <code>==</code>:</p>
+
+<ul>
+<li><b>B&rsquo;s</b> other operand is <code>%66 = q_attn[:,&nbsp;None]</code>, a <code>[64,128]</code> block &rarr; the compare is
+forced to <code>[64,128]</code>.</li>
+<li><b>C&rsquo;s</b> other operand is the literal <code>0</code>, a <b>scalar</b> &rarr; it splats to <code>%81</code>&rsquo;s shape
+<code>[1,128]</code>, so the compare stays <code>[1,128]</code>. The <code>64</code> is nowhere in C&rsquo;s operands.</li>
+</ul>
+
+<h2>4. The expression tree &mdash; where each op lives</h2>
+
+<p>Triton&rsquo;s frontend walks the Python operator-precedence tree <b>bottom-up</b>, emitting MLIR eagerly at each
+node. The <code>==</code> of C is a <b>child</b>; the <code>|</code> that broadcasts it is its <b>parent</b>. The child is
+fully evaluated (and its <code>[1,128]</code> compare emitted) before the parent ever runs &mdash; so the parent can only
+broadcast the result it was handed.</p>
+
+<svg viewBox="0 0 860 500" role="img" aria-label="Expression tree for (A &amp; (B | C)) | D">
+  <!-- edges -->
+  <g stroke="#90a4ae" stroke-width="2" fill="none">
+    <line x1="430" y1="64"  x2="250" y2="120"/>
+    <line x1="430" y1="64"  x2="650" y2="120"/>
+    <line x1="250" y1="164" x2="120" y2="220"/>
+    <line x1="250" y1="164" x2="410" y2="220"/>
+    <line x1="410" y1="264" x2="300" y2="330"/>
+  </g>
+  <!-- the broadcast path (C → bcast → inner |) in orange -->
+  <g stroke="#e65100" stroke-width="2.5" fill="none">
+    <line x1="410" y1="264" x2="560" y2="330"/>
+    <line x1="560" y1="374" x2="560" y2="430"/>
+  </g>
+
+  <!-- nodes: helper pattern = rect + two text lines -->
+  <!-- outer | -->
+  <g>
+    <rect x="355" y="20" width="150" height="44" rx="6" fill="#e3f2fd" stroke="#1976d2" stroke-width="1.5"/>
+    <text x="430" y="40" text-anchor="middle" font-size="13" font-weight="600" fill="#0d47a1">| (or_)  %89</text>
+    <text x="430" y="56" text-anchor="middle" font-size="11" fill="#37474f">(A&amp;(B|C)) | D  ·  [64,128]</text>
+  </g>
+  <!-- and -->
+  <g>
+    <rect x="175" y="120" width="150" height="44" rx="6" fill="#e3f2fd" stroke="#1976d2" stroke-width="1.5"/>
+    <text x="250" y="140" text-anchor="middle" font-size="13" font-weight="600" fill="#0d47a1">&amp; (and_)  %87</text>
+    <text x="250" y="156" text-anchor="middle" font-size="11" fill="#37474f">A &amp; (B|C)  ·  [64,128]</text>
+  </g>
+  <!-- D -->
+  <g>
+    <rect x="575" y="120" width="150" height="44" rx="6" fill="#eceff1" stroke="#607d8b" stroke-width="1.5"/>
+    <text x="650" y="140" text-anchor="middle" font-size="13" font-weight="600" fill="#37474f">cmpi eq  %88</text>
+    <text x="650" y="156" text-anchor="middle" font-size="11" fill="#37474f">D: q_off==k_off  ·  [64,128]</text>
+  </g>
+  <!-- A -->
+  <g>
+    <rect x="45" y="220" width="150" height="44" rx="6" fill="#eceff1" stroke="#607d8b" stroke-width="1.5"/>
+    <text x="120" y="240" text-anchor="middle" font-size="13" font-weight="600" fill="#37474f">cmpi sle  %80</text>
+    <text x="120" y="256" text-anchor="middle" font-size="11" fill="#37474f">A: q_off&lt;=k_off  ·  [64,128]</text>
+  </g>
+  <!-- inner | (highlight) -->
+  <g>
+    <rect x="335" y="220" width="150" height="44" rx="6" fill="#fff3e0" stroke="#e65100" stroke-width="2.5"/>
+    <text x="410" y="240" text-anchor="middle" font-size="13" font-weight="700" fill="#bf360c">| (or_)  %86</text>
+    <text x="410" y="256" text-anchor="middle" font-size="11" fill="#bf360c">B | C  →  injects the broadcast</text>
+  </g>
+  <!-- B -->
+  <g>
+    <rect x="225" y="330" width="150" height="44" rx="6" fill="#eceff1" stroke="#607d8b" stroke-width="1.5"/>
+    <text x="300" y="350" text-anchor="middle" font-size="13" font-weight="600" fill="#37474f">cmpi eq  %83</text>
+    <text x="300" y="366" text-anchor="middle" font-size="11" fill="#37474f">B  ·  [64,128]</text>
+  </g>
+  <!-- bcast (highlight) -->
+  <g>
+    <rect x="485" y="330" width="150" height="44" rx="6" fill="#fff3e0" stroke="#e65100" stroke-width="2.5"/>
+    <text x="560" y="350" text-anchor="middle" font-size="13" font-weight="700" fill="#bf360c">tt.broadcast  %85</text>
+    <text x="560" y="366" text-anchor="middle" font-size="11" fill="#bf360c">[1,128] → [64,128]</text>
+  </g>
+  <!-- C (green, [1,128]) -->
+  <g>
+    <rect x="485" y="430" width="150" height="44" rx="6" fill="#e8f5e9" stroke="#2e7d32" stroke-width="2"/>
+    <text x="560" y="450" text-anchor="middle" font-size="13" font-weight="700" fill="#1b5e20">cmpi eq  %84</text>
+    <text x="560" y="466" text-anchor="middle" font-size="11" fill="#1b5e20">C: k_attn==0  ·  [1,128]</text>
+  </g>
+</svg>
+<p class="legend">
+<span style="color:#1b5e20;">&#9632;</span> C is compared at <b>[1,128]</b> (green) &nbsp;·&nbsp;
+<span style="color:#bf360c;">&#9632;</span> the broadcast (orange) is injected by C&rsquo;s <b>parent <code>|</code></b>, on the path up from C &nbsp;·&nbsp;
+<span style="color:#607d8b;">&#9632;</span> A/B/D are already <b>[64,128]</b>
+</p>
+
+<p>The same tree as ASCII, for reference:</p>
+<pre><code>                | (or_, %89)                 (A&amp;(B|C)) | D        [64,128]
+               / \
+   (and_,%87) &amp;   cmpi eq %88  = D            q_off == k_off       [64,128]
+             / \
+  (sle,%80) A   | (or_, %86)   = B|C   ◀── broadcast injected here  [64,128]
+               / \
+   (eq,%83) B    ╎
+                 ▼ tt.broadcast %85          [1,128] → [64,128]   ◀── the broadcast
+                 ╎
+                 cmpi eq %84  = C            k_attn[None,:] == 0   [1,128]  ◀── the compare</code></pre>
+
+<h2>5. Which part of the compiler emits this</h2>
+
+<p>These are <code>tt.</code>-dialect (TTIR) operations, so they are produced by <b>stage&nbsp;&#9312; &mdash; the Triton
+Python frontend</b>, the AST&rarr;TTIR builder. This is <em>above</em> the GPU/Ascend fork point: neither
+<code>triton-adapter-opt</code> nor <code>bishengir</code> creates this pattern; they only consume/lower it later. It is
+also <b>stock upstream Triton</b> (NumPy-style implicit broadcasting), not anything triton-ascend added &mdash; the same
+IR is generated on the CUDA path.</p>
+
+<pre><code>@triton.jit (.py)
+      │  <b>&#9312; Triton frontend  ← these two lines are born HERE</b>
+      ▼
+   TTIR (tt.*)          ── %84 cmpi eq [1,128] , %85 tt.broadcast →[64,128]
+      │
+      ├─[NVIDIA/AMD] → TTGIR (ttg.*) → LLVM → PTX
+      └─[Ascend]     → ttadapter (triton-adapter-opt) → HFusion/HIVM (bishengir) → elf64-hiipu</code></pre>
+
+<h2>6. The mechanism, line by line</h2>
+
+<p>Verified call paths in <code>Triton-Ascend/python/triton/language/semantic.py</code>, driven by the AST visitors in
+<code>compiler/code_generator.py</code> and emitted through the C++ <code>ir.builder</code>:</p>
+
+<table>
+<tr><th>IR</th><th>Python</th><th>Frontend path (file : line)</th></tr>
+<tr>
+  <td><code>%81 = tt.expand_dims</code></td>
+  <td><code>k_attn_arg[None, :]</code></td>
+  <td><code>visit_Subscript</code> (code_generator:937) &rarr; <code>expand_dims()</code> (semantic:712) &rarr; <code>create_expand_dims</code></td>
+</tr>
+<tr style="background:#fffef2;">
+  <td><b><code>%84 = arith.cmpi eq</code></b><br><span class="ty">@ [1,128]</span></td>
+  <td><code>== 0</code></td>
+  <td><code>visit_Compare</code> (816) &rarr; <code>equal()</code> (semantic:622) &rarr; <code>binary_op_type_checking_impl</code> (167) &rarr;
+      <code>broadcast_impl_value</code> (796): hits the <b>block-vs-scalar</b> branch (801&ndash;803) and
+      <code>create_splat(0 &rarr; [1,128])</code>. Both sides now <code>[1,128]</code> &rarr; <code>create_icmpEQ</code>.
+      <b>No row broadcast.</b></td>
+</tr>
+<tr style="background:#fff6ee;">
+  <td><b><code>%85 = tt.broadcast</code></b><br><span class="ty">[1,128]&rarr;[64,128]</span></td>
+  <td>the <code>|</code> in <code>(B) | (C)</code></td>
+  <td><code>visit_BinOp</code> (580, <code>BitOr</code>) &rarr; <code>or_()</code> (semantic:433) &rarr;
+      <code>bitwise_op_type_checking_impl</code> (413&rarr;415) &rarr; <code>binary_op_type_checking_impl</code> (167&rarr;196) &rarr;
+      <b><code>broadcast_impl_value</code> (842&ndash;844)</b>: block-vs-block, lhs <code>[64,128]</code> vs rhs <code>[1,128]</code>,
+      result <code>[64,128]</code>, rhs differs &rarr; <code>create_broadcast(rhs &rarr; [64,128])</code>. Then <code>create_or</code>.</td>
+</tr>
+</table>
+
+<div class="callout callout-info">
+<b>Proof in the location metadata.</b> In the TTIR, <code>%84</code> carries <code>loc(#loc125)</code> while
+<code>%85</code> <em>and</em> <code>%86 = arith.ori</code> both carry <code>loc(#loc126)</code>. So the compare is one
+source expression (the <code>==</code>) and the broadcast+or are a <em>different</em> one (the <code>|</code>) &mdash; the
+broadcast was never part of <code>== 0</code>.
+</div>
+
+<h2>7. Why compare-then-broadcast, and not broadcast-then-compare</h2>
+
+<p>Three facts combine:</p>
+<ol>
+<li><b>Eager, bottom-up IR construction.</b> Every <code>tl</code> operator immediately calls <code>builder.create_*</code>
+and returns a concrete typed <code>tl.tensor</code>. There is <b>no global shape inference</b> &mdash; each operator
+rank-matches only <em>its own two operands</em>.</li>
+<li><b><code>== 0</code> has no <code>64</code> in its operands.</b> Its operands are <code>k_attn[None,:]</code>
+(<code>[1,128]</code>) and the scalar <code>0</code>. The scalar splats to <code>[1,128]</code>; the compare is emitted at
+<code>[1,128]</code>. Nothing here could widen it to 64 rows.</li>
+<li><b>The <code>64</code> lives one level up, in a sibling.</b> It enters only when the parent <code>|</code> rank-matches
+its <code>[64,128]</code> operand&nbsp;B against C&rsquo;s <code>[1,128]</code>. By then C is already a finished
+<code>[1,128]</code> value (<code>%84</code>); the only thing the <code>|</code> can do is broadcast that result.</li>
+</ol>
+
+<p>For the order to be reversed (broadcast-then-compare), <code>k_attn</code> would have to reach <code>[64,128]</code>
+<em>before</em> the <code>==</code> ran &mdash; which requires the <code>==</code> to know its result needs 64 rows. It cannot:
+the parent&rsquo;s shape requirement cannot flow back down into a child the frontend has already emitted. A child node is
+sealed the moment it returns its <code>tl.tensor</code>.</p>
+
+<div class="callout">
+<b>The general rule.</b> A broadcast is emitted <b>at the operator whose two operands have mismatched shapes</b>, on
+whichever operand is smaller (<code>broadcast_impl_value</code>, semantic.py:829&ndash;844: the result takes the non-1
+dimension on each axis; only an operand differing from the result is broadcast).
+<ul style="margin:0.4em 0 0 0;">
+<li><b>B&rsquo;s <code>==</code></b>: operands <code>[64,1]</code> vs <code>[1,128]</code> &rarr; the mismatch is
+<i>intrinsic to the compare</i> &rarr; <span class="pill pill-b">broadcast → compare</span>.</li>
+<li><b>C&rsquo;s <code>==</code></b>: operands <code>[1,128]</code> vs scalar &rarr; no row mismatch &rarr; compare at
+<code>[1,128]</code>; the <code>64</code> appears only at the parent <code>|</code> &rarr;
+<span class="pill pill-c">compare → broadcast</span>.</li>
+</ul>
+It is a purely <b>local, syntactic</b> consequence of where the differing-shape operand sits in the tree &mdash; not a cost
+decision, not a global optimization.
+</div>
+
+<h2>8. Why the local rule happens to be the efficient one</h2>
+
+<div class="callout callout-good">
+Comparing 128 lanes once and broadcasting a <b>1-bit-per-lane predicate</b> to 64 rows is much cheaper than broadcasting
+the <code>i32</code> input to <code>[64,128]</code> and doing a full <code>64&times;128</code> compare. Because the source
+kept the row-independent term (<code>k_attn==0</code>) as its own sub-expression, Triton&rsquo;s eager bottom-up broadcasting
+produces exactly the <code>cmpi[1,128] &rarr; broadcast[64,128]</code> shape that <code>bishengir</code> later lowers into the
+special <b>precompute-once C-path</b> (the <code>VDUPS</code> / <code>VLDAS&rarr;VLDUI&rarr;MOVVP</code> recovery measured in
+<code>assembler.as</code>). The efficiency is, at root, an emergent property of <i>how this one sub-expression was written</i>
+plus <i>Triton&rsquo;s local broadcast rule</i> &mdash; decided in the frontend, before any Ascend pass sees it.
+</div>
+
+<p>Equivalently: A/B/D each mix a <code>[:,None]</code> row term with a <code>[None,:]</code> column term, so their
+comparisons are inherently <code>[64,128]</code> and use all 64 rows of real work. C depends only on the key/column index, so
+it is identical down all 64 rows &mdash; the compiler computes it once on one row and replicates the bits. That
+asymmetry is the seed of the &ldquo;special handling of C&rdquo; seen all the way down at the assembler level.</p>
+
+<div class="footnote">
+<b>References.</b>
+IR: issue <code>rainbay001-dotcom/test#1</code> (<code>@fwd_kernel</code>, <code>flash_attention_npu_v9_mask_in.py</code>,
+target <code>Ascend950PR_9579</code>); the issue body keeps inline <code>loc(#loc&hellip;)</code> refs but omits the
+<code>#loc&hellip; = loc(&hellip;)</code> definitions, so original line numbers are not recoverable from it &mdash;
+<code>helloworld.py</code> is the faithful stand-in.
+Source: <code>~/Documents/docs/helloworld.py</code> (<code>mask_fn</code>, <code>TYPE==1</code>).
+Compiler: <code>Triton-Ascend/python/triton/language/semantic.py</code> &mdash;
+<code>broadcast_impl_value</code> (778&ndash;846), <code>binary_op_type_checking_impl</code> (167&ndash;196),
+<code>bitwise_op_type_checking_impl</code> (413&ndash;425), <code>or_</code> (433), <code>equal</code> (622),
+<code>expand_dims</code> (712); AST drivers in <code>compiler/code_generator.py</code>
+(<code>visit_Subscript</code>/<code>visit_Compare</code>/<code>visit_BinOp</code>). triton-ascend 3.2.0.
+Companion docs: <code>mask_fn_compilation_stack.md</code>, <code>a5_pto_bool_vloop_walkthrough.md</code>,
+<code>a5_assembler_provenance.md</code>.
+</div>
+
+</body>
+</html>
