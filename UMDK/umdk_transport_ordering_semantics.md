@@ -132,6 +132,34 @@ Write payload (txn 1), then write a ready-flag (txn 2) as **separate transaction
 (The flag must be a *separate* transaction after the payload — Scope B means you
 can't get this by polling a byte *inside* a single Write.)
 
+### Why one-sided Write is hit hardest
+
+The hazard is acute for **one-sided** ops because a one-sided Write **bypasses the
+target CPU** — it lands in remote memory silently, with **no completion (CQE) at
+the target.** The target's only way to learn the data arrived is to **poll its own
+memory** for the flag — and that poll is correct only if the two Writes are
+ordered. Under RM+RTP (OI) they are not, so the flag-Write can land first → target
+reads `ready==1` → reads stale/partial payload → **silent data corruption** (no
+error, no completion). Two scopes conspire: Scope B (intra-txn atomic) forces the
+flag to be a *separate* transaction; Scope C (RM=OI) leaves it unordered. Only
+RC+OT closes both.
+
+**Two-sided Send/Recv barely cares:** a Send raises a **Recv-CQE at the target**,
+so the target is in the software loop — it learns of arrival from the completion,
+not from polling memory, and can sequence messages itself under OI. **Read/Atomic
+are also less affected:** Read returns data to the *initiator* (who gets a
+completion); Atomic is a single self-contained op.
+
+| Workload | Mode |
+|---|---|
+| One-sided **Write + memory-flag signaling** (RDMA doorbell) | **RC+RTP+OT** — else latent corruption |
+| Two-sided **Send/Recv** message passing | **RM+RTP** fine (target in the loop), keeps RM scaling |
+
+Escape hatches if you must stay on RM for a one-sided Write: **don't use
+memory-flag polling** — signal with a following **two-sided Send** (gives the
+target a CQE), or **serialize at the initiator** (await the payload Write's
+completion before issuing the flag, losing the overlap).
+
 ---
 
 ## 7. Retransmit & reliability — same contract, different guarantor
