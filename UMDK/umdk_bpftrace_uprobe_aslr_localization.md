@@ -165,6 +165,7 @@ Now `/tmp/lr2.txt` has the full output. `wait $BPF` collects exit status.
 | Map-full warnings | 4096-entry cap exceeded | `BPFTRACE_MAP_KEYS_MAX=…` env var |
 | `@s[tid]` leaks | Process exited between entry and return | `clear(@s)` in END (this script already does) |
 | END never runs | bpftrace crashed | Always check `wait $BPF; echo $?` |
+| `'lr' is not a valid register on this architecture (arm64)` | `reg("lr")` only works on x86_64 in bpftrace's syntax — aarch64 link-register isn't named in the `reg()` map | Use `ustack(2)` to get the return address from frame 0 instead (this is what the script above does) |
 
 ---
 
@@ -248,12 +249,21 @@ for off in 0x73d8 0x83b0 0x93b4 0x9428 0x94f8 0x9580 0x98d4; do
 done
 ```
 
-Expected output:
+Actual output from JinDou1210's run on the live system ([UMDK#7 comment 4508578988](https://github.com/rainbay001-dotcom/UMDK/issues/7#issuecomment-4508578988), 2026-05-21 13:10:15 UTC):
+
 ```
-0x9428 → exchange_seg_info       perftest_resources.c:903
-0x9430 → exchange_seg_info       perftest_resources.c:904       ← return point, next line
-0xaf80 → exchange_connection_info perftest_resources.c:1181     ← call site that invokes exchange_seg_info
+0x73d8 → check_remote_cfg     perftest_parameters.c:1546
+0x83b0 → sync_time            perftest_communication.c:351
+0x93b4 → exchange_seg_info    perftest_resources.c:896
+0x9428 → exchange_seg_info    perftest_resources.c:903   ← matches the bpftrace `_9430` low-bit signature (= 0x9428 + 8)
+0x94f8 → exchange_jetty_id    perftest_resources.c:943
+0x9580 → exchange_jetty_id    perftest_resources.c:950
+0x98d4 → exchange_tp_info     perftest_resources.c:1153
 ```
+
+All 7 `bl sock_sync_data` call sites in `urma_perftest` are accounted for; only `0x9428` (`exchange_seg_info:903`) matches the bpftrace return-address signature. Combined with the disasm at the next subsection, that nails the slow site.
+
+For frame 1 (`_af80`) the same `addr2line` call gives `exchange_connection_info perftest_resources.c:1181` — the line where `exchange_seg_info(...)` is invoked.
 
 ### 3.5 Why the bpftrace offset is `0x9430` and not `0x9428`
 
@@ -292,6 +302,133 @@ Conclusion: **all `index=2` slow events are `exchange_seg_info` line 903's `sock
 
 No debuginfo loaded into bpftrace. No recompile of perftest. Just runtime addresses + a binary on disk + addr2line.
 
+### 3.7 How `addr2line` actually resolves the offset
+
+The chain above treats `addr2line` as a black box. It isn't. Knowing what it reads is useful when it surprises you (e.g., reports `??:?`, or gives an unexpected line, or claims a different function than you expected).
+
+#### 3.7.1 What addr2line is reading
+
+The binary contains (or links to) several DWARF debug sections in the ELF:
+
+| Section | Purpose |
+| --- | --- |
+| `.debug_info` | Type/function/variable DIEs (Debug Information Entries). `DW_TAG_subprogram` entries with `DW_AT_low_pc`/`DW_AT_high_pc` ranges → that's how addr2line names the **function**. |
+| `.debug_aranges` | Optimization index: address ranges → compilation-unit (CU) offsets. Lets addr2line skip straight to the right CU instead of scanning all of `.debug_info`. |
+| `.debug_line` | The **line number program** — bytecode that, when executed, generates the `(address, file, line, column)` table. This produces the `:903` part. |
+| `.debug_str` / `.debug_line_str` | String table; file names and function names live here. |
+
+For stripped binaries, these sections sit in a **separate file**. addr2line finds it via either:
+
+1. `.gnu_debuglink` — a tiny section in the main binary pointing at a filename plus CRC. addr2line looks under `/usr/lib/debug/<dir>/<file>.debug`.
+2. **Build-ID** — `.note.gnu.build-id` in the main binary holds a SHA-1-ish ID; addr2line looks for `/usr/lib/debug/.build-id/<aa>/<bbbbbb…>.debug`.
+
+That's why Jin's `DBG=/usr/lib/debug/usr/bin/urma_perftest-25.12.0-B084.oe2403sp3.aarch64.debug` line works: the strip-then-debuginfo-package workflow puts the actual DWARF in a separate `.debug` file.
+
+#### 3.7.2 The line number program — bytecode state machine
+
+`.debug_line` is **not** a flat table. It's compressed bytecode that, when executed by a DWARF consumer, generates the line table. Registers include `address`, `file`, `line`, `column`, `op_index`; opcodes say things like "advance address by N, advance line by M, emit a row".
+
+For our query `addr2line 0x9428`:
+
+1. **Find the CU.** Walk `.debug_aranges`; locate the CU whose address range contains `0x9428` → `perftest_resources.c`'s CU.
+2. **Find the function.** Inside that CU's `.debug_info`, walk `DW_TAG_subprogram` entries until one's `[low_pc, high_pc)` range contains `0x9428` → `exchange_seg_info`.
+3. **Find the source line.** Execute the line program for this CU forward. The generated table looks like:
+   ```
+   address     file                       line
+   0x93b0      perftest_resources.c       882    ← exchange_seg_info entry
+   ...
+   0x9420      perftest_resources.c       902    ← previous source line
+   0x9428      perftest_resources.c       903    ← <-- query lands here
+   0x9430      perftest_resources.c       904    ← next source line
+   ```
+   addr2line returns the row with the largest `address ≤ query`. For `0x9428` that's `(perftest_resources.c, 903)`.
+
+Crucially the state machine only emits a row where `(file, line)` **changes** — not for every instruction. That's why `0x9428` and `0x942c` both map to line 903 (one row covers both), but `0x9430` maps to 904 (a new row).
+
+#### 3.7.3 Why `addr2line 0x9428` and `addr2line 0x9430` differ by one source line
+
+The relevant disasm:
+
+```
+0x9428:  ldr   x3, [sp, #16]         ; setup arg `remote`           ← line 903 starts here
+0x942c:  bl    <sock_sync_data>      ; the call                     ← still line 903
+0x9430:  ldrsb w0, [x0]              ; check return value           ← line 904 starts here
+```
+
+The compiler attributes both the arg-setup `ldr` (`0x9428`) and the `bl` itself (`0x942c`) to **line 903** — they're all part of "the statement that calls `sock_sync_data`". So the line table has *one* row for `[0x9428, 0x9430)`, all marked line 903. At `0x9430` execution has moved into the next source statement → new row, line 904.
+
+Hence:
+- `addr2line 0x9428` → line 903 ✓
+- `addr2line 0x942c` → line 903 (same row)
+- `addr2line 0x9430` → line 904 (next row)
+
+The bpftrace stack frame is the *return address* (= `bl_pc + 4 = 0x942c + 4 = 0x9430`), so passing it directly to addr2line gives `:904` — **correct but answers a different question** ("where did execution resume?" vs "where was the call?"). Subtract 4-8 bytes (or just disasm and find the BL) to get the call site.
+
+#### 3.7.4 Inspecting the table yourself
+
+You don't have to trust addr2line. Dump the decoded line table directly:
+
+```bash
+# Either tool works:
+readelf --debug-dump=decodedline /usr/bin/urma_perftest 2>/dev/null \
+    | grep -B2 -A2 -E ' 90[2-5] ' | head -30
+
+objdump --dwarf=decodedline /usr/bin/urma_perftest 2>/dev/null \
+    | awk '/perftest_resources.c/{file=1} file && /^perftest_resources.c/{print}' \
+    | awk '$2 >= 900 && $2 <= 910'
+```
+
+Expected rough format:
+
+```
+File name              Line number    Starting address    Stmt
+perftest_resources.c            902             0x9420       x
+perftest_resources.c            903             0x9428       x
+perftest_resources.c            904             0x9430       x
+perftest_resources.c            905             0x9438       x
+```
+
+And/or use `objdump -d -S` for inline-source-with-disasm (requires debuginfo):
+
+```bash
+objdump -d -S /usr/bin/urma_perftest 2>/dev/null \
+    | awk '/<exchange_seg_info>:/{p=1} p; /^$/{if(p) exit}' \
+    | head -60
+```
+
+Output interleaves C source with instructions:
+
+```
+903:        sock_sync_data(sock_fd[i], len, local, remote);
+    9420:   ...
+    9428:   ldr   x3, ...
+    942c:   bl    <sock_sync_data>
+904:        if (...
+    9430:   ldrsb w0, ...
+```
+
+Four independent tools (bpftrace stack, objdump grep for BL, addr2line, objdump -S) — one consistent story. That's what made this analysis confident enough to act on.
+
+#### 3.7.5 PIE/ASLR vs DWARF addresses
+
+DWARF records addresses as the binary's **internal** virtual addresses — for a PIE binary the recorded base is 0, so DWARF addresses are effectively file offsets within the loaded image. Runtime PCs = ASLR_base + DWARF_address. The low ~16-20 bits of a runtime PC therefore equal the low bits of the DWARF address (modulo `2^N` where `2^N ≥` `.text` size). That's why the workflow
+
+```
+bpftrace runtime PC  →  read low 16 bits  →  addr2line on those bits
+```
+
+works without ever knowing any specific PID's ASLR base. No subtraction needed in practice — the low bits *are* the DWARF address.
+
+#### 3.7.6 Failure modes of addr2line
+
+- **Inlined functions** — use `addr2line -i` to print the inlining chain. Without `-i`, only the outermost frame shows up.
+- **LTO** — link-time optimization re-orders `.text`, changing offsets. addr2line still works on the linked binary, but offsets from one build don't match another.
+- **`-O2` statement merging** — overlapping address ranges per line; addr2line picks per its heuristic.
+- **Wrong debuginfo file** — `.gnu_debuglink` CRC mismatch makes addr2line silently fall back to "no debug info". Verify with `readelf -p .gnu_debuglink /usr/bin/urma_perftest` and check the file exists at the linked path.
+- **Address outside any function** — addr2line returns `??:?`. Usually means a runtime PC wasn't reduced to a DWARF address, or the binary was re-stripped after the runtime was captured.
+
+For the `index=2` case none of these bit, which is why the pipeline `bpftrace ustack → low 16 bits → addr2line → cross-check with objdump -d -S` produced a definitive answer on first try.
+
 ---
 
 ## 4. When this trick works (and when it doesn't)
@@ -327,7 +464,16 @@ The pattern shows up beyond bpftrace too: any time you symbolize raw stack trace
 
 ## 6. Worked-example data
 
-From [UMDK#7 comment 4509158242](https://github.com/rainbay001-dotcom/UMDK/issues/7#issuecomment-4509158242) (raw bpftrace output) and [4509181983](https://github.com/rainbay001-dotcom/UMDK/issues/7#issuecomment-4509181983) (analysis):
+Multi-author work — running record across UMDK#7:
+
+- **objdump grep + addr2line script**: drafted in [comment 4509072961](https://github.com/rainbay001-dotcom/UMDK/issues/7#issuecomment-4509072961) (rainbay001-dotcom, 13:07:39 UTC).
+- **addr2line actual run**: executed by **JinDou1210** in [comment 4508578988](https://github.com/rainbay001-dotcom/UMDK/issues/7#issuecomment-4508578988) at 13:10:15 UTC. Output covers all 7 BL sites (table reproduced in §3.4).
+- **First bpftrace stack-capture attempt** (in the same Jin comment): failed with `'lr' is not a valid register on this architecture (arm64)` — switched to `ustack(2)` for the next iteration (see §2.9).
+- **Successful bpftrace run with `ustack(2)`**: [comment 4509158242](https://github.com/rainbay001-dotcom/UMDK/issues/7#issuecomment-4509158242) (JinDou1210) — produced the 36 raw-PC traces all ending `_9430` / `_af80`.
+- **Address-grouping analysis**: [comment 4509181983](https://github.com/rainbay001-dotcom/UMDK/issues/7#issuecomment-4509181983) (rainbay001-dotcom) — combined Jin's bpftrace output + Jin's addr2line output to pin `index=2` to `exchange_seg_info:903`.
+- **Methodology explainer**: [comment 4534495084](https://github.com/rainbay001-dotcom/UMDK/issues/7#issuecomment-4534495084) (rainbay001-dotcom, 2026-05-25) — the post that this doc consolidates and extends.
+
+Key numbers:
 
 - 100 concurrent `urma_perftest send_lat --ctp -n 5 -s 2` instances.
 - 36 events landed in `@slow_callers[2, ...]` (call index = 2, duration > 1 s).

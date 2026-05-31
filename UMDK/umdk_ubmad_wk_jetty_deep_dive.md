@@ -1,6 +1,6 @@
 # UBMAD well-known jetty deep dive
 
-_Last updated: 2026-05-14._
+_Last updated: 2026-05-18._
 
 This is the expanded investigation of UBMAD's well-known jetty path: what a WK
 jetty is, where the reserved public range comes from, when the local WK jettys
@@ -1042,6 +1042,216 @@ path returns immediately after `ubcore_post_jetty_send_wr()` without a local
 put. That may be intentional if some later completion path owns the reference,
 but I did not find that handoff in this pass. It is worth a focused review if
 WK retransmission leaks are suspected.
+
+### 13.1 Empirical observations on OLK-6.6 (2026-05-16, JinDou1210 worker2/worker3)
+
+Findings from `urma_perftest` link setup on OLK-6.6, instrumented with ftrace
+function_graph plus targeted kprobes. Source verified against `ubmad_datapath.c`
+in this tree.
+
+**Trace recipe (final working version).** Reset ftrace state first — both
+`set_ftrace_filter` and `set_graph_function` interact as an intersection
+filter, and `set_graph_function` silently drops symbols not in
+`available_filter_functions` (LTO/inline elimination):
+
+```bash
+cd /sys/kernel/debug/tracing
+echo 0 > tracing_on; echo nop > current_tracer; echo > trace
+echo > set_ftrace_pid; echo > kprobe_events; echo > set_graph_function
+echo > set_ftrace_filter; echo > set_ftrace_notrace; echo > set_graph_notrace
+echo global > trace_clock
+
+# Retransmit machinery (client side)
+echo 'p:cli_create_rt ubmad_create_rt_work msn=%x2:u64' >> kprobe_events
+echo 'p:cli_rt_handler ubmad_rt_work_handler'           >> kprobe_events
+echo 'p:cli_repost ubmad_repost_send_conn_data'         >> kprobe_events
+echo 'p:cli_destroy_msn ubmad_destroy_msn_node'         >> kprobe_events
+
+for e in events/kprobes/cli_*/; do echo 1 > "$e/enable"; done
+
+# Top-level function_graph entries — ubmad_rt_work_handler must be its own
+# entry because it runs in kworker context, not in the perftest task's stack
+cat > set_graph_function << 'EOF'
+ubcore_import_seg
+ubcore_import_jetty
+ubcore_connect_exchange_udata_when_import_seg
+ubcore_connect_exchange_udata_when_import_jetty
+ubcore_session_wait
+ubmad_rt_work_handler
+ubmad_create_rt_work
+ubmad_repost_send_conn_data
+ubmad_destroy_msn_node
+ubmad_release_ini_rtbuffer
+EOF
+
+echo 2 > max_graph_depth
+echo 65536 > buffer_size_kb   # 64 MB/CPU; ratchet up under 100-proc load
+echo function_graph > current_tracer
+echo 1 > tracing_on
+```
+
+`%x2` reads `uint64_t msn` because `ubmad_create_rt_work(workqueue_struct *,
+ubmad_msn_mgr *, uint64_t msn, ...)` per the ARM64 ABI. `msn` on the other
+retransmit functions lives inside `struct ubmad_rt_work` at offset
+`sizeof(struct delayed_work)`, which is config-dependent (varies with
+`CONFIG_LOCKDEP`, `CONFIG_DEBUG_OBJECTS`); use `pahole -C ubmad_rt_work
+$(modinfo ubcore | awk '/^filename/{print $2}')` on the target system to get
+the exact offset rather than computing it from source.
+
+**Counting cheat sheet.** Each `cli_rt_handler` event is classified by which
+children appear before it returns:
+
+| Pattern | Children observed | Meaning |
+|---|---|---|
+| true retransmit | `cli_repost` + `queue_delayed_work_on` | `found=true` branch, msn_node still alive, message re-sent |
+| cleanup | `ubmad_release_ini_rtbuffer` + `_printk` + `kfree`, no `cli_repost` | `found=false` branch — ACK arrived between scheduling and timer fire, or `rt_cnt > ubcore_max_retry_cnt` |
+
+The `do_debug_exception` line that wraps every `cli_repost` in function_graph
+output is a kprobe-on-BRK artifact on ARM64, not a real exception path.
+
+**Observed dmesg statistics (g_ubcore_log_level=6, 100-process workload):**
+
+| metric | value |
+|---|---|
+| `Do not repost` (= rt_work terminations) | 14 |
+| `rt_cnt` distribution | 9 × rt_cnt=1, 3 × rt_cnt=2, 1 × rt_cnt=4, **1 × rt_cnt=12** |
+| Total `ubmad_repost_send_conn_data` calls (= real retransmits) | **17** |
+| `redundant ack` lines | 6 |
+| `Failed to create rtbuffer, packet size too large` | 0 |
+
+Key arithmetic: `Do not repost` fires **once per `rt_work` lifetime**, not once
+per repost — it lives in the cleanup branch after the `if (found && repost ok
+&& rt_cnt <= max) return;` early-out. Per-RPC repost count is `rt_cnt - 1` for
+the `found=true` exits (or `rt_cnt - 1` for the max-retry exit since the final
+repost is attempted then the reschedule is skipped). So the 14 rt_work
+terminations span 14 RPCs and 17 actual retransmissions.
+
+One RPC hit `ubcore_max_retry_cnt = 11`, exhausting the full backoff window
+2+4+8+16+32+64+128+256+512+1024+2048 = **4094 ms ≈ 4.1 s**. After that point
+`release_ini_rtbuffer` is called and the rt_work is freed; the `msn_node` is
+only deleted by the recv side when an ACK eventually arrives, so the
+user-visible RPC either succeeds late (ACK after >4 s) or hangs in
+`ubcore_session_wait` until upper layers tear the session down.
+
+### 13.2 Dedup cache miss confirmed for `jetty_info_resp` / `seg_info_resp`
+
+The duplicate-suppression cache (`tgt_rt_buffer`) in section 13 has a hard
+per-packet payload cap: `UBMAD_RTBUFFER_PKTSIZE = 1024` (`ub_mad_priv.h`). The
+WK-jetty link setup carries:
+
+```c
+#define BONDING_UDATA_BUF_LEN 1928
+struct msg_jetty_info_resp {
+    int  result;                              // 4 B
+    char jetty_info[BONDING_UDATA_BUF_LEN];   // 1928 B
+};                                            // total 1932 B
+```
+
+1932 B > 1024 B, so the cache always overflows for these responses. The
+overflow path in `ubmad_do_post_send_conn_resp_data:613-614` is **silent** —
+no `ubcore_log_*` call:
+
+```c
+if (pld_len > UBMAD_RTBUFFER_PKTSIZE)
+    tjetty->tgt_rt_buffer[hash_idx].msn = msn + 1;
+```
+
+The `msn + 1` sentinel makes `ubmad_try_repost_all_response()` return `-2`
+("not a cached match") on every subsequent arrival of `msn`, so each
+retransmit falls all the way through to `ubmad_cm_process_msg` →
+`handle_jetty_info_req`. The `"Failed to create rtbuffer, packet size too
+large"` log lives on a different branch (`ubmad_do_post_send_conn_data:556`,
+**request-side** overflow), so grepping for it does not validate the
+response-side overflow theory.
+
+**Empirical proof from server dmesg.** Each `Finish to recv request` line is
+emitted by `ubmad_process_conn_data:1001` — the slow path that runs
+`ubmad_cm_process_msg`. If the dedup cache had hit, the early return at
+`ret == 0` in `ubmad_process_conn_data` would skip both the slow path and the
+log. So `count("Finish to recv request") > 1` for the same `msn` is direct
+evidence of `try_repost_all_response` returning `-2` for that `msn`.
+
+In the observed run, server `Finish to recv request` distribution:
+
+| `msn` | line count | dedup misses |
+|---|---|---|
+| 19857, 19858, 19861 | 2 | 2/2 = 100% |
+| 12491, 12498 | 3 | 3/3 = 100% |
+| 12492, 12499 | 4 | 4/4 = 100% |
+| 19859, 19863, 19868, 19869 | 1 | not retransmitted |
+
+The 12492/12499 cases (4 arrivals each) correspond to the high-`rt_cnt` client
+events; the 1× cases are RPCs whose ACK beat the first 2 ms timer.
+
+### 13.3 Pitfalls observed during instrumentation
+
+- `ubmad_rt_work_handler` runs in **kworker** context (queued via
+  `queue_delayed_work`), not in the perftest task's stack. It cannot appear
+  as a function_graph child of `ubcore_import_seg` or `ubcore_session_wait`
+  no matter how deep `max_graph_depth` goes — those entries run on different
+  tasks. It must be added as a separate top-level `set_graph_function` entry.
+- Four of the five retransmit functions are `static` single-callers
+  (`ubmad_destroy_msn_node`, `ubmad_release_ini_rtbuffer`,
+  `ubmad_repost_send_conn_data`, `ubmad_create_rt_work` is non-static
+  single-caller) — high risk of `-O2` inline elimination. Only
+  `ubmad_rt_work_handler` is guaranteed to remain traceable because its
+  address is taken at `INIT_DELAYED_WORK`. Always pre-flight against
+  `available_filter_functions` before relying on each one. In the observed
+  run `ubmad_destroy_msn_node` was inlined and produced no kprobe events; the
+  cleanup signal had to come from `ubmad_release_ini_rtbuffer` in the
+  `found=false` branch instead.
+- `ubcore_log_info_rl` is rate-limited — under 100-process load the dmesg
+  counts are a lower bound. Use ftrace counts for exact numbers; reserve
+  dmesg for cheap sanity checks.
+- `set_ftrace_filter` and `set_graph_function` interact as an **intersection**
+  filter. A leftover whitelist from a previous experiment silently empties
+  `set_graph_function`'s effective set. Kprobes are unaffected by
+  `set_ftrace_filter`, which makes the failure mode confusing ("kprobes work
+  but function_graph is empty"). The fix is always to `echo > set_ftrace_filter`
+  in the reset block.
+- `set_graph_function` write of a symbol absent from
+  `available_filter_functions` does not error — the write is silently
+  dropped. Always read back the file after writing and verify the line count
+  matches what was written.
+
+### 13.4 Cross-check formula
+
+For one `msn` round-trip with `N` retransmissions, the following four counts
+must agree (modulo `ubcore_log_info_rl` rate-limit drops):
+
+```
+client cli_repost      (kprobe)  =  N
+client cli_create_rt   (kprobe)  =  1
+client rt_cnt at exit  (dmesg)   =  N + 1
+server handle_*_req    (kprobe)  =  N + 1      (= 1 original + N dedup misses)
+```
+
+If the server count is less than `N + 1`, either dedup hit (cache fit, payload
+≤ 1024 B) or some retransmits were dropped on the wire. For `seg_info_req` /
+`jetty_info_req` / `create_req` the request payload is small enough that the
+request-side cache fits; the resp-side cache is what overflows.
+
+### 13.5 Implications for fixing dedup overflow
+
+The root cause is a static size mismatch between the response-side cache and
+the WK protocol payload:
+
+```
+UBMAD_RTBUFFER_PKTSIZE        = 1024 B   (ub_mad_priv.h)
+sizeof(msg_jetty_info_resp)   = 1932 B   (ubcore_connect_bonding.c)
+```
+
+Fix options (driver change, not workload-side):
+
+1. Raise `UBMAD_RTBUFFER_PKTSIZE` to ≥ 2048 — `tgt_rt_buffer` memory cost
+   roughly doubles (it is per-tjetty × hash-table-size).
+2. Shrink `BONDING_UDATA_BUF_LEN` from 1928 to ≤ 1020 — requires rethinking
+   what jetty_info carries.
+3. Add a tiered cache for oversized responses (separate larger buffer pool
+   indexed by msn).
+
+Option 1 has the least protocol churn; the memory cost should be evaluated
+against typical tjetty cardinality before committing.
 
 ## 14. Send And Receive Completion Handling
 
